@@ -31,7 +31,7 @@ import {
   type AgentType,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
-import { analyzeTaskContext, type IssueData, type TaskContextAnalysisInput } from './task-context-analyzer.ts'; // Import the new classifier
+import { analyzeTaskContext, type IssueData, type TaskContextAnalysisInput } from './task-context-analyzer.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -62,6 +62,32 @@ const COMPLEXITY_BAND_SCORES: Record<TaskComplexityBand, number> = {
   xl: 5,
 };
 
+function firstMeaningfulPromptLine(prompt: string): string | undefined {
+  return prompt
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) =>
+      line.length > 0 &&
+      !line.startsWith('##') &&
+      !line.startsWith('```') &&
+      !line.startsWith('---')
+    );
+}
+
+function extractIssueFromPrompt(prompt: string): IssueData {
+  const headingMatch = prompt.match(/^#\s*(.*?)(?:\s*-\s*Quick Reference)?\s*$/m);
+  const labeledTitleMatch = prompt.match(/^(?:title|task|issue):\s*(.+)$/im);
+  const title = (headingMatch?.[1] ?? labeledTitleMatch?.[1] ?? firstMeaningfulPromptLine(prompt))?.trim();
+
+  const objectiveSectionMatch = prompt.match(/^##\s+Objective\s*\n+([\s\S]*?)(?=\n##\s+|\s*$)/im);
+  const description = objectiveSectionMatch?.[1]?.trim() || prompt;
+
+  return {
+    title,
+    description,
+  };
+}
+
 /**
  * Extract characteristics from a prompt for routing decisions.
  * Now uses the task-context-analyzer for unified classification.
@@ -69,18 +95,7 @@ const COMPLEXITY_BAND_SCORES: Record<TaskComplexityBand, number> = {
 export function analyzePrompt(prompt: string, options?: { filesTouched?: number; locTouched?: number }): PromptCharacteristics {
   const charCount = prompt.length;
   const length = charCount < 200 ? 'short' : charCount < 1000 ? 'medium' : 'long';
-
-  // Parse the prompt to extract title and description for IssueData
-  const fullTitleMatch = prompt.match(/^#\s*(.*?)(?:\s*-\s*Quick Reference)?\s*$/m);
-  const title = fullTitleMatch ? fullTitleMatch[1].trim() : undefined;
-
-  const objectiveSectionMatch = prompt.match(/## Objective\n\n(.*?)(?=\n##)/s);
-  const description = objectiveSectionMatch ? objectiveSectionMatch[1].trim() : prompt; // Fallback to full prompt if no objective section
-
-  const issueData: IssueData = {
-    title,
-    description,
-  };
+  const issueData = extractIssueFromPrompt(prompt);
 
   const analysisInput: TaskContextAnalysisInput = {
     issue: issueData,
@@ -100,6 +115,10 @@ export function analyzePrompt(prompt: string, options?: { filesTouched?: number;
     taskType: taskContext.taskType,
     complexityBand: taskContext.complexity,
   };
+}
+
+export function classifyTaskType(prompt: string): TaskType {
+  return analyzePrompt(prompt).taskType;
 }
 
 // ────────────────────────────────────────────────────────────────

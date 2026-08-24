@@ -55,13 +55,22 @@ export interface TaskContextAnalysisInput {
 
 const TASK_TYPE_KEYWORDS: Record<TaskType, string[]> = {
   bugfix: ['fix', 'bug', 'issue', 'broken', 'error', 'crash', 'regression', 'patch'],
-  feature: ['add', 'feature', 'implement', 'new', 'create', 'support', 'introduce', 'integrate', 'develop', 'enhance', 'enable', 'replace', 'sophisticated', 'accurate'],
+  feature: ['add', 'feature', 'implement', 'new', 'create', 'build', 'support', 'introduce', 'integrate', 'integration', 'develop', 'enhance', 'enable', 'replace', 'sophisticated', 'accurate'],
   refactor: ['refactor', 'cleanup', 'reorganize', 'simplify', 'improve structure'],
   chore: ['chore', 'update', 'upgrade', 'dependency', 'deps', 'maintenance'],
   docs: ['docs', 'documentation', 'readme', 'comment', 'docstring'],
   test: ['test', 'testing', 'coverage', 'spec', 'e2e'],
   infra: ['infra', 'ci', 'cd', 'deploy', 'build', 'pipeline', 'docker', 'k8s'],
 };
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsKeyword(text: string, keyword: string): boolean {
+  const normalizedKeyword = escapeRegExp(keyword).replace(/\s+/g, '\\s+');
+  return new RegExp(`(^|[^a-z0-9])${normalizedKeyword}([^a-z0-9]|$)`, 'i').test(text);
+}
 
 /**
  * Infer task type from issue title, description, and labels.
@@ -83,7 +92,7 @@ export function inferTaskType(issue?: IssueData): TaskType {
 
   // Check labels first (most explicit)
   for (const [type, keywords] of Object.entries(TASK_TYPE_KEYWORDS)) {
-    if (labels.some((label) => keywords.includes(label))) {
+    if (labels.some((label) => keywords.some((keyword) => containsKeyword(label, keyword)))) {
       return type as TaskType;
     }
   }
@@ -104,7 +113,7 @@ export function inferTaskType(issue?: IssueData): TaskType {
   for (const [type, keywords] of Object.entries(TASK_TYPE_KEYWORDS)) {
     const taskType = type as TaskType;
     for (const keyword of keywords) {
-      if (titleText.includes(keyword)) {
+      if (containsKeyword(titleText, keyword)) {
         // Give higher weight to feature keywords in title
         if (taskType === 'feature') {
           scores[taskType] += 5; // Higher weight for feature in title
@@ -112,14 +121,14 @@ export function inferTaskType(issue?: IssueData): TaskType {
           scores[taskType] += 3;
         }
       }
-      if (descText.includes(keyword)) {
+      if (containsKeyword(descText, keyword)) {
         scores[taskType] += 1;
       }
     }
   }
 
   // If feature has a strong score from title, reduce bugfix score from description
-  if (scores.feature >= 5 && scores.bugfix > 0 && descText.includes('fix')) {
+  if (scores.feature >= 5 && scores.bugfix > 0 && containsKeyword(descText, 'fix')) {
     scores.bugfix = Math.max(0, scores.bugfix - 2); // Reduce bugfix impact from description
   }
 
@@ -244,10 +253,12 @@ export function estimateComplexity(input: {
         break;
       }
     }
-    for (const keyword of COMPLEXITY_KEYWORDS.low) {
-      if (text.includes(keyword)) {
-        score -= 10;
-        break;
+    if (locTouched < 500 && filesTouched < 10) {
+      for (const keyword of COMPLEXITY_KEYWORDS.low) {
+        if (text.includes(keyword)) {
+          score -= 10;
+          break;
+        }
       }
     }
   }

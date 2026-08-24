@@ -193,6 +193,7 @@ TESTS=(
   shared/lib/route-artifact.test.ts
   shared/lib/route-batch.test.ts
   shared/lib/model-router.test.ts
+  tests/fixtures/wavemill-router-eval/router-regression.test.ts
   shared/lib/eval-aggregator.test.ts
   shared/lib/eval-corpus-migrator.test.ts
   shared/lib/eval-record-builder.test.ts
