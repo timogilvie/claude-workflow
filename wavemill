@@ -148,6 +148,18 @@ ${GREEN}Commands:${NC}
              Options:
                ${CYAN}--repo-dir${NC} <path>          Repository directory to inspect
 
+  ${CYAN}abort${NC}     Abort an active mill task and let cleanup reap it
+             - Marks phase and status as aborted in workflow state
+             - The mill closes the pane and removes no-PR worktrees on next poll
+             - Tasks with a recorded PR preserve the worktree and local branch
+             Usage:
+               ${CYAN}wavemill abort HOK-2878${NC}
+               ${CYAN}wavemill abort HOK-2878_c --reason "wrong repo"${NC}
+             Options:
+               ${CYAN}--reason${NC} <text>            Operator-facing abort reason
+               ${CYAN}--repo-dir${NC} <path>          Repository directory to inspect
+               ${CYAN}--state-file${NC} <path>        Workflow state file override
+
   ${CYAN}tend${NC}      Tend the integration queue or run promotion mode
              - \`wavemill tend --once\` runs a single tend pass
              - \`wavemill tend --loop\` runs the integration queue loop
@@ -298,6 +310,9 @@ ${GREEN}Examples:${NC}
 
   # Check whether a PR is merge-ready
   wavemill ready 42
+
+  # Abort a task and let the mill clean it up
+  wavemill abort HOK-2878 --reason "wrong repo"
 
   # Route a task packet to planner/coder/reviewer models
   wavemill route --file features/my-feature/selected-task.json
@@ -1377,6 +1392,18 @@ run_promote() {
   exec npx tsx "$promote_tool" "$@"
 }
 
+run_abort() {
+  local abort_tool="$TOOLS_DIR/abort-task.ts"
+
+  if [[ ! -f "$abort_tool" ]]; then
+    echo -e "${RED}Error:${NC} Abort tool not found at: $abort_tool" >&2
+    exit 1
+  fi
+
+  echo -e "${CYAN}Aborting task...${NC}"
+  exec npx tsx "$abort_tool" "$@"
+}
+
 run_context() {
   local context_script="$LIB_DIR/wavemill-context.sh"
 
@@ -1609,6 +1636,10 @@ case "${1:-}" in
   ready)
     shift
     run_ready "$@"
+    ;;
+  abort)
+    shift
+    run_abort "$@"
     ;;
   tend)
     shift
