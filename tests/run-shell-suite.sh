@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # over every shell script, not a per-shard test, and runs once via `npm run lint`.
 TESTS=(
   aborted-challenge-cleanup.test.sh
+  operator-abort-cleanup.test.sh
   agent-resolve-from-model.test.sh
   terminal-reconciler.test.sh
   monitor-env-completeness.test.sh
@@ -47,6 +48,7 @@ TESTS=(
   completed-task-cleanup.test.sh
   error-recovery.test.sh
   aborted-challenge-cleanup.test.sh
+  operator-abort-cleanup.test.sh
   startup-terminal-prune.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh

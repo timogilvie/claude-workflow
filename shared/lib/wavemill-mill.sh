@@ -1249,9 +1249,29 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
+  fi
+}
+
+abort_task() {
+  local issue="$1" reason="${2:-operator-abort}"
+  if ! state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].phase = "aborted"
+      | .tasks[$issue].status = "aborted"
+      | .tasks[$issue].abortedReason = $reason
+      | .tasks[$issue].abortedAt = (now | todateiso8601)
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$reason"; then
+    log_warn "abort_task: failed to update $issue"
+    return 1
   fi
 }
 
@@ -4346,9 +4366,29 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
+  fi
+}
+
+abort_task() {
+  local issue="$1" reason="${2:-operator-abort}"
+  if ! state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].phase = "aborted"
+      | .tasks[$issue].status = "aborted"
+      | .tasks[$issue].abortedReason = $reason
+      | .tasks[$issue].abortedAt = (now | todateiso8601)
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$reason"; then
+    log_warn "abort_task: failed to update $issue"
+    return 1
   fi
 }
 
@@ -11025,6 +11065,17 @@ cleanup_aborted_challenge_arm() {
 
   log "debug" "Closed window: $win"
 
+  if [[ -n "$pr" ]]; then
+    log_warn "  $issue: PR #$pr exists - preserving worktree and local branch (aborted task)"
+    set_window_attention_state "$win" "needs-user"
+    rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+    reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+    remove_task_state "$issue"
+    CLEANED["$issue"]=1
+    log "$issue: Complete (aborted cleanup, worktree preserved due to PR #$pr)"
+    return 0
+  fi
+
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "Removed worktree: $wt_dir"
@@ -14245,7 +14296,7 @@ monitor_issue_state() {
 	  local challenge_aborted pair_id_for_cleanup
 	  challenge_aborted=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengeAborted // empty')
 	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
-	  if [[ "$task_status" == "aborted" && -n "$challenge_aborted" ]]; then
+	  if [[ "$task_status" == "aborted" ]]; then
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
 	    return 0
 	  fi
