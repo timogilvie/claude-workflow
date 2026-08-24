@@ -85,6 +85,8 @@ RECOVERY_FUNCS="$TEST_TMP/recovery-funcs.sh"
     increment_retry_count \
     reset_retry_count \
     get_backoff_delay \
+    terminalize_transient_retry_failure \
+    handle_agent_error_recovery \
     transient_error_recovery_pending \
   ; do
     extract_function "$MONITOR_BODY" "$fn"
@@ -94,6 +96,68 @@ RECOVERY_FUNCS="$TEST_TMP/recovery-funcs.sh"
 
 # shellcheck source=/dev/null
 source "$RECOVERY_FUNCS"
+
+STATE_FILE="$TEST_TMP/workflow-state.json"
+WORKTREE_ROOT="$TEST_TMP/worktrees"
+mkdir -p "$WORKTREE_ROOT"
+CLEANUP_CALLS=""
+STAGE_WRITES=""
+
+read_state_value() {
+  local default="$1"
+  shift
+  jq -r "$@" "$STATE_FILE" 2>/dev/null || printf '%s\n' "$default"
+}
+
+state_mutate() {
+  local file="$1" filter="$2"
+  shift 2
+  jq "$filter" "$@" "$file" > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+get_task_meta() {
+  jq -r --arg issue "$1" --arg field "$2" '.tasks[$issue][$field] // empty' "$STATE_FILE" 2>/dev/null || true
+}
+
+stage_result_field() {
+  jq -r --arg f "$3" '.[$f] // empty' "$1/.${2}-result.json" 2>/dev/null || true
+}
+
+write_stage_result() {
+  local feature_dir="$1" stage="$2" status="$3" agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts="${7:-}"
+  mkdir -p "$feature_dir"
+  STAGE_WRITES+="$stage|$status|$notes"$'\n'
+  jq -n \
+    --arg stage "$stage" --arg status "$status" --arg agent "$agent" \
+    --arg model "$model" --arg notes "$notes" --argjson artifacts "${artifacts:-null}" \
+    '{stage:$stage,status:$status,agent:$agent,model:$model,notes:$notes,artifacts:$artifacts}' \
+    > "$feature_dir/.${stage}-result.json"
+}
+
+challenge_abort_pair() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7"
+  state_mutate "$STATE_FILE" \
+    '.tasks[$issue].challengeAborted = $reason | .tasks[$issue].challengeAbortedDetail = $detail' \
+    --arg issue "$issue" --arg reason "$reason" --arg detail "$detail" >/dev/null
+  jq -n --arg reason "$reason" --arg stage "$stage" '{reason:$reason,stage:$stage}' > "$feature_dir/.challenge-aborted.json"
+}
+
+cleanup_quarantined_no_pr_challenge_arm() {
+  CLEANUP_CALLS+="$1|$3|$4"$'\n'
+  state_mutate "$STATE_FILE" 'del(.tasks[$issue])' --arg issue "$1" >/dev/null
+}
+
+seed_retry_challenge() {
+  local issue="$1" slug="$2" phase="${3:-coding}"
+  local worktree="$WORKTREE_ROOT/$slug"
+  mkdir -p "$worktree/features/$slug"
+  jq -n \
+    --arg issue "$issue" --arg slug "$slug" --arg worktree "$worktree" --arg phase "$phase" \
+    '{tasks:{($issue):{slug:$slug,branch:("task/" + $slug),worktree:$worktree,status:"active",phase:$phase,pr:"",challenge:true,challengeRole:"challenger",challengePairId:"HOK-PAIR"}}}' \
+    > "$STATE_FILE"
+  write_stage_result "$worktree/features/$slug" "$phase" "running" "codex" "gpt-test" ""
+}
 
 echo "=== Error Recovery Helpers ==="
 
@@ -123,6 +187,33 @@ for _ in 1 2 3 4; do
 done
 check_false "no pending recovery after max retries" transient_error_recovery_pending "HOK-2"
 reset_retry_count "$TEST_SESSION" "HOK-2"
+
+seed_retry_challenge "HOK-20_c" "retry-exhausted-challenger" "coding"
+for _ in 1 2 3 4; do
+  increment_retry_count "$TEST_SESSION" "HOK-20_c"
+done
+jq -n --argjson count 4 --argjson timestamp "$(($(date +%s) - 60))" \
+  '{count:$count,timestamp:$timestamp}' > "$(retry_state_file "$TEST_SESSION" "HOK-20_c")"
+cat > "/tmp/wavemill-${TEST_SESSION}-HOK-20_c.hook" <<EOF
+{"state":"error","detail":"API Error: 500","timestamp":$(date +%s)}
+EOF
+CLEANUP_CALLS=""
+handle_agent_error_recovery "HOK-20_c" "codex"
+check_eq "retry exhaustion removes challenge state" "false" "$(jq -r '.tasks | has("HOK-20_c")' "$STATE_FILE")"
+check_eq "retry exhaustion writes failed coding result" "failed" "$(jq -r '.status' "$WORKTREE_ROOT/retry-exhausted-challenger/features/retry-exhausted-challenger/.coding-result.json")"
+check_true "retry exhaustion schedules cleanup" test -n "$CLEANUP_CALLS"
+reset_retry_count "$TEST_SESSION" "HOK-20_c"
+
+seed_retry_challenge "HOK-21_c" "retry-stalled-challenger" "coding"
+cat > "/tmp/wavemill-${TEST_SESSION}-HOK-21_c.hook" <<EOF
+{"state":"error","detail":"API Error: 500","timestamp":$(($(date +%s) - 3600))}
+EOF
+increment_retry_count "$TEST_SESSION" "HOK-21_c"
+CLEANUP_CALLS=""
+handle_agent_error_recovery "HOK-21_c" "codex"
+check_eq "stale retry process removes challenge state" "false" "$(jq -r '.tasks | has("HOK-21_c")' "$STATE_FILE")"
+check_true "stale retry process schedules cleanup" test -n "$CLEANUP_CALLS"
+reset_retry_count "$TEST_SESSION" "HOK-21_c"
 
 echo ""
 echo "=== No-PR Guard Helpers ==="

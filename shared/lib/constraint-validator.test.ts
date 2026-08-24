@@ -7,9 +7,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { validateConstraints, formatValidationResult } from './constraint-validator\.cjs';
-import { saveConstraintRules } from './constraint-storage\.cjs';
-import type { RuleGenerationResult } from './rule-generator\.cjs';
+import { validateConstraints, formatValidationResult } from './constraint-validator.ts';
+import { saveConstraintRules } from './constraint-storage.ts';
+import type { RuleGenerationResult } from './rule-generator.ts';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {

@@ -12,6 +12,7 @@
  * @module check-review-setup
  */
 
+import { fileURLToPath } from 'node:url';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   checkClaudeAvailability,
@@ -326,7 +327,8 @@ export function printTroubleshooting(results: CheckResult[], provider: LLMProvid
   }
 }
 
-runTool({
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+if (isMainModule) runTool({
   name: 'check-review-setup',
   description: 'Health check for review tool setup',
   options: {},

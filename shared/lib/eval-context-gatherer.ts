@@ -38,6 +38,21 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+const defaultShellDependencies = { escapeShellArg, execShellCommand, fetchPrDiff };
+let shellDependencies = defaultShellDependencies;
+
+/** Override shell access for deterministic unit tests. */
+export function setEvalContextGathererShellDependenciesForTest(
+  overrides: Partial<typeof defaultShellDependencies>,
+): void {
+  shellDependencies = { ...defaultShellDependencies, ...overrides };
+}
+
+/** Restore production shell access after a unit test override. */
+export function resetEvalContextGathererShellDependenciesForTest(): void {
+  shellDependencies = defaultShellDependencies;
+}
+
 // ────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────
@@ -91,8 +106,8 @@ export interface GatherContextParams {
 export function fetchIssueData(issueId: string, repoDir: string): any | null {
   const toolPath = resolve(__dirname, '../../tools/get-issue.ts');
   try {
-    const raw = execShellCommand(
-      `npx tsx ${escapeShellArg(toolPath)} ${escapeShellArg(issueId)} --json 2>/dev/null | sed '/^\\[dotenv/d'`,
+    const raw = shellDependencies.execShellCommand(
+      `npx tsx ${shellDependencies.escapeShellArg(toolPath)} ${shellDependencies.escapeShellArg(issueId)} --json 2>/dev/null | sed '/^\\[dotenv/d'`,
       { encoding: 'utf-8', cwd: repoDir }
     ).trim();
     return JSON.parse(raw);
@@ -120,12 +135,12 @@ export function fetchPrContext(prNumber: string, repoDir: string): { diff: strin
   let url = '';
 
   try {
-    url = execShellCommand(`gh pr view ${escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
+    url = shellDependencies.execShellCommand(`gh pr view ${shellDependencies.escapeShellArg(prNumber)} --json url --jq .url 2>/dev/null`, {
       encoding: 'utf-8', cwd: repoDir,
     }).trim();
   } catch { /* best-effort */ }
 
-  const diffResult = fetchPrDiff(prNumber, repoDir);
+  const diffResult = shellDependencies.fetchPrDiff(prNumber, repoDir);
   if (diffResult.kind === 'diff') {
     return {
       diff: diffResult.text,
@@ -169,8 +184,8 @@ export function computeWallClockSeconds(
   baseBranch = 'main',
 ): number | null {
   try {
-    const raw = execShellCommand(
-      `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branch)} --format="%ct" --reverse`,
+    const raw = shellDependencies.execShellCommand(
+      `git log ${shellDependencies.escapeShellArg(baseBranch)}..${shellDependencies.escapeShellArg(branch)} --format="%ct" --reverse`,
       { encoding: 'utf-8', cwd: repoDir }
     ).trim();
 
@@ -298,8 +313,8 @@ export function resolveContextGaps(input: {
 
   if (input.prNumber && (!out.prUrl || !out.branch)) {
     try {
-      const prJson = execShellCommand(
-        `gh pr view ${escapeShellArg(input.prNumber)} --json url,headRefName 2>/dev/null || echo "{}"`,
+      const prJson = shellDependencies.execShellCommand(
+        `gh pr view ${shellDependencies.escapeShellArg(input.prNumber)} --json url,headRefName 2>/dev/null || echo "{}"`,
         { encoding: 'utf-8', cwd: input.repoDir }
       ).trim();
       const prData = JSON.parse(prJson);
@@ -355,12 +370,12 @@ export function autoDetectContext(repoDir: string): {
   // Try current branch PR
   if (!prNumber) {
     try {
-      branch = execShellCommand('git branch --show-current', {
+      branch = shellDependencies.execShellCommand('git branch --show-current', {
         encoding: 'utf-8',
         cwd: repoDir,
       }).trim();
 
-      const prJson = execShellCommand(
+      const prJson = shellDependencies.execShellCommand(
         'gh pr view --json number,url 2>/dev/null || echo "{}"',
         {
           encoding: 'utf-8',
