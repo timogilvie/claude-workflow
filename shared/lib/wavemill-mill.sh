@@ -1257,25 +1257,6 @@ set_task_phase() {
   fi
 }
 
-abort_task() {
-  local issue="$1" reason="${2:-operator-abort}"
-  if ! state_mutate "$STATE_FILE" '
-    if .tasks[$issue] == null then
-      .
-    else
-      .tasks[$issue].phase = "aborted"
-      | .tasks[$issue].status = "aborted"
-      | .tasks[$issue].abortedReason = $reason
-      | .tasks[$issue].abortedAt = (now | todateiso8601)
-      | .tasks[$issue].updated = (now | todateiso8601)
-    end
-  ' --arg issue "$issue" --arg reason "$reason"; then
-    log_warn "abort_task: failed to update $issue"
-    return 1
-  fi
-}
-
-
 get_task_phase() {
   local issue="$1"
   jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
@@ -4371,24 +4352,6 @@ set_task_phase() {
       | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
-  fi
-}
-
-abort_task() {
-  local issue="$1" reason="${2:-operator-abort}"
-  if ! state_mutate "$STATE_FILE" '
-    if .tasks[$issue] == null then
-      .
-    else
-      .tasks[$issue].phase = "aborted"
-      | .tasks[$issue].status = "aborted"
-      | .tasks[$issue].abortedReason = $reason
-      | .tasks[$issue].abortedAt = (now | todateiso8601)
-      | .tasks[$issue].updated = (now | todateiso8601)
-    end
-  ' --arg issue "$issue" --arg reason "$reason"; then
-    log_warn "abort_task: failed to update $issue"
-    return 1
   fi
 }
 
