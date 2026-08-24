@@ -84,6 +84,12 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
+  extract_function "$REPO_DIR/shared/lib/wavemill-common.sh" "_wavemill_log_parent_epic_skip"
+  echo
+  extract_function "$REPO_DIR/shared/lib/wavemill-common.sh" "filter_parent_epics_from_backlog"
+  echo
+  extract_function "$MILL_SCRIPT" "pick_candidates"
+  echo
   extract_function "$MONITOR_BODY" "refresh_backlog_cache"
   echo
   extract_function "$MONITOR_BODY" "print_cached_candidates"
@@ -256,6 +262,60 @@ EOF
   check_contains "parent cached candidates available" "$output" "parent_candidates=present"
   check_contains "queue plan builds after parent refresh" "$output" "queue_plan=present"
   check_contains "queue plan has expected shape" "$output" "queue_plan_shape=ok"
+}
+
+test_parent_epic_filter_excludes_children_and_keeps_leaves() {
+  local output stderr parent_backlog
+  stderr="$TEST_TMP/parent-filter.err"
+  parent_backlog=$(cat <<'EOF'
+[
+  {
+    "identifier": "HOK-2857",
+    "title": "Parent plan",
+    "state": { "name": "Backlog" },
+    "children": { "nodes": [{ "identifier": "HOK-2858" }, { "identifier": "HOK-2859" }] },
+    "labels": { "nodes": [] },
+    "relations": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  },
+  {
+    "identifier": "HOK-2858",
+    "title": "Leaf child",
+    "state": { "name": "Todo" },
+    "children": { "nodes": [] },
+    "labels": { "nodes": [] },
+    "relations": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  },
+  {
+    "identifier": "HOK-3000",
+    "title": "Legacy leaf",
+    "state": { "name": "Backlog" },
+    "labels": { "nodes": [] },
+    "relations": { "nodes": [] },
+    "inverseRelations": { "nodes": [] }
+  }
+]
+EOF
+)
+
+  output=$(FUNCTIONS_FILE="$FUNCTIONS_FILE" PARENT_BACKLOG="$parent_backlog" bash -lc '
+    set -euo pipefail
+    # shellcheck source=/dev/null
+    source "$FUNCTIONS_FILE"
+    score_and_rank_issues() {
+      jq -r '"'"'.[] | "\(.identifier)|\(.title|ascii_downcase|gsub("[^a-z0-9]+";"-"))|\(.title)|core|100|false|0"'"'"' <<<"$1"
+    }
+    candidates="$(pick_candidates "$PARENT_BACKLOG")"
+    printf "%s\n" "$candidates"
+  ' 2>"$stderr")
+
+  check_not_contains "parent filter omits parent candidate" "$output" "HOK-2857"
+  check_contains "parent filter keeps child leaf candidate" "$output" "HOK-2858|leaf-child"
+  check_contains "parent filter keeps missing-children leaf candidate" "$output" "HOK-3000|legacy-leaf"
+  check_contains "parent filter logs parent identifier" "$(cat "$stderr")" "HOK-2857"
+  check_contains "parent filter logs reason" "$(cat "$stderr")" "reason=Linear children"
+  check_contains "parent filter logs child identifiers" "$(cat "$stderr")" "children=HOK-2858,HOK-2859"
 }
 
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies() {
@@ -735,6 +795,7 @@ test_fetch_queue_plan_warning_stays_quiet_without_debug() {
 echo "=== Task Selection Renderer ==="
 test_fetch_queue_plan_transforms_linear_backlog
 test_backlog_refresh_persists_cache_in_parent_shell
+test_parent_epic_filter_excludes_children_and_keeps_leaves
 test_invoke_first_wave_helper_packs_priority_without_violating_dependencies
 test_grouped_render_with_fixture_output
 test_grouped_render_orders_available_by_score

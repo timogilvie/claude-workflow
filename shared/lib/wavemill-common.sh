@@ -2331,6 +2331,41 @@ is_task_packet() {
 # PRIORITY SCORING ALGORITHM
 # ============================================================================
 
+_wavemill_log_parent_epic_skip() {
+  local parent="$1"
+  local child_ids="$2"
+  local msg="[backlog] skipping $parent: reason=Linear children; children=$child_ids"
+
+  if [[ "${DASHBOARD_LOG_TO_FILE:-true}" == "true" ]] && [[ -n "${MILL_LOG_FILE:-}" ]]; then
+    printf '%s [info] %s\n' "$(date '+%H:%M:%S')" "$msg" >> "$MILL_LOG_FILE" 2>/dev/null || true
+  fi
+
+  printf '%s\n' "$msg" >&2
+}
+
+filter_parent_epics_from_backlog() {
+  local backlog_json="$1"
+
+  while IFS=$'\t' read -r parent child_ids; do
+    [[ -n "$parent" ]] || continue
+    _wavemill_log_parent_epic_skip "$parent" "$child_ids"
+  done < <(
+    printf '%s\n' "$backlog_json" | jq -r '
+      .[]
+      | select(((.children.nodes? // []) | length) > 0)
+      | [
+          (.identifier // .id // "<unknown>"),
+          ((.children.nodes? // []) | map(.identifier // .id // empty) | join(","))
+        ]
+      | @tsv
+    '
+  )
+
+  printf '%s\n' "$backlog_json" | jq -c '
+    map(select(((.children.nodes? // []) | length) == 0))
+  '
+}
+
 # Calculate priority score for a list of issues (JSON input)
 # Returns: identifier|slug|title|area|score
 score_and_rank_issues() {

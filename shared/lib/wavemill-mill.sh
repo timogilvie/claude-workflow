@@ -1572,6 +1572,7 @@ pick_candidates() {
   fi
 
   # Use shared scoring function; strip has_detailed_plan (field 6), keep blocked_by_count (field 7→6)
+  backlog_json="$(filter_parent_epics_from_backlog "$backlog_json")"
   score_and_rank_issues "$backlog_json" "$show_limit" "$focus_milestones_json" | awk -F'|' -v OFS='|' '{print $1,$2,$3,$4,$5,$7}'
 }
 
@@ -11745,6 +11746,7 @@ refresh_backlog_cache() {
     return 0
   fi
 
+  backlog_json="$(filter_parent_epics_from_backlog "$backlog_json")"
   BACKLOG_JSON_CACHE="$backlog_json"
   QUEUE_PLAN_CACHE=""
   LAST_QUEUE_PLAN_FETCH=0
