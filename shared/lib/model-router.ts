@@ -48,11 +48,19 @@ export interface PromptCharacteristics {
   length: 'short' | 'medium' | 'long';
   charCount: number;
   complexityScore: number;
+  /**
+   * Distinct file extensions mentioned in the prompt. Consumed by
+   * workflow-router.ts (risk scoring at :1050 and the routing signals emitted
+   * at :138/:1812/:1883/:2273), so it must always be an array — never absent.
+   */
+  fileTypes: string[];
   taskType: TaskType;
   complexityBand: TaskComplexityBand; // Add complexity band
   // Add more fields from TaskContext as needed for routing decisions
   // For now, keeping it minimal to avoid breaking changes to existing router logic
 }
+
+const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sql|go|rs|rb)\b/gi;
 
 const COMPLEXITY_BAND_SCORES: Record<TaskComplexityBand, number> = {
   xs: 1,
@@ -108,10 +116,14 @@ export function analyzePrompt(prompt: string, options?: { filesTouched?: number;
 
   const complexityScore = COMPLEXITY_BAND_SCORES[taskContext.complexity];
 
+  const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
+  const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
+
   return {
     length,
     charCount,
     complexityScore,
+    fileTypes,
     taskType: taskContext.taskType,
     complexityBand: taskContext.complexity,
   };
