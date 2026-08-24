@@ -106,7 +106,7 @@ export function readArmReliabilityRecords(dirOrRepo?: string): ArmReliabilityRec
 
 export function resolveReliabilityRecordsFile(dirOrRepo?: string): string {
   const base = dirOrRepo ? resolve(dirOrRepo) : resolve(DEFAULT_EVALS_DIR);
-  const evalsDir = base.endsWith(`${DEFAULT_EVALS_DIR}`) || base.endsWith('/evals')
+  const evalsDir = base.endsWith(`${DEFAULT_EVALS_DIR}`) || base.endsWith('/.wavemill/evals')
     ? base
     : join(base, DEFAULT_EVALS_DIR);
   return join(evalsDir, RELIABILITY_RECORDS_FILENAME);
