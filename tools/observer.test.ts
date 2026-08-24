@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -25,6 +25,208 @@ function defaultObserverOptions() {
     incidentDetector: true,
   };
 }
+
+function createMarkerFixture(markerName: '.coding-complete' | '.plan-approved', markerMtime: Date) {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-marker-'));
+  const slug = 'observer-marker-fixture';
+  const featureDir = join(repoDir, 'features', slug);
+  const markerPath = join(featureDir, markerName);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(markerPath, '{}\n');
+  utimesSync(markerPath, markerMtime, markerMtime);
+  return { repoDir, slug, markerPath };
+}
+
+function markerSnapshot({
+  repoDir,
+  slug,
+  phase,
+  issue = 'HOK-2848',
+  stateMtime,
+}: {
+  repoDir: string;
+  slug: string;
+  phase: 'coding' | 'planning';
+  issue?: string;
+  stateMtime?: string;
+}) {
+  return {
+    timestamp: new Date().toISOString(),
+    sessions: ['wavemill'],
+    panes: [],
+    processes: [],
+    repos: [{
+      session: 'wavemill',
+      repoDir,
+      workflowStatePath: join(repoDir, '.wavemill', 'workflow-state.json'),
+      tasks: [{
+        issue,
+        phase,
+        status: 'running',
+        slug,
+        worktree: repoDir,
+      }],
+      stateMtime,
+    }],
+  };
+}
+
+function markerAgeSeconds(finding: { evidence: string[] }): number {
+  const evidence = finding.evidence.find((line) => line.startsWith('markerAgeSeconds='));
+  assert.ok(evidence);
+  return Number(evidence.slice('markerAgeSeconds='.length));
+}
+
+test('fresh coding marker does not produce marker-ignored finding', () => {
+  const markerMtime = new Date(Date.now() - 30_000);
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const findings = buildFindings(markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+    }), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2848'), false);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('old coding marker produces urgent marker-ignored finding with age evidence', () => {
+  const markerMtime = new Date(Date.now() - 30 * 60_000);
+  const stateMtime = new Date(markerMtime.getTime() - 60_000).toISOString();
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const findings = buildFindings(markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+      stateMtime,
+    }), defaultObserverOptions());
+
+    const finding = findings.find((candidate) => candidate.id === 'coding-marker-ignored-HOK-2848');
+    assert.ok(finding);
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.equal(finding.category, 'stuck');
+    assert.equal(finding.issue, 'HOK-2848');
+    assert.match(finding.title, /still in coding \d+ minutes after \.coding-complete appeared/);
+    assert.ok(finding.evidence.includes('statePhase=coding'));
+    assert.ok(finding.evidence.includes(`marker=${fixture.markerPath}`));
+    assert.ok(finding.evidence.some((line) => line.startsWith('markerMtime=')));
+    assert.ok(markerAgeSeconds(finding) >= 1700);
+    assert.ok(finding.evidence.includes(`stateMtime=${stateMtime}`));
+    assert.match(finding.recommendation, /hung monitor child/);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('newer workflow state modulates the coding marker finding but does not suppress it', () => {
+  const markerMtime = new Date(Date.now() - 30 * 60_000);
+  const stateMtime = new Date(markerMtime.getTime() + 60_000).toISOString();
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const findings = buildFindings(markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+      stateMtime,
+    }), defaultObserverOptions());
+
+    // A newer workflow-state.json must NOT hide a genuinely wedged task: in a
+    // multi-task mill, state is rewritten constantly for other tasks.
+    const finding = findings.find((entry) => entry.id === 'coding-marker-ignored-HOK-2848');
+    assert.ok(finding, 'expected the marker-ignored finding to still be produced');
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.ok(finding.evidence.includes('stateNewerThanMarker=true'));
+    assert.match(finding.recommendation, /still writing workflow state but has not advanced this task/);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('older workflow state keeps the hung-monitor recommendation', () => {
+  const markerMtime = new Date(Date.now() - 30 * 60_000);
+  const stateMtime = new Date(markerMtime.getTime() - 60_000).toISOString();
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const findings = buildFindings(markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+      stateMtime,
+    }), defaultObserverOptions());
+
+    const finding = findings.find((entry) => entry.id === 'coding-marker-ignored-HOK-2848');
+    assert.ok(finding, 'expected the marker-ignored finding to be produced');
+    assert.ok(finding.evidence.includes('stateNewerThanMarker=false'));
+    assert.match(finding.recommendation, /hung monitor child process/);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('coding marker-ignored threshold follows stale minutes option', () => {
+  const markerMtime = new Date(Date.now() - 3 * 60_000);
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const snapshot = markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+    });
+
+    const strictFindings = buildFindings(snapshot, { ...defaultObserverOptions(), staleMinutes: 2 });
+    assert.ok(strictFindings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2848'));
+
+    const defaultFindings = buildFindings(snapshot, { ...defaultObserverOptions(), staleMinutes: 10 });
+    assert.equal(defaultFindings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2848'), false);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('planning marker mirrors coding marker grace behavior', () => {
+  const freshMarkerMtime = new Date(Date.now() - 30_000);
+  const oldMarkerMtime = new Date(Date.now() - 30 * 60_000);
+  const freshFixture = createMarkerFixture('.plan-approved', freshMarkerMtime);
+  const oldFixture = createMarkerFixture('.plan-approved', oldMarkerMtime);
+
+  try {
+    const freshFindings = buildFindings(markerSnapshot({
+      repoDir: freshFixture.repoDir,
+      slug: freshFixture.slug,
+      phase: 'planning',
+    }), defaultObserverOptions());
+    assert.equal(freshFindings.some((finding) => finding.id === 'plan-marker-ignored-HOK-2848'), false);
+
+    const oldFindings = buildFindings(markerSnapshot({
+      repoDir: oldFixture.repoDir,
+      slug: oldFixture.slug,
+      phase: 'planning',
+    }), defaultObserverOptions());
+    const finding = oldFindings.find((candidate) => candidate.id === 'plan-marker-ignored-HOK-2848');
+    assert.ok(finding);
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.equal(finding.category, 'stuck');
+    assert.match(finding.title, /still in planning \d+ minutes after \.plan-approved appeared/);
+    assert.ok(markerAgeSeconds(finding) >= 1700);
+    assert.ok(finding.evidence.some((line) => line.startsWith('markerMtime=')));
+    assert.ok(finding.evidence.includes('stateMtime=unknown'));
+  } finally {
+    rmSync(freshFixture.repoDir, { recursive: true, force: true });
+    rmSync(oldFixture.repoDir, { recursive: true, force: true });
+  }
+});
 
 test('repeated ready watchdog auto-recoveries escalate to actionable stuck finding', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-watchdog-'));

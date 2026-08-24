@@ -160,7 +160,7 @@ Options:
   --linear-project <id>  Optional Linear project id/name for filed issues
   --linear-label <name>  Optional Linear label name to attach
   --dry-run              Do not create Linear issues
-  --stale-minutes <n>    State/log stale threshold (default: ${DEFAULT_STALE_MINUTES})
+  --stale-minutes <n>    State/log/marker stale threshold (default: ${DEFAULT_STALE_MINUTES})
   --hung-minutes <n>     Child process hung threshold (default: ${DEFAULT_HUNG_MINUTES})
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
@@ -563,6 +563,82 @@ function tailLines(path: string, count: number): string[] {
   }
 }
 
+interface MarkerIgnoredConfig {
+  phase: 'coding' | 'planning';
+  markerName: '.coding-complete' | '.plan-approved';
+  idPrefix: 'coding-marker-ignored' | 'plan-marker-ignored';
+  titlePhase: string;
+  /** Used when the mill has not written state since the marker appeared. */
+  staleRecommendation: string;
+  /**
+   * Used when workflow-state.json is newer than the marker. The mill is
+   * demonstrably alive but has not advanced this task, so the finding still
+   * fires — a newer state file must not suppress it. In a multi-task mill,
+   * state is rewritten constantly for other tasks, so suppressing here would
+   * hide a genuinely wedged task indefinitely.
+   */
+  stateAliveRecommendation: string;
+}
+
+function statMarker(path: string, now: number): { mtimeMs: number; ageMs: number; mtimeIso: string } | undefined {
+  try {
+    const stat = statSync(path);
+    return {
+      mtimeMs: stat.mtimeMs,
+      ageMs: Math.max(0, now - stat.mtimeMs),
+      mtimeIso: stat.mtime.toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildMarkerIgnoredFinding(
+  repo: RepoSnapshot,
+  task: TaskState,
+  featureDir: string,
+  now: number,
+  options: ObserverOptions,
+  config: MarkerIgnoredConfig,
+): Finding | null {
+  if (task.phase !== config.phase) return null;
+  const markerPath = join(featureDir, config.markerName);
+  if (!existsSync(markerPath)) return null;
+
+  const marker = statMarker(markerPath, now);
+  if (!marker) return null;
+
+  const markerAgeMinutes = marker.ageMs / 60000;
+  if (markerAgeMinutes <= options.staleMinutes) return null;
+
+  const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  const stateNewerThanMarker = Number.isFinite(stateMtimeMs) && stateMtimeMs > marker.mtimeMs;
+
+  const markerAgeSeconds = Math.floor(marker.ageMs / 1000);
+  const markerAgeTitleMinutes = Math.round(markerAgeMinutes);
+
+  return {
+    id: `${config.idPrefix}-${task.issue}`,
+    severity: 'urgent',
+    category: 'stuck',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    issue: task.issue,
+    title: `${task.issue} is still in ${config.titlePhase} ${markerAgeTitleMinutes} minutes after ${config.markerName} appeared`,
+    evidence: [
+      `statePhase=${task.phase}`,
+      `marker=${markerPath}`,
+      `markerMtime=${marker.mtimeIso}`,
+      `markerAgeSeconds=${markerAgeSeconds}`,
+      `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+      `stateNewerThanMarker=${stateNewerThanMarker}`,
+      `worktree=${task.worktree}`,
+    ],
+    recommendation: stateNewerThanMarker ? config.stateAliveRecommendation : config.staleRecommendation,
+  };
+}
+
 export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: ObserverOptions): Finding[] {
   const findings: Finding[] = [];
   const now = Date.now();
@@ -712,41 +788,26 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
 
       if (!task.worktree || !task.slug || terminalStatus(task.status)) continue;
       const featureDir = join(task.worktree, 'features', task.slug);
-      if (task.phase === 'coding' && existsSync(join(featureDir, '.coding-complete'))) {
-        findings.push({
-          id: `coding-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in coding even though .coding-complete exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.coding-complete')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
-        });
-      }
-      if (task.phase === 'planning' && existsSync(join(featureDir, '.plan-approved'))) {
-        findings.push({
-          id: `plan-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in planning even though .plan-approved exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.plan-approved')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should launch coding. Inspect the monitor loop for a blocking external command.',
-        });
+      const markerFindings = [
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'coding',
+          markerName: '.coding-complete',
+          idPrefix: 'coding-marker-ignored',
+          titlePhase: 'coding',
+          staleRecommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
+          stateAliveRecommendation: 'The monitor should advance this to review. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'planning',
+          markerName: '.plan-approved',
+          idPrefix: 'plan-marker-ignored',
+          titlePhase: 'planning',
+          staleRecommendation: 'The monitor should launch coding. Check for a hung monitor child process or blocking external command before restarting the session.',
+          stateAliveRecommendation: 'The monitor should launch coding. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+      ];
+      for (const finding of markerFindings) {
+        if (finding) findings.push(finding);
       }
     }
 
