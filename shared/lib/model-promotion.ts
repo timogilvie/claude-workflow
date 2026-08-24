@@ -1,0 +1,1148 @@
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import Ajv from 'ajv';
+import type { EvalRecord, RoutingRole } from './eval-schema.ts';
+import {
+  computeIdentityFingerprint,
+  type ModelCapabilities,
+} from './model-registry.ts';
+import {
+  loadModelRegistryCatalog,
+  projectModelRegistryCatalog,
+  type ModelRegistryCatalog,
+} from './model-registry-loader.ts';
+import { computeNormalizedEvaluationCost, type ModelPricing } from './workflow-cost.ts';
+import {
+  CERTIFICATION_SCHEMA_VERSION,
+  isRevisionAwareArtifact,
+  phaseSatisfies,
+  type CertificationPhase,
+} from './native-agent/certification/schema.ts';
+import { readCertification } from './native-agent/certification/store.ts';
+import {
+  resolveCertificationSubject,
+  subjectsEqual,
+} from './native-agent/certification/identity.ts';
+
+export interface ModelTransitionSpec {
+  schemaVersion: '1';
+  promotionId: string;
+  manifestId?: string;
+  catalogPath?: string;
+  expected?: {
+    minimumOldReferences?: number;
+    maximumOldReferences?: number;
+  };
+  provisional: {
+    alias: string;
+    providerNativeId?: string;
+    identityRevision: number;
+  };
+  final: {
+    alias: string;
+    provider: string;
+    providerNativeId: string;
+    identityRevision: number;
+    displayName: string;
+    family: string;
+    pricingRevision?: string;
+    pricing: Required<ModelPricing>;
+    verification: {
+      source: string;
+      observedAt: string;
+      catalogHash: string;
+    };
+    capabilities?: Partial<ModelCapabilities>;
+  };
+  disclosure: {
+    disclosedAt: string;
+    source: string;
+  };
+}
+
+export type PromotionMode = 'dry-run' | 'apply' | 'rollback';
+export type PromotionStatus = 'planned' | 'applied' | 'already_applied' | 'rolled_back';
+export type CorpusKind = 'catalog' | 'json' | 'jsonl';
+
+export interface PromotionFileManifest {
+  path: string;
+  relativePath: string;
+  kind: CorpusKind;
+  beforeHash: string;
+  afterHash: string;
+  recordCount: number;
+  fieldChanges: number;
+  oldReferencesBefore: number;
+  finalReferencesBefore: number;
+  finalReferencesAfter: number;
+  backupPath?: string;
+  tempPath?: string;
+}
+
+export interface PromotionManifest {
+  schemaVersion: '1';
+  manifestId: string;
+  promotionId: string;
+  mode: PromotionMode;
+  status: PromotionStatus;
+  repoDir: string;
+  createdAt: string;
+  provisional: ModelTransitionSpec['provisional'];
+  final: ModelTransitionSpec['final'];
+  disclosure: ModelTransitionSpec['disclosure'];
+  files: PromotionFileManifest[];
+  conservation: {
+    evalIdsBefore: string[];
+    evalIdsAfter: string[];
+    evalIdsConserved: boolean;
+    totalRecordsBefore: number;
+    totalRecordsAfter: number;
+    totalFieldChanges: number;
+    oldReferencesBefore: number;
+    oldReferencesAfter: number;
+    finalReferencesBefore: number;
+    finalReferencesAfter: number;
+  };
+  normalizedCost: {
+    complete: number;
+    missingTokenUsage: number;
+    missingCacheUsage: number;
+    missingCachePricing: number;
+  };
+  lineage: {
+    catalogPath?: string;
+    provisionalSuccessor: string;
+    finalPredecessor: string;
+  };
+  diagnostics: string[];
+  manifestPath?: string;
+}
+
+export interface PlanPromotionOptions {
+  spec: ModelTransitionSpec;
+  repoDir: string;
+  now?: string;
+}
+
+export interface ApplyPromotionOptions extends PlanPromotionOptions {
+  manifest?: PromotionManifest;
+}
+
+const TRANSITION_SCHEMA = JSON.parse(
+  readFileSync(new URL('../schemas/model-transition.schema.json', import.meta.url), 'utf-8'),
+);
+const ajv = new Ajv({ allErrors: true, strict: false });
+const validateTransitionSpec = ajv.compile(TRANSITION_SCHEMA);
+
+const SKIP_DIRS = new Set([
+  '.git',
+  'node_modules',
+  '.next',
+  'dist',
+  'coverage',
+]);
+
+const MODEL_ID_KEYS = new Set([
+  'modelId',
+  'resolvedModelId',
+  'attempted_model',
+  'model_alias',
+  'judgeModel',
+  'planner',
+  'coder',
+  'reviewer',
+  'model',
+  'primaryModel',
+  'challengerModel',
+  'requestedModel',
+  'resolvedModel',
+  'executedModel',
+  'intendedModel',
+  'fallbackModel',
+  'selectedModel',
+  'winningModel',
+  'losingModel',
+  'registryKey',
+  'wavemillAlias',
+  'alias',
+]);
+
+const MODEL_ARRAY_KEYS = new Set([
+  'models_available',
+  'modelsAvailable',
+  'candidateOnlyProvisional',
+  'candidates',
+  'modelIds',
+  'eligibleModels',
+  'rejectedModels',
+  'excludedModels',
+]);
+
+const MODEL_MAP_KEYS = new Set([
+  'workflowTokenUsage',
+  'pricingSnapshot',
+  'models',
+  'quota',
+  'quota_snapshot',
+]);
+
+const PROVIDER_ID_KEYS = new Set([
+  'providerNativeId',
+  'provider_native_id',
+  'providerModelId',
+  'providerModel',
+  'providerReturnedModel',
+  'requestedWireId',
+  'providerId',
+]);
+
+const HOKUSAI_NAME = /hokusai/i;
+
+interface ParsedJsonl {
+  records: unknown[];
+  lineCount: number;
+}
+
+interface TransformedData {
+  value: unknown;
+  fieldChanges: number;
+  oldReferencesBefore: number;
+  finalReferencesBefore: number;
+  finalReferencesAfter: number;
+  normalizedCost: PromotionManifest['normalizedCost'];
+  evalIds: string[];
+}
+
+interface PlannedFile {
+  manifest: PromotionFileManifest;
+  content: string;
+}
+
+interface PromotionPlan {
+  manifest: PromotionManifest;
+  files: PlannedFile[];
+}
+
+export function parseModelTransitionSpecFile(path: string): ModelTransitionSpec {
+  const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+  return validateModelTransitionSpec(parsed);
+}
+
+export function validateModelTransitionSpec(value: unknown): ModelTransitionSpec {
+  if (!validateTransitionSpec(value)) {
+    const detail = (validateTransitionSpec.errors ?? [])
+      .map((error) => `${error.instancePath || '/'} ${error.message ?? 'is invalid'}`)
+      .join('; ');
+    throw new Error(`Invalid model transition spec: ${detail}`);
+  }
+  return value as ModelTransitionSpec;
+}
+
+export function planModelPromotion(options: PlanPromotionOptions): PromotionManifest {
+  return buildPromotionPlan(options).manifest;
+}
+
+export function applyModelPromotion(options: ApplyPromotionOptions): PromotionManifest {
+  const repoDir = resolve(options.repoDir);
+  const manifestPath = promotionManifestPath(repoDir, options.spec);
+  if (existsSync(manifestPath)) {
+    const existing = JSON.parse(readFileSync(manifestPath, 'utf-8')) as PromotionManifest;
+    if (existing.status === 'applied' && isAlreadyApplied(options.spec, repoDir)) {
+      return {
+        ...existing,
+        mode: 'apply',
+        status: 'already_applied',
+        diagnostics: ['promotion already applied; no writes performed'],
+      };
+    }
+  }
+
+  const plan = options.manifest
+    ? rebuildPlanFromManifest(options, options.manifest)
+    : buildPromotionPlan({ ...options, repoDir });
+  if (plan.manifest.status === 'already_applied') {
+    return plan.manifest;
+  }
+
+  mkdirSync(promotionDir(repoDir, options.spec), { recursive: true });
+  for (const file of plan.files) {
+    if (file.manifest.fieldChanges === 0) {
+      continue;
+    }
+    const currentHash = sha256(readFileSync(file.manifest.path, 'utf-8'));
+    if (currentHash !== file.manifest.beforeHash) {
+      cleanupTemps(plan.files);
+      throw new Error(`Refusing to apply stale plan; hash changed for ${file.manifest.relativePath}`);
+    }
+    const backupPath = file.manifest.backupPath;
+    const tempPath = file.manifest.tempPath;
+    if (!backupPath || !tempPath) {
+      cleanupTemps(plan.files);
+      throw new Error(`Internal error: missing backup/temp path for ${file.manifest.relativePath}`);
+    }
+    mkdirSync(dirname(backupPath), { recursive: true });
+    mkdirSync(dirname(tempPath), { recursive: true });
+    if (!existsSync(backupPath)) {
+      copyFileSync(file.manifest.path, backupPath);
+    }
+    writeFileSync(tempPath, file.content, 'utf-8');
+    const stagedHash = sha256(readFileSync(tempPath, 'utf-8'));
+    if (stagedHash !== file.manifest.afterHash) {
+      cleanupTemps(plan.files);
+      throw new Error(`Internal error: staged hash mismatch for ${file.manifest.relativePath}`);
+    }
+  }
+
+  for (const file of plan.files) {
+    if (file.manifest.fieldChanges === 0 || !file.manifest.tempPath) {
+      continue;
+    }
+    renameSync(file.manifest.tempPath, file.manifest.path);
+  }
+
+  const appliedManifest: PromotionManifest = {
+    ...plan.manifest,
+    mode: 'apply',
+    status: 'applied',
+    manifestPath,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(appliedManifest, null, 2)}\n`, 'utf-8');
+  return appliedManifest;
+}
+
+export function rollbackModelPromotion(manifestPath: string): PromotionManifest {
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as PromotionManifest;
+  for (const file of manifest.files) {
+    if (!file.backupPath) {
+      continue;
+    }
+    if (!existsSync(file.backupPath)) {
+      throw new Error(`Missing backup for rollback: ${file.backupPath}`);
+    }
+    const backupContent = readFileSync(file.backupPath, 'utf-8');
+    if (sha256(backupContent) !== file.beforeHash) {
+      throw new Error(`Backup hash mismatch for rollback: ${file.backupPath}`);
+    }
+  }
+
+  for (const file of manifest.files) {
+    if (!file.backupPath) {
+      continue;
+    }
+    const tempPath = `${file.path}.rollback-${process.pid}.tmp`;
+    copyFileSync(file.backupPath, tempPath);
+    renameSync(tempPath, file.path);
+  }
+
+  const rolledBack: PromotionManifest = {
+    ...manifest,
+    mode: 'rollback',
+    status: 'rolled_back',
+    diagnostics: [...manifest.diagnostics, 'rollback restored exact backups'],
+  };
+  return rolledBack;
+}
+
+function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
+  const spec = validateModelTransitionSpec(options.spec);
+  const repoDir = resolve(options.repoDir);
+  validateIdentityInputs(spec);
+  const catalogPath = resolveCatalogPath(repoDir, spec);
+  const files = discoverPromotionFiles(repoDir, catalogPath);
+  const now = options.now ?? new Date().toISOString();
+  const plannedFiles: PlannedFile[] = [];
+  let totalRecordsBefore = 0;
+  let totalRecordsAfter = 0;
+  let totalFieldChanges = 0;
+  let oldReferencesBefore = 0;
+  let oldReferencesAfter = 0;
+  let finalReferencesBefore = 0;
+  let finalReferencesAfter = 0;
+  const evalIdsBefore: string[] = [];
+  const evalIdsAfter: string[] = [];
+  const normalizedCost = emptyNormalizedCostCounts();
+  const diagnostics: string[] = [];
+
+  for (const path of files) {
+    const kind = path === catalogPath ? 'catalog' : path.endsWith('.jsonl') ? 'jsonl' : 'json';
+    const beforeContent = readFileSync(path, 'utf-8');
+    const beforeHash = sha256(beforeContent);
+    const beforeRecords = kind === 'jsonl'
+      ? parseStrictJsonl(path, beforeContent).records
+      : [parseStrictJson(path, beforeContent)];
+    refuseAcceptedHokusaiRows(path, beforeRecords, spec);
+    const transformed = kind === 'catalog'
+      ? transformCatalogFile(path, spec, now)
+      : transformRecords(beforeRecords, spec, now);
+    const afterRecords = kind === 'jsonl'
+      ? (transformed.value as unknown[])
+      : [transformed.value];
+    const afterContent = kind === 'jsonl'
+      ? serializeJsonl(transformed.value as unknown[])
+      : `${JSON.stringify(transformed.value, null, 2)}\n`;
+    const afterHash = sha256(afterContent);
+    const recordCount = kind === 'jsonl' ? beforeRecords.length : 1;
+    totalRecordsBefore += recordCount;
+    totalRecordsAfter += afterRecords.length;
+    totalFieldChanges += transformed.fieldChanges;
+    oldReferencesBefore += transformed.oldReferencesBefore;
+    finalReferencesBefore += transformed.finalReferencesBefore;
+    finalReferencesAfter += transformed.finalReferencesAfter;
+    oldReferencesAfter += kind === 'catalog' ? 0 : countReferences(afterRecords, spec, 'old');
+    evalIdsBefore.push(...extractEvalIds(beforeRecords));
+    evalIdsAfter.push(...extractEvalIds(afterRecords));
+    addNormalizedCostCounts(normalizedCost, transformed.normalizedCost);
+
+    plannedFiles.push({
+      manifest: {
+        path,
+        relativePath: relative(repoDir, path),
+        kind,
+        beforeHash,
+        afterHash,
+        recordCount,
+        fieldChanges: transformed.fieldChanges,
+        oldReferencesBefore: transformed.oldReferencesBefore,
+        finalReferencesBefore: transformed.finalReferencesBefore,
+        finalReferencesAfter: transformed.finalReferencesAfter,
+        backupPath: transformed.fieldChanges > 0 ? backupPathFor(repoDir, spec, path) : undefined,
+        tempPath: transformed.fieldChanges > 0 ? tempPathFor(path, spec) : undefined,
+      },
+      content: afterContent,
+    });
+  }
+
+  validatePreflight(spec, repoDir, catalogPath, plannedFiles, {
+    oldReferencesBefore,
+    oldReferencesAfter,
+    finalReferencesBefore,
+    finalReferencesAfter,
+    evalIdsBefore,
+    evalIdsAfter,
+  });
+
+  const status: PromotionStatus = oldReferencesBefore === 0 && finalReferencesBefore > 0
+    ? 'already_applied'
+    : 'planned';
+  if (status === 'already_applied') {
+    diagnostics.push('promotion already appears applied; no writes planned');
+  }
+
+  const manifest: PromotionManifest = {
+    schemaVersion: '1',
+    manifestId: spec.manifestId ?? spec.promotionId,
+    promotionId: spec.promotionId,
+    mode: 'dry-run',
+    status,
+    repoDir,
+    createdAt: now,
+    provisional: spec.provisional,
+    final: spec.final,
+    disclosure: spec.disclosure,
+    files: plannedFiles.map((file) => file.manifest),
+    conservation: {
+      evalIdsBefore,
+      evalIdsAfter,
+      evalIdsConserved: sameStringMultiset(evalIdsBefore, evalIdsAfter),
+      totalRecordsBefore,
+      totalRecordsAfter,
+      totalFieldChanges,
+      oldReferencesBefore,
+      oldReferencesAfter,
+      finalReferencesBefore,
+      finalReferencesAfter,
+    },
+    normalizedCost,
+    lineage: {
+      catalogPath: catalogPath ? relative(repoDir, catalogPath) : undefined,
+      provisionalSuccessor: spec.final.alias,
+      finalPredecessor: spec.provisional.alias,
+    },
+    diagnostics,
+    manifestPath: promotionManifestPath(repoDir, spec),
+  };
+
+  return { manifest, files: plannedFiles };
+}
+
+function rebuildPlanFromManifest(
+  options: ApplyPromotionOptions,
+  manifest: PromotionManifest,
+): PromotionPlan {
+  const fresh = buildPromotionPlan(options);
+  const expectedFiles = manifest.files.filter((file) => file.fieldChanges > 0);
+  for (const expected of expectedFiles) {
+    const actual = fresh.manifest.files.find((file) => file.relativePath === expected.relativePath);
+    if (!actual || actual.beforeHash !== expected.beforeHash || actual.afterHash !== expected.afterHash) {
+      throw new Error(`Supplied manifest no longer matches ${expected.relativePath}`);
+    }
+  }
+  return fresh;
+}
+
+function validateIdentityInputs(spec: ModelTransitionSpec): void {
+  if (spec.provisional.alias === spec.final.alias) {
+    throw new Error('Provisional and final aliases must differ');
+  }
+  if (spec.provisional.providerNativeId && spec.provisional.providerNativeId === spec.final.providerNativeId) {
+    throw new Error('Provisional and final providerNativeId values must differ');
+  }
+  const expected = computeIdentityFingerprint({
+    alias: spec.final.alias,
+    providerNativeId: spec.final.providerNativeId,
+    provider: spec.final.provider,
+    revision: spec.final.identityRevision,
+  });
+  if (spec.final.capabilities?.identity?.fingerprint && spec.final.capabilities.identity.fingerprint !== expected) {
+    throw new Error('Final capabilities identity fingerprint does not match transition spec');
+  }
+}
+
+function validatePreflight(
+  spec: ModelTransitionSpec,
+  repoDir: string,
+  catalogPath: string | undefined,
+  plannedFiles: PlannedFile[],
+  counts: {
+    oldReferencesBefore: number;
+    oldReferencesAfter: number;
+    finalReferencesBefore: number;
+    finalReferencesAfter: number;
+    evalIdsBefore: string[];
+    evalIdsAfter: string[];
+  },
+): void {
+  if (counts.oldReferencesBefore > 0 && counts.finalReferencesBefore > 0) {
+    throw new Error('Refusing promotion with both provisional and final structured references present');
+  }
+  if (counts.oldReferencesAfter !== 0) {
+    throw new Error(`Refusing promotion with ${counts.oldReferencesAfter} provisional references remaining after transform`);
+  }
+  if (!sameStringMultiset(counts.evalIdsBefore, counts.evalIdsAfter)) {
+    throw new Error('Eval ID conservation failed');
+  }
+  if (spec.expected?.minimumOldReferences !== undefined && counts.oldReferencesBefore < spec.expected.minimumOldReferences) {
+    throw new Error(`Old reference count ${counts.oldReferencesBefore} is below expected minimum ${spec.expected.minimumOldReferences}`);
+  }
+  if (spec.expected?.maximumOldReferences !== undefined && counts.oldReferencesBefore > spec.expected.maximumOldReferences) {
+    throw new Error(`Old reference count ${counts.oldReferencesBefore} is above expected maximum ${spec.expected.maximumOldReferences}`);
+  }
+  if (catalogPath) {
+    validateCertificationIfNeeded(spec, repoDir, plannedFiles);
+  }
+}
+
+function validateCertificationIfNeeded(
+  spec: ModelTransitionSpec,
+  repoDir: string,
+  plannedFiles: PlannedFile[],
+): void {
+  const catalogFile = plannedFiles.find((file) => file.manifest.kind === 'catalog');
+  if (!catalogFile) {
+    return;
+  }
+  const catalog = JSON.parse(catalogFile.content) as ModelRegistryCatalog;
+  const registry = projectModelRegistryCatalog(catalog);
+  const finalCapabilities = registry.models[spec.final.alias];
+  if (!finalCapabilities?.nativeCapability || finalCapabilities.nativeCapability.readOnlyNative !== 'certified') {
+    return;
+  }
+  const suiteVersion = finalCapabilities.supportedModel?.certificationSuiteVersion
+    ?? finalCapabilities.nativeCapability.certification?.certificationSuiteVersion;
+  if (!suiteVersion) {
+    throw new Error('Final native model requires certificationSuiteVersion');
+  }
+  const requiredPhase = highestRequiredPhase(finalCapabilities.supportedModel?.requiredCertificationPhaseByStage)
+    ?? finalCapabilities.nativeCapability.certification?.maxCertifiedPhase
+    ?? 'read-only';
+  const subject = resolveCertificationSubject({
+    provider: finalCapabilities.nativeCapability.nativeProvider,
+    model: spec.final.alias,
+    registry,
+  }).subject;
+  const certs = discoverCertificationFiles(repoDir);
+  for (const certPath of certs) {
+    const result = readCertification(certPath);
+    if (!result.ok || !isRevisionAwareArtifact(result.artifact)) {
+      continue;
+    }
+    if (
+      result.artifact.schemaVersion === CERTIFICATION_SCHEMA_VERSION
+      && result.artifact.suiteVersion === suiteVersion
+      && phaseSatisfies(result.artifact.phase, requiredPhase)
+      && subjectsEqual(result.artifact.subject, subject)
+    ) {
+      return;
+    }
+  }
+  throw new Error(`Missing revision-aware native certification for final model ${spec.final.alias}`);
+}
+
+function highestRequiredPhase(
+  phases: Partial<Record<string, CertificationPhase>> | undefined,
+): CertificationPhase | undefined {
+  if (!phases) return undefined;
+  let highest: CertificationPhase | undefined;
+  for (const phase of Object.values(phases)) {
+    if (!highest || phaseSatisfies(phase, highest)) {
+      highest = phase;
+    }
+  }
+  return highest;
+}
+
+function transformCatalogFile(path: string, spec: ModelTransitionSpec, now: string): TransformedData {
+  const catalog = loadModelRegistryCatalog(path);
+  const beforeFinalRefs = countReferences([catalog], spec, 'final');
+  const provisional = catalog.models.find((entry) => entry.id === spec.provisional.alias);
+  if (!provisional) {
+    if (catalog.models.some((entry) => entry.id === spec.final.alias)) {
+      return {
+        value: catalog,
+        fieldChanges: 0,
+        oldReferencesBefore: beforeRefs,
+        finalReferencesBefore: beforeFinalRefs,
+        finalReferencesAfter: beforeFinalRefs,
+        normalizedCost: emptyNormalizedCostCounts(),
+        evalIds: [],
+      };
+    }
+    throw new Error(`Catalog does not contain provisional model ${spec.provisional.alias}`);
+  }
+  if (provisional.capabilities.identity?.status !== 'provisional') {
+    throw new Error(`Catalog source ${spec.provisional.alias} must have identity.status=provisional`);
+  }
+  if (provisional.capabilities.identity.revision !== spec.provisional.identityRevision) {
+    throw new Error(`Catalog source ${spec.provisional.alias} identity revision mismatch`);
+  }
+  if (provisional.capabilities.identity.evidencePolicy !== 'held') {
+    throw new Error(`Catalog source ${spec.provisional.alias} must keep evidencePolicy=held`);
+  }
+  if (catalog.models.some((entry) => entry.id === spec.final.alias)) {
+    if (provisional.capabilities.identity.lineage?.successor === spec.final.alias) {
+      return {
+        value: catalog,
+        fieldChanges: 0,
+        oldReferencesBefore: 0,
+        finalReferencesBefore: beforeFinalRefs,
+        finalReferencesAfter: beforeFinalRefs,
+        normalizedCost: emptyNormalizedCostCounts(),
+        evalIds: [],
+      };
+    }
+    throw new Error(`Catalog already contains final model ${spec.final.alias}`);
+  }
+  const finalEntry = buildFinalCatalogEntry(provisional.capabilities, spec, now);
+  provisional.capabilities.identity = {
+    ...provisional.capabilities.identity,
+    lineage: {
+      ...(provisional.capabilities.identity.lineage ?? {}),
+      successor: spec.final.alias,
+      disclosedAt: spec.disclosure.disclosedAt,
+      disclosureSource: spec.disclosure.source,
+    },
+  };
+  provisional.capabilities.supportedModel = {
+    ...(provisional.capabilities.supportedModel ?? {}),
+    routingEligible: false,
+    launchEligible: false,
+    lifecycle: 'deprecated',
+  };
+  catalog.models.push(finalEntry);
+  catalog.openrouterMappings = updateOpenRouterMappings(catalog.openrouterMappings, spec);
+  return {
+    value: catalog,
+    fieldChanges: 1,
+    oldReferencesBefore: 0,
+    finalReferencesBefore: beforeFinalRefs,
+    finalReferencesAfter: countReferences([catalog], spec, 'final'),
+    normalizedCost: emptyNormalizedCostCounts(),
+    evalIds: [],
+  };
+}
+
+function buildFinalCatalogEntry(
+  source: ModelCapabilities,
+  spec: ModelTransitionSpec,
+  now: string,
+): ModelRegistryCatalog['models'][number] {
+  const pricing = spec.final.pricing;
+  const overrides = spec.final.capabilities ?? {};
+  const supportedModel = {
+    ...(source.supportedModel ?? {}),
+    ...(overrides.supportedModel ?? {}),
+    wavemillAlias: spec.final.alias,
+    providerNativeId: spec.final.providerNativeId,
+    provider: spec.final.provider as NonNullable<ModelCapabilities['supportedModel']>['provider'],
+    routingEligible: overrides.supportedModel?.routingEligible ?? true,
+    launchEligible: overrides.supportedModel?.launchEligible ?? true,
+    lifecycle: overrides.supportedModel?.lifecycle ?? 'supported',
+  };
+  const nativeCapability = source.nativeCapability || overrides.nativeCapability
+    ? {
+      ...(source.nativeCapability ?? {}),
+      ...(overrides.nativeCapability ?? {}),
+      nativeProvider: spec.final.provider as NonNullable<ModelCapabilities['nativeCapability']>['nativeProvider'],
+    }
+    : undefined;
+
+  return {
+    id: spec.final.alias,
+    capabilities: {
+      ...source,
+      ...overrides,
+      vendor: overrides.vendor ?? source.vendor,
+      strengths: overrides.strengths ? [...overrides.strengths] : [...source.strengths],
+      weaknesses: overrides.weaknesses ? [...overrides.weaknesses] : source.weaknesses.filter((item) => !/provisional|pending disclosure/i.test(item)),
+      pricing,
+      costPerMillionInputTokensUsd: pricing.inputCostPerMTok,
+      costPerMillionOutputTokensUsd: pricing.outputCostPerMTok,
+      defaultLadderEligible: overrides.defaultLadderEligible ?? false,
+      supportedModel,
+      nativeCapability,
+      identity: {
+        status: 'verified',
+        revision: spec.final.identityRevision,
+        fingerprint: computeIdentityFingerprint({
+          alias: spec.final.alias,
+          providerNativeId: spec.final.providerNativeId,
+          provider: spec.final.provider,
+          revision: spec.final.identityRevision,
+        }),
+        displayName: spec.final.displayName,
+        family: spec.final.family as NonNullable<ModelCapabilities['identity']>['family'],
+        evidencePolicy: overrides.identity?.evidencePolicy ?? 'held',
+        verification: { ...spec.final.verification },
+        lineage: {
+          predecessors: [
+            ...new Set([
+              ...((overrides.identity?.lineage?.predecessors) ?? []),
+              spec.provisional.alias,
+            ]),
+          ],
+          formerIds: [
+            ...new Set([
+              ...((overrides.identity?.lineage?.formerIds) ?? []),
+              spec.provisional.providerNativeId ?? spec.provisional.alias,
+            ]),
+          ],
+          disclosedAt: spec.disclosure.disclosedAt || now,
+          disclosureSource: spec.disclosure.source,
+        },
+      },
+    },
+  };
+}
+
+function updateOpenRouterMappings(openrouterMappings: unknown[] | undefined, spec: ModelTransitionSpec): unknown[] | undefined {
+  if (!openrouterMappings) return openrouterMappings;
+  const cloned = JSON.parse(JSON.stringify(openrouterMappings)) as unknown[];
+  cloned.push({
+    wavemillAlias: spec.final.alias,
+    openrouterId: spec.final.providerNativeId,
+    family: spec.final.family,
+    status: 'active',
+    priorityTier: 3,
+    roleEligibility: ['planning', 'coding', 'review'],
+  });
+  return cloned;
+}
+
+function transformRecords(records: unknown[], spec: ModelTransitionSpec, now: string): TransformedData {
+  const beforeOld = countReferences(records, spec, 'old');
+  const beforeFinal = countReferences(records, spec, 'final');
+  const normalizedCost = emptyNormalizedCostCounts();
+  let fieldChanges = 0;
+  const transformed = records.map((record) => {
+    const recordResult = transformValue(record, spec);
+    fieldChanges += recordResult.changed;
+    const maybeEval = recordResult.value as Partial<EvalRecord>;
+    if (isEvalRecordShape(maybeEval)) {
+      const evalResult = finalizeEvalRecord(maybeEval as EvalRecord, spec, now);
+      if (evalResult.changed) {
+        fieldChanges += 1;
+      }
+      addNormalizedCostCounts(normalizedCost, evalResult.normalizedCost);
+      return evalResult.record;
+    }
+    return recordResult.value;
+  });
+  return {
+    value: transformed,
+    fieldChanges,
+    oldReferencesBefore: beforeOld,
+    finalReferencesBefore: beforeFinal,
+    finalReferencesAfter: countReferences(transformed, spec, 'final'),
+    normalizedCost,
+    evalIds: extractEvalIds(transformed),
+  };
+}
+
+function finalizeEvalRecord(
+  record: EvalRecord,
+  spec: ModelTransitionSpec,
+  now: string,
+): {
+  record: EvalRecord;
+  changed: boolean;
+  normalizedCost: PromotionManifest['normalizedCost'];
+} {
+  const normalizedCost = emptyNormalizedCostCounts();
+  const cloned = record;
+  let changed = false;
+  const roles = cloned.modelIdentityAttribution?.roles ?? {};
+  for (const [role, observation] of Object.entries(roles) as Array<[RoutingRole, NonNullable<typeof roles[RoutingRole]>]>) {
+    const matchesPromotedObservation = observation
+      && (
+        observation.alias === spec.provisional.alias
+        || (observation.alias === spec.final.alias && observation.identityStatus === 'provisional')
+      );
+    if (!matchesPromotedObservation) {
+      continue;
+    }
+    observation.alias = spec.final.alias;
+    observation.providerId = spec.final.providerNativeId;
+    observation.identityStatus = 'verified';
+    observation.identityRevision = spec.final.identityRevision;
+    observation.fingerprint = computeIdentityFingerprint({
+      alias: spec.final.alias,
+      providerNativeId: spec.final.providerNativeId,
+      provider: spec.final.provider,
+      revision: spec.final.identityRevision,
+    });
+    observation.evidencePolicy = 'held';
+    changed = true;
+  }
+  if (cloned.modelIdentityAttribution && changed) {
+    cloned.modelIdentityAttribution.finalization = {
+      promotedAt: now,
+      manifestId: spec.manifestId ?? spec.promotionId,
+      fromRevision: spec.provisional.identityRevision,
+      toRevision: spec.final.identityRevision,
+      observedAlias: spec.provisional.alias,
+      finalAlias: spec.final.alias,
+    };
+    cloned.modelIdentityAttribution.provisionalRoles = cloned.modelIdentityAttribution.provisionalRoles
+      .filter((role) => roles[role]?.alias !== spec.final.alias);
+    cloned.modelIdentityAttribution.candidateOnlyProvisional = cloned.modelIdentityAttribution.candidateOnlyProvisional
+      .filter((modelId) => modelId !== spec.provisional.alias);
+    cloned.eligibilityErrors = [
+      ...new Set([
+        ...(cloned.eligibilityErrors ?? []),
+        'provisional_model_identity',
+      ]),
+    ];
+    cloned.trainingEligible = false;
+    cloned.budgetEvalEligible = false;
+    cloned.nonRewardReason ??= {
+      code: 'provisional_model_identity',
+      message: 'Promotion finalizes catalog identity but historical evidence remains held until re-qualified.',
+    };
+  }
+
+  for (const [modelId, usage] of Object.entries(cloned.workflowTokenUsage ?? {})) {
+    if (modelId !== spec.final.alias && modelId !== spec.provisional.alias) {
+      continue;
+    }
+    const normalized = computeNormalizedEvaluationCost(usage, spec.final.pricing, {
+      requireExplicitCache: true,
+      pricingRevision: spec.final.pricingRevision ?? spec.promotionId,
+    });
+    cloned.normalizedEvaluationCost = {
+      ...normalized,
+      computedAt: now,
+    };
+    if (normalized.coverage === 'complete') normalizedCost.complete++;
+    if (normalized.coverage === 'missing_token_usage') normalizedCost.missingTokenUsage++;
+    if (normalized.coverage === 'missing_cache_usage') normalizedCost.missingCacheUsage++;
+    if (normalized.coverage === 'missing_cache_pricing') normalizedCost.missingCachePricing++;
+    changed = true;
+    break;
+  }
+
+  return { record: cloned, changed, normalizedCost };
+}
+
+function transformValue(value: unknown, spec: ModelTransitionSpec, parentKey?: string): { value: unknown; changed: number } {
+  if (Array.isArray(value)) {
+    let changed = 0;
+    const next = value.map((item) => {
+      const result = transformValue(item, spec, parentKey);
+      changed += result.changed;
+      return result.value;
+    });
+    return { value: next, changed };
+  }
+  if (!value || typeof value !== 'object') {
+    return { value, changed: 0 };
+  }
+  const record = value as Record<string, unknown>;
+  let changed = 0;
+  for (const [key, fieldValue] of Object.entries(record)) {
+    let effectiveKey = key;
+    if (MODEL_MAP_KEYS.has(parentKey ?? '') && key === spec.provisional.alias) {
+      effectiveKey = spec.final.alias;
+      record[effectiveKey] = fieldValue;
+      delete record[key];
+      changed++;
+    }
+    if (typeof fieldValue === 'string') {
+      if (MODEL_ID_KEYS.has(effectiveKey) && fieldValue === spec.provisional.alias) {
+        record[effectiveKey] = spec.final.alias;
+        changed++;
+        continue;
+      }
+      if (PROVIDER_ID_KEYS.has(effectiveKey) && spec.provisional.providerNativeId && fieldValue === spec.provisional.providerNativeId) {
+        record[effectiveKey] = spec.final.providerNativeId;
+        changed++;
+        continue;
+      }
+    }
+    if (Array.isArray(fieldValue) && MODEL_ARRAY_KEYS.has(effectiveKey)) {
+      const next = fieldValue.map((item) => item === spec.provisional.alias ? spec.final.alias : item);
+      const delta = next.filter((item, index) => item !== fieldValue[index]).length;
+      if (delta > 0) {
+        record[effectiveKey] = next;
+        changed += delta;
+      }
+      continue;
+    }
+    const nested = transformValue(record[effectiveKey], spec, effectiveKey);
+    if (nested.changed > 0) {
+      record[effectiveKey] = nested.value;
+      changed += nested.changed;
+    }
+  }
+  return { value: record, changed };
+}
+
+function countReferences(records: unknown[], spec: ModelTransitionSpec, target: 'old' | 'final'): number {
+  const alias = target === 'old' ? spec.provisional.alias : spec.final.alias;
+  const providerNativeId = target === 'old' ? spec.provisional.providerNativeId : spec.final.providerNativeId;
+  let count = 0;
+  function visit(value: unknown, key?: string): void {
+    if (typeof value === 'string') {
+      if (MODEL_ID_KEYS.has(key ?? '') && value === alias) count++;
+      if (providerNativeId && PROVIDER_ID_KEYS.has(key ?? '') && value === providerNativeId) count++;
+      return;
+    }
+    if (Array.isArray(value)) {
+      if (MODEL_ARRAY_KEYS.has(key ?? '')) {
+        count += value.filter((item) => item === alias).length;
+      }
+      for (const item of value) visit(item);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+        if (MODEL_MAP_KEYS.has(key ?? '') && childKey === alias) count++;
+        visit(childValue, childKey);
+      }
+    }
+  }
+  for (const record of records) visit(record);
+  return count;
+}
+
+function parseStrictJson(path: string, content: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Malformed JSON in ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function parseStrictJsonl(path: string, content: string): ParsedJsonl {
+  const records: unknown[] = [];
+  const lines = content.split('\n');
+  let lineCount = 0;
+  for (const line of lines) {
+    if (line.length === 0 && line === lines[lines.length - 1]) {
+      continue;
+    }
+    if (line.trim().length === 0) {
+      continue;
+    }
+    lineCount++;
+    try {
+      records.push(JSON.parse(line));
+    } catch (error) {
+      throw new Error(`Malformed JSONL in ${path} line ${lineCount}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return { records, lineCount };
+}
+
+function serializeJsonl(records: unknown[]): string {
+  return `${records.map((record) => JSON.stringify(record)).join('\n')}\n`;
+}
+
+function discoverPromotionFiles(repoDir: string, catalogPath?: string): string[] {
+  const files: string[] = [];
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name) && entry.name !== 'model-promotions') {
+          walk(join(dir, entry.name));
+        }
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const path = join(dir, entry.name);
+      if (path.includes(`${sep}.wavemill${sep}model-promotions${sep}`)) continue;
+      if (path.endsWith('.backup') || path.includes('.promotion-tmp-')) continue;
+      if (path.endsWith('.json') || path.endsWith('.jsonl')) {
+        files.push(path);
+      }
+    }
+  }
+  walk(repoDir);
+  const normalized = new Set(files.map((file) => resolve(file)));
+  if (catalogPath) normalized.add(resolve(catalogPath));
+  return [...normalized].sort();
+}
+
+function resolveCatalogPath(repoDir: string, spec: ModelTransitionSpec): string | undefined {
+  const candidates = [
+    spec.catalogPath,
+    'shared/fixtures/model-registry.v1.json',
+    '.wavemill/model-registry.v1.json',
+    'model-registry.v1.json',
+  ].filter(Boolean) as string[];
+  for (const candidate of candidates) {
+    const path = isAbsolute(candidate) ? candidate : join(repoDir, candidate);
+    if (existsSync(path)) {
+      return resolve(path);
+    }
+  }
+  return undefined;
+}
+
+function discoverCertificationFiles(repoDir: string): string[] {
+  const base = join(repoDir, '.wavemill', 'native-agent-certifications');
+  if (!existsSync(base)) return [];
+  const files: string[] = [];
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (entry.isFile() && entry.name.endsWith('.json')) {
+        files.push(path);
+      }
+    }
+  }
+  walk(base);
+  return files;
+}
+
+function refuseAcceptedHokusaiRows(path: string, records: unknown[], spec: ModelTransitionSpec): void {
+  if (!HOKUSAI_NAME.test(path)) {
+    return;
+  }
+  for (const record of records) {
+    if (
+      countReferences([record], spec, 'old') > 0
+      && containsAcceptedStatus(record)
+    ) {
+      throw new Error(`Refusing already-accepted Hokusai row in ${path}`);
+    }
+  }
+}
+
+function containsAcceptedStatus(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return value === 'accepted';
+  }
+  if (Array.isArray(value)) {
+    return value.some(containsAcceptedStatus);
+  }
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some(containsAcceptedStatus);
+  }
+  return false;
+}
+
+function isEvalRecordShape(value: Partial<EvalRecord>): value is EvalRecord {
+  return typeof value.id === 'string'
+    && typeof value.schemaVersion === 'string'
+    && typeof value.modelId === 'string';
+}
+
+function extractEvalIds(records: unknown[]): string[] {
+  return records
+    .filter((record): record is { id: string; schemaVersion?: string } =>
+      !!record && typeof record === 'object' && typeof (record as { id?: unknown }).id === 'string'
+      && typeof (record as { schemaVersion?: unknown }).schemaVersion === 'string')
+    .map((record) => record.id);
+}
+
+function sameStringMultiset(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false;
+  const a = [...left].sort();
+  const b = [...right].sort();
+  return a.every((value, index) => value === b[index]);
+}
+
+function emptyNormalizedCostCounts(): PromotionManifest['normalizedCost'] {
+  return {
+    complete: 0,
+    missingTokenUsage: 0,
+    missingCacheUsage: 0,
+    missingCachePricing: 0,
+  };
+}
+
+function addNormalizedCostCounts(
+  target: PromotionManifest['normalizedCost'],
+  source: PromotionManifest['normalizedCost'],
+): void {
+  target.complete += source.complete;
+  target.missingTokenUsage += source.missingTokenUsage;
+  target.missingCacheUsage += source.missingCacheUsage;
+  target.missingCachePricing += source.missingCachePricing;
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function promotionDir(repoDir: string, spec: ModelTransitionSpec): string {
+  return join(repoDir, '.wavemill', 'model-promotions', spec.promotionId);
+}
+
+function promotionManifestPath(repoDir: string, spec: ModelTransitionSpec): string {
+  return join(promotionDir(repoDir, spec), `${spec.manifestId ?? spec.promotionId}.manifest.json`);
+}
+
+function backupPathFor(repoDir: string, spec: ModelTransitionSpec, filePath: string): string {
+  const rel = relative(repoDir, filePath);
+  return join(promotionDir(repoDir, spec), 'backups', rel);
+}
+
+function tempPathFor(path: string, spec: ModelTransitionSpec): string {
+  return join(dirname(path), `.${spec.promotionId}.${process.pid}.promotion-tmp`);
+}
+
+function cleanupTemps(files: PlannedFile[]): void {
+  for (const file of files) {
+    if (file.manifest.tempPath && existsSync(file.manifest.tempPath)) {
+      unlinkSync(file.manifest.tempPath);
+    }
+  }
+}
+
+function isAlreadyApplied(spec: ModelTransitionSpec, repoDir: string): boolean {
+  const plan = buildPromotionPlan({ spec, repoDir });
+  return plan.manifest.status === 'already_applied';
+}
