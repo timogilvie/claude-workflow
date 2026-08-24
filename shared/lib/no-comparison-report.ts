@@ -11,8 +11,12 @@ export interface NoComparisonReportReason {
 export interface NoComparisonReport {
   launchedPairs: number;
   phantomPairs: number;
+  totalPairs: number;
   comparedPairs: number;
+  forfeitPairs: number;
+  doubleForfeitPairs: number;
   skipRate: number;
+  yieldRate: number;
   noComparisonRate: number;
   unknownReasonCount: number;
   byReason: Map<NoComparisonReason, NoComparisonReportReason>;
@@ -71,6 +75,8 @@ export function buildNoComparisonReport(options: {
   let launchedPairs = 0;
   let comparedPairs = 0;
   let phantomPairs = 0;
+  let forfeitPairs = 0;
+  let doubleForfeitPairs = 0;
   let skipOutcomeCount = 0;
   const reasonCounts = new Map<NoComparisonReason, Array<string>>();
   let unknownCount = 0;
@@ -92,6 +98,12 @@ export function buildNoComparisonReport(options: {
     if (record.comparisonOutcome === 'compared') {
       comparedPairs += 1;
     } else {
+      if (record.comparisonOutcome === 'forfeit') {
+        forfeitPairs += 1;
+      } else if (record.comparisonOutcome === 'double-forfeit') {
+        doubleForfeitPairs += 1;
+      }
+
       if (reason === 'unknown') {
         unknownCount += 1;
       }
@@ -132,14 +144,20 @@ export function buildNoComparisonReport(options: {
     }
   }
 
+  const totalPairs = launchedPairs + phantomPairs;
   const skipRate = launchedPairs > 0 ? skipOutcomeCount / launchedPairs : 0;
+  const yieldRate = totalPairs > 0 ? comparedPairs / totalPairs : 0;
   const noComparisonRate = launchedPairs > 0 ? (launchedPairs - comparedPairs) / launchedPairs : 0;
 
   return {
     launchedPairs,
     phantomPairs,
+    totalPairs,
     comparedPairs,
+    forfeitPairs,
+    doubleForfeitPairs,
     skipRate,
+    yieldRate,
     noComparisonRate,
     unknownReasonCount: unknownCount,
     byReason,
@@ -151,7 +169,9 @@ function isSkipOutcome(outcome: StoredChallengeComparison['comparisonOutcome']):
   return outcome === 'skipped'
     || outcome === 'invalid_challenge'
     || outcome === 'invalid'
-    || outcome === 'inconclusive';
+    || outcome === 'inconclusive'
+    || outcome === 'forfeit'
+    || outcome === 'double-forfeit';
 }
 
 export function formatNoComparisonReportText(report: NoComparisonReport): string {
@@ -162,8 +182,12 @@ export function formatNoComparisonReportText(report: NoComparisonReport): string
   lines.push('## Summary');
   lines.push(`- Launched pairs: ${report.launchedPairs}`);
   lines.push(`- Phantom pairs: ${report.phantomPairs} (excluded from launched-pair denominator)`);
+  lines.push(`- Total pairs: ${report.totalPairs}`);
   lines.push(`- Compared pairs: ${report.comparedPairs}`);
+  lines.push(`- Forfeit pairs: ${report.forfeitPairs}`);
+  lines.push(`- Double-forfeit pairs: ${report.doubleForfeitPairs}`);
   lines.push(`- Skip rate: ${(report.skipRate * 100).toFixed(2)}%`);
+  lines.push(`- Yield rate: ${(report.yieldRate * 100).toFixed(2)}%`);
   lines.push(`- No-comparison rate: ${(report.noComparisonRate * 100).toFixed(2)}%`);
   if (report.unknownReasonCount > 0) {
     lines.push(`- ⚠️  Unknown reason count: ${report.unknownReasonCount}`);
@@ -206,8 +230,12 @@ export function formatNoComparisonReportJson(report: NoComparisonReport): Record
   return {
     launchedPairs: report.launchedPairs,
     phantomPairs: report.phantomPairs,
+    totalPairs: report.totalPairs,
     comparedPairs: report.comparedPairs,
+    forfeitPairs: report.forfeitPairs,
+    doubleForfeitPairs: report.doubleForfeitPairs,
     skipRate: report.skipRate,
+    yieldRate: report.yieldRate,
     noComparisonRate: report.noComparisonRate,
     unknownReasonCount: report.unknownReasonCount,
     byReason: Object.fromEntries(
