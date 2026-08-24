@@ -209,18 +209,16 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     fail "runtime state update discarded the varied stage model or agent"
   fi
 
-  save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null
-  if [[ $? -ne 0 ]]; then
-    pass "runtime state rejects blank primary challenge role with error"
-  else
+  if save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
     fail "runtime state should reject blank primary challenge role"
+  else
+    pass "runtime state rejects blank primary challenge role with error"
   fi
 
-  save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null
-  if [[ $? -ne 0 ]]; then
-    pass "runtime state rejects blank challenger challenge role with error"
-  else
+  if save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
     fail "runtime state should reject blank challenger challenge role"
+  else
+    pass "runtime state rejects blank challenger challenge role with error"
   fi
 
   # challenge_varied_stage_model must only speak up for the stage the pair varies.
