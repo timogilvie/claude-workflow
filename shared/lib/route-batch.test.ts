@@ -153,6 +153,11 @@ function makeRepo(mode: 'auto' | 'stage-aware' = 'auto') {
   };
 }
 
+function withoutProvenance<T extends { provenance?: unknown }>(decision: T) {
+  const { provenance: _provenance, ...rest } = decision;
+  return rest;
+}
+
 console.log('\n--- route-batch Tests ---\n');
 
 await test('batch decisions match serial auto routing and reuse eval loading', async () => {
@@ -179,11 +184,8 @@ await test('batch decisions match serial auto routing and reuse eval loading', a
     assert.equal(batchLoads, 1);
     assert.equal(serialLoads, tasks.length);
     assert.deepEqual(
-      batchResults.map(({ decision }) => {
-        const { provenance: _provenance, ...rest } = decision as typeof decision & { provenance?: unknown };
-        return rest;
-      }),
-      serialDecisions.map((decision) => withResolvedRouteBudget(decision, { repoDir })),
+      batchResults.map(({ decision }) => withoutProvenance(decision)),
+      serialDecisions.map((decision) => withoutProvenance(withResolvedRouteBudget(decision, { repoDir }))),
     );
     for (const { decision } of batchResults) {
       assert.ok(decision.provenance);
