@@ -29,6 +29,9 @@ runTool({
     if (report.forbiddenLocalConfig.length > 0) {
       process.exit(2);
     }
+    if (report.certificationSuiteCoverageStatus === 'bump-without-publish') {
+      process.exit(4);
+    }
     if (
       args['strict-challenge'] === true
       && Object.values(report.challengePairAvailability).some((available) => available !== true)

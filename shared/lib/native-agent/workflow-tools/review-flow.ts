@@ -98,6 +98,7 @@ export interface ReviewFlowReviewSummary {
   blockingCount: number;
   warningCount: number;
   reviewToolError?: string;
+  failureCategory?: string;
   needsStrongerReviewer: boolean;
 }
 
@@ -246,6 +247,7 @@ function buildStageArtifacts(input: {
     blockerCount: input.review.blockingCount,
     warningCount: input.review.warningCount,
     ...(input.review.reviewToolError ? { reviewToolError: input.review.reviewToolError } : {}),
+    ...(input.review.failureCategory ? { failureCategory: input.review.failureCategory } : {}),
     review: {
       status: input.review.status,
       verdict: input.review.verdict,
@@ -256,6 +258,7 @@ function buildStageArtifacts(input: {
       blockerCount: input.review.blockingCount,
       warningCount: input.review.warningCount,
       reviewToolError: input.review.reviewToolError,
+      failureCategory: input.review.failureCategory,
       needsStrongerReviewer: input.review.needsStrongerReviewer,
     },
     fixes: input.fixes,
@@ -419,6 +422,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     blockingCount: reviewCall.ok ? reviewCall.blockingCount ?? 0 : 0,
     warningCount: reviewCall.ok ? reviewCall.warningCount ?? Math.max(0, (reviewCall.findingCount ?? 0) - (reviewCall.blockingCount ?? 0)) : 0,
     reviewToolError: reviewCall.ok ? undefined : reviewCall.message,
+    failureCategory: reviewCall.failureCategory,
     needsStrongerReviewer: false,
   };
   const emptyFixes = makeFixSummary();
