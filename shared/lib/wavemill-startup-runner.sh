@@ -301,11 +301,8 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}" window_id="${20:-}"
   if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    case "$issue" in
-      *_c) challenge_role="challenger" ;;
-      *) challenge_role="primary" ;;
-    esac
-    log_warn "save_task_state: derived challengeRole=$challenge_role for $issue (was empty)"
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
   fi
   state_mutate "$STATE_FILE" \
     '.tasks[$issue] = (.tasks[$issue] // {}) + {

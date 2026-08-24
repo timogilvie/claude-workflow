@@ -788,11 +788,8 @@ save_task_state() {
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
   if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    case "$issue" in
-      *_c) challenge_role="challenger" ;;
-      *) challenge_role="primary" ;;
-    esac
-    log_warn "save_task_state: derived challengeRole=$challenge_role for $issue (was empty)"
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
   fi
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
@@ -3507,11 +3504,8 @@ save_task_state() {
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
   if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    case "$issue" in
-      *_c) challenge_role="challenger" ;;
-      *) challenge_role="primary" ;;
-    esac
-    log_warn "save_task_state: derived challengeRole=$challenge_role for $issue (was empty)"
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
   fi
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
