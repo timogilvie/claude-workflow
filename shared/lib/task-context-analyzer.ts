@@ -55,7 +55,7 @@ export interface TaskContextAnalysisInput {
 
 const TASK_TYPE_KEYWORDS: Record<TaskType, string[]> = {
   bugfix: ['fix', 'bug', 'issue', 'broken', 'error', 'crash', 'regression', 'patch'],
-  feature: ['add', 'feature', 'implement', 'new', 'create', 'support', 'introduce', 'integrate', 'develop', 'enhance', 'improve', 'enable', 'replace', 'sophisticated', 'accurate'],
+  feature: ['add', 'feature', 'implement', 'new', 'create', 'support', 'introduce', 'integrate', 'develop', 'enhance', 'enable', 'replace', 'sophisticated', 'accurate'],
   refactor: ['refactor', 'cleanup', 'reorganize', 'simplify', 'improve structure'],
   chore: ['chore', 'update', 'upgrade', 'dependency', 'deps', 'maintenance'],
   docs: ['docs', 'documentation', 'readme', 'comment', 'docstring'],
