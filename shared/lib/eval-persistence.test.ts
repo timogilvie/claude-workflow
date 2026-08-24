@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { EvalRecord } from './eval-schema.ts';
@@ -241,6 +241,38 @@ test('append rejects records that fail write-time validation', () => {
   }
 });
 
+test('append quarantines schema-violating records before propagating EvalValidationError', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals');
+  try {
+    const record = {
+      ...makeRecord({ id: 'quarantine-record', issueId: 'HOK-901' }),
+      unexpectedChallengeField: 'bad-value',
+    } as unknown as EvalRecord;
+
+    assert.throws(
+      () => appendEvalRecord(record, { dir: evalsDir }),
+      (error) => {
+        assert.ok(error instanceof EvalValidationError);
+        assert.ok(error.quarantinePath);
+        assert.match(error.message, /SCHEMA_VIOLATION\(unexpectedChallengeField\)="bad-value"/);
+        assert.match(error.message, /quarantined=/);
+        assert.equal(existsSync(error.quarantinePath), true);
+
+        const payload = JSON.parse(readFileSync(error.quarantinePath, 'utf-8'));
+        assert.equal(payload.reason, 'write_time_validation');
+        assert.equal(payload.record.id, 'quarantine-record');
+        assert.equal(payload.record.unexpectedChallengeField, 'bad-value');
+        assert.equal(payload.issues[0].detail, 'unexpectedChallengeField');
+        assert.equal(payload.issues[0].value, '"bad-value"');
+        return true;
+      },
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
 test('append skipValidation bypasses the write-time gate for fixtures', () => {
   const tmp = makeTempDir();
   const evalsDir = join(tmp, 'evals');
@@ -251,7 +283,57 @@ test('append skipValidation bypasses the write-time gate for fixtures', () => {
     });
     const records = readEvalRecords({ dir: evalsDir });
     assert.equal(records.length, 1);
+    assert.equal(existsSync(join(evalsDir, 'rejected')), false);
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append still throws EvalValidationError when quarantine write fails', () => {
+  const tmp = makeTempDir();
+  const evalsDir = join(tmp, 'evals-file');
+  writeFileSync(evalsDir, 'not a directory', 'utf-8');
+  try {
+    assert.throws(
+      () => appendEvalRecord({
+        ...makeRecord({ id: 'quarantine-fails' }),
+        unexpectedChallengeField: true,
+      } as unknown as EvalRecord, { dir: evalsDir }),
+      (error) => error instanceof EvalValidationError
+        && error.quarantinePath === null
+        && error.issues.some((issue) => issue.detail === 'unexpectedChallengeField' && issue.value === 'true'),
+    );
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('append honors configured rejected eval retention', () => {
+  const tmp = makeTempDir();
+  const repoDir = join(tmp, 'repo');
+  const rejectedDir = join(repoDir, '.wavemill', 'evals', 'rejected');
+  mkdirSync(rejectedDir, { recursive: true });
+  writeFileSync(
+    join(repoDir, '.wavemill-config.json'),
+    JSON.stringify({ eval: { rejectedRetention: 1 } }),
+    'utf-8',
+  );
+  writeFileSync(join(rejectedDir, '2026-01-01T00-00-00-000Z-old-primary.json'), '{}\n');
+  clearConfigCache(repoDir);
+  try {
+    assert.throws(
+      () => appendEvalRecord({
+        ...makeRecord({ id: 'retention-record', issueId: 'HOK-902' }),
+        unexpectedChallengeField: true,
+      } as unknown as EvalRecord, { repoDir }),
+      EvalValidationError,
+    );
+
+    const files = readdirSync(rejectedDir).filter((name) => name.endsWith('.json'));
+    assert.equal(files.length, 1);
+    assert.equal(files.some((name) => name.includes('hok-902')), true);
+  } finally {
+    clearConfigCache(repoDir);
     cleanUp(tmp);
   }
 });

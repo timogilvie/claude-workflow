@@ -180,6 +180,7 @@ export interface MintEligibilityConfig {
 export interface EvalConfig {
   aggregation?: AggregationConfig;
   evalsDir?: string;
+  rejectedRetention?: number;
   judge?: JudgeConfig;
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;

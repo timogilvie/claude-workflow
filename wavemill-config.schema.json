@@ -572,6 +572,12 @@
                     "default": ".wavemill/evals",
                     "description": "Directory for persisting eval result JSONL files. Relative paths resolve against the repo root."
                 },
+                "rejectedRetention": {
+                    "type": "integer",
+                    "default": 200,
+                    "minimum": 1,
+                    "description": "Maximum number of rejected eval quarantine JSON files to retain under the evals rejected directory."
+                },
                 "judge": {
                     "type": "object",
                     "description": "LLM judge configuration for eval scoring.",

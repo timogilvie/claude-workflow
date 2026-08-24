@@ -201,6 +201,7 @@ TESTS=(
   shared/lib/trace-event.test.ts
   shared/lib/eval-success-policy.test.ts
   shared/lib/eval-validator.test.ts
+  shared/lib/eval-rejected-store.test.ts
   shared/lib/task-dependency-plan-cache.test.ts
   shared/lib/task-dependency-planner.test.ts
   shared/lib/plan-queue-utils.test.ts
