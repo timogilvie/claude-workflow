@@ -287,6 +287,7 @@ reset_startup_phase_artifacts() {
     "$feature_dir/.coding-result.json" \
     "$feature_dir/.review-result.json" \
     "$feature_dir/.ready-result.json" \
+    "$feature_dir/.review-infra-retries" \
     "$feature_dir/.resolved-phase" \
     "$feature_dir/.plan-approved" \
     "$feature_dir/.coding-complete" \
@@ -300,6 +301,10 @@ save_task_state() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}" window_id="${20:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
   state_mutate "$STATE_FILE" \
     '.tasks[$issue] = (.tasks[$issue] // {}) + {
         slug: $slug,

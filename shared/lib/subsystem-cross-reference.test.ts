@@ -2,7 +2,8 @@
  * Unit tests for subsystem cross-reference detection.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, test as it } from 'node:test';
+import { expect } from './test-assertions.ts';
 import { detectSubsystemRelationships } from './subsystem-cross-reference.ts';
 import type { Subsystem } from './subsystem-detector.ts';
 

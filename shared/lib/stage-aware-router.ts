@@ -26,6 +26,7 @@ import {
   getEffectiveRegistry,
   hasCapabilityConstraints,
   isCodexChatgptLaunchEligible,
+  resolveModelIdentity,
   type CapabilityConstraints,
   type RegistryTaskType,
 } from './model-registry.ts';
@@ -41,6 +42,7 @@ import {
   type ExplorationAttribution,
   type ResolvedExplorationConfig,
 } from './router-exploration.ts';
+import { formatEvidenceExclusionSummary, partitionEvidence } from './model-evidence-policy.ts';
 
 export interface StageAwareConstraints {
   modelsAvailable?: string[];
@@ -399,14 +401,21 @@ export function loadStageAwareEvalRecords(options: StageAwareOptions = {}): Eval
 
 export function loadStageAwareRouterContext(options: StageAwareOptions = {}): StageAwareRouterContext {
   const repoDir = options.repoDir || process.cwd();
+  const partition = partitionEvidence(loadStageAwareEvalRecords({
+    ...options,
+    repoDir,
+  }), 'router_history');
+  if (partition.excluded.length > 0) {
+    console.error(
+      `Stage-aware router: excluded ${partition.excluded.length} held evidence record(s): ` +
+      formatEvidenceExclusionSummary(partition.reasonCounts),
+    );
+  }
 
   return {
     repoDir,
     routerConfig: getRouterConfig(repoDir),
-    records: loadStageAwareEvalRecords({
-      ...options,
-      repoDir,
-    }),
+    records: partition.eligible,
   };
 }
 
@@ -596,6 +605,10 @@ function filterProviderModels(
   const registry = getEffectiveRegistry(repoDir);
   return providerModels.filter((modelId) => {
     const capabilities = registry.models[modelId];
+    const identity = resolveModelIdentity(registry, modelId);
+    if (identity.status === 'provisional' || identity.evidencePolicy === 'held') {
+      return false;
+    }
     return capabilities?.agent !== 'codex' || isCodexChatgptLaunchEligible(capabilities);
   });
 }

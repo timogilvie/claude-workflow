@@ -37,8 +37,10 @@ function buildValidArtifact(overrides: Record<string, unknown> = {}): Record<str
 
 function errorSummary(result: ReturnType<typeof validateBlockedCompletion>): Array<{ code: string; path: string }> {
   assert.equal(result.ok, false);
-  if (result.ok) return [];
-  return result.errors.map((error) => ({ code: error.code, path: error.path }));
+  if (!result.ok) {
+    return result.errors.map((error) => ({ code: error.code, path: error.path }));
+  }
+  return [];
 }
 
 test('validateBlockedCompletion accepts the minimal valid artifact', () => {

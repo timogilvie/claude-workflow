@@ -319,6 +319,7 @@ describe('native review', () => {
     try {
       const result = await runNativeReview(makeReviewContext(), repoDir, {});
       assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.failureCategory, 'native-runtime-unavailable');
       assert.equal(result.codeReviewFindings[0].category, 'native-runtime-unavailable');
       assert.match(result.codeReviewFindings[0].description, /no native providers are configured/);
       assert.match(result.codeReviewFindings[0].description, /wavemill native-agent models report --json/);

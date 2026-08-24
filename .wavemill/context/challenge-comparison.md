@@ -4,6 +4,8 @@ Challenge pairs now persist an explicit comparison state on both tasks in the pa
 
 Launch invariant: non-control challenge pairs must differ on at least one routing dimension before any challenger work starts. Comparable routing dimensions are `planner`, `coder`, `reviewer`, `planDepth`, `codeDepth`, and `reviewMode`.
 
+Challenge coverage and performance consumers enforce provisional evidence holds through `shared/lib/model-evidence-policy.ts` before ranking, coverage counting, or win-rate aggregation. Held executed-model rows do not contribute coverage cells, challenge performance, stage-quality, variant, or cost statistics. The raw eval and comparison records remain observable, and summaries expose excluded counts plus stable reason counts so coverage gaps can be audited without mutating JSONL.
+
 ## States
 
 - `comparison_running`: comparison job is in flight.
@@ -124,6 +126,10 @@ Challenge skipped native model <id> for <stage> stage (phase=<phase>, reason=<re
 This mirrors the router's `reasoning` field so dashboard tooling has consistent parity between router-level and challenge-level native rejections.
 
 ## Recent Changes
+
+### 2026-08-23T00:00:00.000Z - HOK-2859: Provisional evidence holds
+
+`buildEvalSummary()` now filters challenge coverage with the shared evidence policy before updating total/model/stage/model-stage counters. `computeAggregations()` filters joined challenge rows before any win-rate, role, stage-quality, variant, or cost aggregation when either side's eval evidence is held.
 
 ### 2026-07-11T00:00:00.000Z - HOK-2500: Coverage-aware challenge challenger selection at launch
 

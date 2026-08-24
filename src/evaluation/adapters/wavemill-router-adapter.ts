@@ -16,6 +16,7 @@ import { routeBatch, type RouteBatchOptions } from '../../../shared/lib/route-ba
 import { meetsMintEligibility, type MintEligibilityEvaluation } from '../../../shared/lib/eval-aggregator.ts';
 import { getMintEligibilityConfig } from '../../../shared/lib/config.ts';
 import { buildTaskDescriptor } from '../../../shared/lib/task-descriptor-builder.ts';
+import { partitionEvidence } from '../../../shared/lib/model-evidence-policy.ts';
 import {
   scoreWavemillSuccessRateUnderBudget,
   type WavemillRouterScoreRecord,
@@ -74,6 +75,10 @@ export interface RunWavemillRouterEvalResult {
   hemRecord: EvalRecord;
   mintEligibility: MintEligibilityEvaluation;
   records: WavemillRouterEvalInputRecord[];
+  excludedEvidence: {
+    count: number;
+    reasonCounts: Record<string, number>;
+  };
 }
 
 const ROUTE_FILE_PRIORITY: Array<{ pattern: RegExp; priority: number; source: string }> = [
@@ -518,7 +523,11 @@ export async function runWavemillRouterEval(
 ): Promise<RunWavemillRouterEvalResult> {
   const repoDir = resolve(options.repoDir);
   const persist = options.persist ?? true;
-  const evalRecords = readEvalRecords(options.evalsDir ? { dir: options.evalsDir } : undefined);
+  const evidencePartition = partitionEvidence(
+    readEvalRecords(options.evalsDir ? { dir: options.evalsDir } : undefined),
+    'router_benchmark',
+  );
+  const evalRecords = evidencePartition.eligible;
   const artifacts = discoverArtifactFiles(repoDir, options.artifactsDir).map(parseRouteArtifact);
   const { grouped, invalidRecords } = groupArtifacts(artifacts);
 
@@ -647,5 +656,9 @@ export async function runWavemillRouterEval(
     hemRecord,
     mintEligibility,
     records,
+    excludedEvidence: {
+      count: evidencePartition.excluded.length,
+      reasonCounts: evidencePartition.reasonCounts,
+    },
   };
 }

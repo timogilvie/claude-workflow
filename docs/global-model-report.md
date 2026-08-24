@@ -37,13 +37,13 @@ For a missing API key, export the provider key named in the report or add it to 
 For a stale artifact, refresh the global certificate:
 
 ```bash
-wavemill native-agent certifications refresh <provider>/<model>
+wavemill native-agent certify --provider <provider> --model <model> --phase workflow
 ```
 
-For a wrong suite, refresh with the v2 suite:
+For a wrong suite across the native fleet, publish the matrix for the current suite:
 
 ```bash
-wavemill native-agent certifications refresh <provider>/<model> --suite v2
+wavemill native-agent certify --all --phase workflow
 ```
 
 For provider outages, verify provider status and retry after the outage clears. The report does not perform live provider calls, so use the provider doctor or launch diagnostics for live outage confirmation.

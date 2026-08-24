@@ -658,6 +658,33 @@ test('flattenRecord with eligibilityErrors and training eligibility', () => {
   assert.equal(row.budget_eval_eligible, true);
 });
 
+test('exportEvalDataset omits held training evidence by default', () => {
+  const verified = makeRecord({ id: 'verified' });
+  const held = makeRecord({
+    id: 'held',
+    modelIdentityAttribution: {
+      observedAt: '2026-08-01T00:00:00.000Z',
+      roles: {},
+      provisionalRoles: ['coder'],
+      candidateOnlyProvisional: [],
+    },
+  });
+
+  const defaultRows = exportEvalDataset({
+    format: 'jsonl',
+    records: [verified, held],
+  }).trim().split('\n').map((line) => JSON.parse(line));
+  const operationalRows = exportEvalDataset({
+    format: 'jsonl',
+    records: [verified, held],
+    includeHeld: true,
+  }).trim().split('\n').map((line) => JSON.parse(line));
+
+  assert.deepEqual(defaultRows.map((row) => row.id), ['verified']);
+  assert.deepEqual(operationalRows.map((row) => row.id), ['verified', 'held']);
+  assert.equal(operationalRows[1].evidence_hold_reasons, '["provisional_model_identity"]');
+});
+
 // ────────────────────────────────────────────────────────────────
 // Summary
 // ────────────────────────────────────────────────────────────────

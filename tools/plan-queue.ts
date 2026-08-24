@@ -38,6 +38,8 @@ import {
 import { toKebabCase } from '../shared/lib/string-utils.ts';
 
 const queueAnalysisPromptPath = fileURLToPath(new URL('./prompts/queue-analysis.md', import.meta.url));
+const QUEUE_CLASSIFIER_PER_ATTEMPT_TIMEOUT_MS = 8_000;
+const QUEUE_CLASSIFIER_DEADLINE_GRACE_MS = 1_500;
 
 function renderPreview(queuePlan: QueuePlan, records: BacklogRecord[]): string {
   const titleById = new Map(records.map((record) => [record.id, record.title ?? '']));
@@ -167,6 +169,23 @@ function dedupeDependencyEdges(edges: DependencyEdge[]): DependencyEdge[] {
   });
 }
 
+function parseQueueClassifierDeadline(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error('--queue-classifier-deadline-ms must be an epoch-millisecond integer');
+  }
+
+  const deadlineMs = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0) {
+    throw new Error('--queue-classifier-deadline-ms must be a positive safe integer');
+  }
+
+  return deadlineMs;
+}
+
 runTool({
   name: 'plan-queue',
   description: 'Plan read-only task dependency queues from backlog JSON',
@@ -177,6 +196,7 @@ runTool({
     'cache-key': { type: 'string', description: 'Cache key slug for file/stdin backlog modes' },
     'no-cache': { type: 'boolean', description: 'Disable task dependency cache reads and writes' },
     'refresh-missing-cache': { type: 'boolean', description: 'Run queue analysis when the cache has no fingerprints yet' },
+    'queue-classifier-deadline-ms': { type: 'string', description: 'Internal: absolute classifier deadline in epoch milliseconds' },
     json: { type: 'boolean', description: 'Emit queuePlan JSON' },
     preview: { type: 'boolean', description: 'Emit human-readable preview' },
   },
@@ -195,6 +215,7 @@ runTool({
       ? toKebabCase(args['cache-key'])
       : args['cache-key'];
     const shouldUseCache = !args['no-cache'] && typeof cacheKey === 'string' && cacheKey.length > 0;
+    const queueClassifierDeadlineMs = parseQueueClassifierDeadline(args['queue-classifier-deadline-ms']);
     const records = args['backlog-file']
       ? readBacklogFile(args['backlog-file'])
       : args.stdin
@@ -253,7 +274,17 @@ runTool({
           contextTasks,
           template: promptTemplate,
         });
-        const llmResult = await callLLM(prompt, { taskType: 'classify', repoDir: process.cwd() });
+        const llmResult = await callLLM(prompt, {
+          taskType: 'classify',
+          repoDir: process.cwd(),
+          ...(queueClassifierDeadlineMs === undefined
+            ? {}
+            : {
+              fallbackDeadlineMs: queueClassifierDeadlineMs,
+              fallbackPerAttemptTimeoutMs: QUEUE_CLASSIFIER_PER_ATTEMPT_TIMEOUT_MS,
+              fallbackDeadlineGraceMs: QUEUE_CLASSIFIER_DEADLINE_GRACE_MS,
+            }),
+        });
         const currentFingerprints = Object.fromEntries(fingerprintTasks.map((t) => [t.id, computeTaskFingerprint(t)]));
         const fingerprintMap = new Map([...Object.entries(cacheAfterPrune.fingerprints), ...Object.entries(currentFingerprints)]);
         const freshEdges = parseQueueAnalysisEdges(llmResult.text, changedTaskIds, fingerprintMap);

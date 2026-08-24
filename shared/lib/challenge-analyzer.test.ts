@@ -149,6 +149,55 @@ test('computeAggregations calculates role, stage, and cost summaries', () => {
   assert.match(output, /By Planner Resource Variant:/);
 });
 
+test('computeAggregations excludes comparisons backed by held eval evidence before aggregation', () => {
+  const comparisons: StoredChallengeComparison[] = [
+    {
+      challengePairId: 'pair-held',
+      primaryModel: 'model-a',
+      challengerModel: 'model-b',
+      primaryPrUrl: 'https://example.com/pr/held-primary',
+      challengerPrUrl: 'https://example.com/pr/held-challenger',
+      primaryEvalScore: 0.9,
+      challengerEvalScore: 0.7,
+      winner: 'primary',
+      winnerModel: 'model-a',
+      rationale: 'A won',
+      dimensions: {
+        completeness: { primary: 8, challenger: 6 },
+        correctness: { primary: 8, challenger: 6 },
+        code_quality: { primary: 8, challenger: 6 },
+        intervention_impact: { primary: 8, challenger: 6 },
+        autonomy: { primary: 8, challenger: 6 },
+      },
+      timestamp: '2026-01-01T00:00:00.000Z',
+    },
+  ];
+  const evals = [
+    createEvalRecord({
+      id: 'held-primary',
+      challengePairId: 'pair-held',
+      prUrl: 'https://example.com/pr/held-primary',
+      modelIdentityAttribution: {
+        observedAt: '2026-08-01T00:00:00.000Z',
+        roles: {},
+        provisionalRoles: ['coder'],
+        candidateOnlyProvisional: [],
+      },
+    }),
+    createEvalRecord({
+      id: 'verified-challenger',
+      challengePairId: 'pair-held',
+      prUrl: 'https://example.com/pr/held-challenger',
+    }),
+  ];
+
+  const stats = computeAggregations(joinRecords(comparisons, evals));
+  assert.equal(stats.totalComparisons, 0);
+  assert.equal(stats.excludedComparisons, 1);
+  assert.deepEqual(stats.exclusionReasonCounts, { provisional_model_identity: 1 });
+  assert.match(formatChallengeTextOutput(stats), /Excluded held comparisons: 1/);
+});
+
 test('joinRecords accepts legacy comparison dimensions without crashing', () => {
   const comparisons: StoredChallengeComparison[] = [
     {

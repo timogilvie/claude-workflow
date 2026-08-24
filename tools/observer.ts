@@ -12,6 +12,7 @@ import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
 import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
 import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
+import { countRejectedEvalRecords, listRejectedEvalRecords } from '../shared/lib/eval-rejected-store.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -160,7 +161,7 @@ Options:
   --linear-project <id>  Optional Linear project id/name for filed issues
   --linear-label <name>  Optional Linear label name to attach
   --dry-run              Do not create Linear issues
-  --stale-minutes <n>    State/log stale threshold (default: ${DEFAULT_STALE_MINUTES})
+  --stale-minutes <n>    State/log/marker stale threshold (default: ${DEFAULT_STALE_MINUTES})
   --hung-minutes <n>     Child process hung threshold (default: ${DEFAULT_HUNG_MINUTES})
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
@@ -563,6 +564,82 @@ function tailLines(path: string, count: number): string[] {
   }
 }
 
+interface MarkerIgnoredConfig {
+  phase: 'coding' | 'planning';
+  markerName: '.coding-complete' | '.plan-approved';
+  idPrefix: 'coding-marker-ignored' | 'plan-marker-ignored';
+  titlePhase: string;
+  /** Used when the mill has not written state since the marker appeared. */
+  staleRecommendation: string;
+  /**
+   * Used when workflow-state.json is newer than the marker. The mill is
+   * demonstrably alive but has not advanced this task, so the finding still
+   * fires — a newer state file must not suppress it. In a multi-task mill,
+   * state is rewritten constantly for other tasks, so suppressing here would
+   * hide a genuinely wedged task indefinitely.
+   */
+  stateAliveRecommendation: string;
+}
+
+function statMarker(path: string, now: number): { mtimeMs: number; ageMs: number; mtimeIso: string } | undefined {
+  try {
+    const stat = statSync(path);
+    return {
+      mtimeMs: stat.mtimeMs,
+      ageMs: Math.max(0, now - stat.mtimeMs),
+      mtimeIso: stat.mtime.toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildMarkerIgnoredFinding(
+  repo: RepoSnapshot,
+  task: TaskState,
+  featureDir: string,
+  now: number,
+  options: ObserverOptions,
+  config: MarkerIgnoredConfig,
+): Finding | null {
+  if (task.phase !== config.phase) return null;
+  const markerPath = join(featureDir, config.markerName);
+  if (!existsSync(markerPath)) return null;
+
+  const marker = statMarker(markerPath, now);
+  if (!marker) return null;
+
+  const markerAgeMinutes = marker.ageMs / 60000;
+  if (markerAgeMinutes <= options.staleMinutes) return null;
+
+  const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  const stateNewerThanMarker = Number.isFinite(stateMtimeMs) && stateMtimeMs > marker.mtimeMs;
+
+  const markerAgeSeconds = Math.floor(marker.ageMs / 1000);
+  const markerAgeTitleMinutes = Math.round(markerAgeMinutes);
+
+  return {
+    id: `${config.idPrefix}-${task.issue}`,
+    severity: 'urgent',
+    category: 'stuck',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    issue: task.issue,
+    title: `${task.issue} is still in ${config.titlePhase} ${markerAgeTitleMinutes} minutes after ${config.markerName} appeared`,
+    evidence: [
+      `statePhase=${task.phase}`,
+      `marker=${markerPath}`,
+      `markerMtime=${marker.mtimeIso}`,
+      `markerAgeSeconds=${markerAgeSeconds}`,
+      `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+      `stateNewerThanMarker=${stateNewerThanMarker}`,
+      `worktree=${task.worktree}`,
+    ],
+    recommendation: stateNewerThanMarker ? config.stateAliveRecommendation : config.staleRecommendation,
+  };
+}
+
 export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: ObserverOptions): Finding[] {
   const findings: Finding[] = [];
   const now = Date.now();
@@ -577,6 +654,25 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
   for (const repo of snapshot.repos) {
+    const rejectedEvalCount = countRejectedEvalRecords(repo.repoDir);
+    if (rejectedEvalCount > 0) {
+      const [newestRejectedEval] = listRejectedEvalRecords(repo.repoDir, { limit: 1 });
+      findings.push({
+        id: `eval-rejected-records-${repo.session}-${hashText(repo.repoDir)}`,
+        severity: 'medium',
+        category: 'warning',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `${rejectedEvalCount} eval record${rejectedEvalCount === 1 ? '' : 's'} rejected during write-time validation`,
+        evidence: [
+          `count=${rejectedEvalCount}`,
+          `newest=${newestRejectedEval ? basename(newestRejectedEval) : 'unknown'}`,
+        ],
+        recommendation: 'Inspect .wavemill/evals/rejected/ and fix the path producing write-time validation failures.',
+      });
+    }
+
     const observerPanes = snapshot.panes.filter((pane) => pane.session === repo.session && pane.title === observerPaneTitle);
     const observerPanePids = new Set(observerPanes.map((pane) => pane.pid).filter((pid) => pid > 0));
     const observerLoopRows = snapshot.processes.filter((row) => {
@@ -661,43 +757,77 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     for (const task of repo.tasks) {
+      if (terminalStatus(task.status)) continue;
+
+      const ageMinutes = task.updated ? (now - Date.parse(task.updated)) / 60000 : stateAgeMinutes;
+      const watchedPhase = task.phase === 'planning' || task.phase === 'coding' || task.phase === 'review' || task.phase === 'ready';
+      if (watchedPhase && ageMinutes !== undefined && Number.isFinite(ageMinutes) && ageMinutes > options.staleMinutes) {
+        const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+        const liveEvidence = taskHasLiveExecutionEvidence(repo, task, snapshot.panes, snapshot.processes);
+        if (task.worktree && !existsSync(task.worktree)) {
+          findings.push({
+            id: `stale-active-task-missing-worktree-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is non-terminal in ${task.phase} but its worktree is missing`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `worktree=${task.worktree}`,
+            ],
+            recommendation: 'Treat this as orphaned active state: terminalize or remove the workflow-state entry after confirming no cleanup resources remain.',
+          });
+        } else if (!liveEvidence) {
+          findings.push({
+            id: `stale-active-task-no-live-process-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is stale in ${task.phase} with no live pane or process evidence`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `expectedWindow=${expectedWindow}`,
+              `worktree=${task.worktree ?? 'unknown'}`,
+            ],
+            recommendation: 'Inspect the task state and quarantine/cleanup path; if the process is gone, terminalize and clean the task instead of leaving it active.',
+          });
+        }
+      }
+
       if (!task.worktree || !task.slug || terminalStatus(task.status)) continue;
       const featureDir = join(task.worktree, 'features', task.slug);
-      if (task.phase === 'coding' && existsSync(join(featureDir, '.coding-complete'))) {
-        findings.push({
-          id: `coding-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in coding even though .coding-complete exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.coding-complete')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
-        });
-      }
-      if (task.phase === 'planning' && existsSync(join(featureDir, '.plan-approved'))) {
-        findings.push({
-          id: `plan-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in planning even though .plan-approved exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.plan-approved')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should launch coding. Inspect the monitor loop for a blocking external command.',
-        });
+      const markerFindings = [
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'coding',
+          markerName: '.coding-complete',
+          idPrefix: 'coding-marker-ignored',
+          titlePhase: 'coding',
+          staleRecommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
+          stateAliveRecommendation: 'The monitor should advance this to review. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'planning',
+          markerName: '.plan-approved',
+          idPrefix: 'plan-marker-ignored',
+          titlePhase: 'planning',
+          staleRecommendation: 'The monitor should launch coding. Check for a hung monitor child process or blocking external command before restarting the session.',
+          stateAliveRecommendation: 'The monitor should launch coding. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+      ];
+      for (const finding of markerFindings) {
+        if (finding) findings.push(finding);
       }
     }
 
@@ -858,7 +988,36 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
 }
 
 function terminalStatus(status?: string): boolean {
-  return status === 'merged' || status === 'complete' || status === 'closed' || status === 'done';
+  return status === 'merged'
+    || status === 'complete'
+    || status === 'completed'
+    || status === 'completed-external'
+    || status === 'closed'
+    || status === 'done'
+    || status === 'aborted';
+}
+
+function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes: Pane[], processes: ProcessRow[]): boolean {
+  const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+  const matchingPanes = panes.filter((pane) => {
+    if (pane.session !== repo.session) return false;
+    return pane.windowName === expectedWindow
+      || pane.windowName === task.issue
+      || (task.slug ? pane.windowName === task.slug : false)
+      || pane.title.includes(task.issue)
+      || (task.worktree ? pane.title.includes(task.worktree) : false);
+  });
+
+  if (matchingPanes.some((pane) => !/dead|exited/i.test(`${pane.command} ${pane.title}`))) {
+    return true;
+  }
+
+  return processes.some((row) => {
+    const command = row.command;
+    return command.includes(task.issue)
+      || (task.slug ? command.includes(task.slug) : false)
+      || (task.worktree ? command.includes(task.worktree) : false);
+  });
 }
 
 function hashText(text: string): string {

@@ -34,6 +34,7 @@ export interface JobResultFile {
   persisted?: boolean;
   reason?: string;
   error?: string;
+  quarantinePath?: string;
   comparison?: {
     winner?: 'primary' | 'challenger';
     winnerModel?: string;

@@ -1,5 +1,6 @@
 import type { StoredChallengeComparison } from './challenge-comparison.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { evaluateEvidenceEligibility } from './model-evidence-policy.ts';
 
 export interface JoinedChallengeRecord {
   comparison: StoredChallengeComparison;
@@ -32,6 +33,8 @@ export interface CostStats {
 
 export interface AggregatedStats {
   totalComparisons: number;
+  excludedComparisons: number;
+  exclusionReasonCounts: Record<string, number>;
   overallWinRates: Map<string, ModelStats>;
   winRatesByRole: {
     planner: RoleStats;
@@ -52,6 +55,12 @@ export interface AggregatedStats {
     review?: StageQuality;
   };
   costEfficiency?: CostStats;
+}
+
+function evidenceDecisions(record: JoinedChallengeRecord) {
+  return [record.primaryEval, record.challengerEval]
+    .filter((evalRecord): evalRecord is EvalRecord => Boolean(evalRecord))
+    .map((evalRecord) => evaluateEvidenceEligibility(evalRecord, 'challenge_performance'));
 }
 
 function variantFromEval(record: EvalRecord | undefined, surface: 'router' | 'planner' | 'reviewer'): string {
@@ -91,15 +100,33 @@ export function incrementModelStat(map: Map<string, ModelStats>, model: string, 
  * Compute aggregate win-rate, quality, and cost statistics for challenge comparisons.
  */
 export function computeAggregations(joined: JoinedChallengeRecord[]): AggregatedStats {
-  const comparable = joined.filter(({ comparison }) =>
+  const comparableCandidates = joined.filter(({ comparison }) =>
     comparison.comparisonOutcome !== 'invalid' &&
     comparison.comparisonOutcome !== 'inconclusive' &&
     comparison.comparisonOutcome !== 'invalid_challenge' &&
     comparison.invalidChallenge !== true &&
     (comparison.winner === 'primary' || comparison.winner === 'challenger')
   );
+  const exclusionReasonCounts: Record<string, number> = {};
+  const comparable: JoinedChallengeRecord[] = [];
+
+  for (const record of comparableCandidates) {
+    const decisions = evidenceDecisions(record);
+    if (decisions.every((decision) => decision.eligible)) {
+      comparable.push(record);
+      continue;
+    }
+    for (const decision of decisions) {
+      for (const reason of decision.reasons) {
+        exclusionReasonCounts[reason] = (exclusionReasonCounts[reason] ?? 0) + 1;
+      }
+    }
+  }
+
   const stats: AggregatedStats = {
     totalComparisons: comparable.length,
+    excludedComparisons: comparableCandidates.length - comparable.length,
+    exclusionReasonCounts,
     overallWinRates: new Map(),
     winRatesByRole: {
       planner: {},
@@ -255,6 +282,14 @@ export function formatChallengeTextOutput(stats: AggregatedStats): string {
   const lines: string[] = [];
 
   lines.push(`Challenge Results Summary (${stats.totalComparisons} comparisons)\n`);
+  if (stats.excludedComparisons > 0) {
+    const reasons = Object.entries(stats.exclusionReasonCounts)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(', ');
+    lines.push(`Excluded held comparisons: ${stats.excludedComparisons}${reasons ? ` (${reasons})` : ''}`);
+    lines.push('');
+  }
 
   lines.push('Overall Win Rates:');
   const sortedModels = Array.from(stats.overallWinRates.entries()).sort(

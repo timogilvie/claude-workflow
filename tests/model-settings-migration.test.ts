@@ -1,14 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { migrateModelSettings } from '../shared/lib/model-settings-migrator.ts';
 import { loadWavemillConfig, clearConfigCache } from '../shared/lib/config.ts';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SCHEMA_PATH = join(__dirname, '..', 'wavemill-config.schema.json');
+
 function makeRepo(): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'model-settings-migration-'));
-  writeFileSync(join(repoDir, 'wavemill-config.schema.json'), readFileSync('wavemill-config.schema.json', 'utf-8'));
+  writeFileSync(join(repoDir, 'wavemill-config.schema.json'), readFileSync(SCHEMA_PATH, 'utf-8'));
   return repoDir;
 }
 

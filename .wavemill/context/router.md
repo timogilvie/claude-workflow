@@ -7,6 +7,8 @@
 
 The router now has a single operating-mode view derived from quota health so commands can read one system-wide signal instead of inspecting each model individually.
 
+Router-learning consumers enforce provisional model-identity holds through `shared/lib/model-evidence-policy.ts` before computing data sufficiency, KNN neighbors, historical aggregates, benchmark rows, launch-priority coverage, or Hokusai audit samples. Excluded raw eval rows stay in JSONL and remain visible through diagnostics, but they contribute zero neighbors, model counts, challenge coverage, benchmark rows, or Hokusai audit requests. Candidate-only provisional references are held for decision-training uses while unrelated executed performance remains usable.
+
 ## Operating Modes
 
 | Mode | Meaning |
@@ -67,6 +69,8 @@ Individual command behavior now changes based on operating mode. In `constrained
 `.wavemill/audits/launch-priority-coverage.json` is a planning input only. It does not override live routing or stage-pool filtering, but it is the artifact operators should inspect when they want to target zero-evidence or below-target launch-priority models in upcoming eval/task batches.
 
 `shared/lib/launch-priority-audit.ts` reads the same launch-priority catalog surface as the existing OpenRouter challenger tooling, so audit coverage and router-side launch-priority classification stay aligned on what counts as a launch-priority model.
+
+Launch-priority persistence is fail-closed for provisional observations. `certify-launch-priority-model --persist` refuses held aliases with `provisional-observation-only`, while planning output omits `--persist` from blocked certification commands and surfaces the blocker in preflight diagnostics.
 
 ## Native Certification Filtering
 

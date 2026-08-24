@@ -27,14 +27,8 @@ jobs:
       - name: Shell lint and syntax check
         run: npm run lint
 
-      - name: Check Pi pinned versions
-        run: npx tsx tools/check-pi-version.ts
-
-      - name: Check challenge schema drift
-        run: npx tsx tools/check-challenge-schema-drift.ts
-
-      - name: Check CI-to-local verification contract (hard fail on drift)
-        run: npx tsx tools/check-ci-verification.ts --repo .
+      - name: Preflight checks (including test registration enforcement)
+        run: npm run test:preflight
 
   shell:
     name: Shell Tests (shard ${{ matrix.shard }}/4)

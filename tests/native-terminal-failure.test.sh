@@ -47,6 +47,7 @@ WAVEMILL_STATE_DIR="$TMP_ROOT/wavemill-state"
 mkdir -p "$WAVEMILL_STATE_DIR"
 active_count=0
 export WAVEMILL_RELIABILITY_REPO_DIR="$TMP_ROOT/reliability-repo"
+CLEANUP_CALLS=""
 
 log_warn() { printf '%s\n' "$1" >> "$WARN_FILE"; }
 set_window_attention_state() { printf '%s=%s\n' "$1" "$2" >> "$ATTENTION_FILE"; }
@@ -60,6 +61,10 @@ state_mutate() {
 }
 get_task_meta() {
   jq -r --arg issue "$1" --arg field "$2" '.tasks[$issue][$field] // empty' "$STATE_FILE"
+}
+cleanup_quarantined_no_pr_challenge_arm() {
+  CLEANUP_CALLS+="$1|$3|$4"$'\n'
+  return 0
 }
 read_stage_status() {
   jq -r '.status // empty' "$1/.${2}-result.json" 2>/dev/null || true
@@ -358,6 +363,22 @@ if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "coding" "win-7"; th
   fi
 else
   fail "stage-failure quarantine did not fire"
+fi
+
+CLEANUP_CALLS=""
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-review-stage-failed"
+write_stage_result "$fd" "review" "failed" "native" "claude-sonnet-5" "Native review failed: Provider finish_reason: error"
+write_hook "PAIR-1_c" "error" "Native review failed: Provider finish_reason: error"
+if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "review" "win-review"; then
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAbortedStage' "$STATE_FILE")" == "review" ]] \
+    && [[ "$CLEANUP_CALLS" == *"PAIR-1_c|review|terminal stage failure:provider-transient-error"* ]]; then
+    pass "review-stage quarantine schedules aborted cleanup"
+  else
+    fail "review-stage quarantine did not schedule cleanup"
+  fi
+else
+  fail "review-stage quarantine did not fire"
 fi
 
 # Idempotent: a second cycle must not rewrite an already-quarantined arm.

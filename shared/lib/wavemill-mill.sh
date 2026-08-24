@@ -787,6 +787,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -994,6 +998,56 @@ challenge_pair_record_exists() {
   ' "$records_file" >/dev/null 2>&1
 }
 
+challenge_pr_number_from_url() {
+  local url="${1:-}"
+  if [[ "$url" =~ /pull/([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
+cleanup_forfeit_loser_from_resolution() {
+  local resolve_output="$1"
+  local outcome pair_id winner primary_pr_url challenger_pr_url primary_pr challenger_pr
+  local loser_key winner_pr loser_pr loser_slug evidence_id
+  outcome=$(jq -r '.outcome // .record.comparisonOutcome // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ "$outcome" == "forfeit" ]] || return 0
+  pair_id=$(jq -r '.record.challengePairId // empty' <<<"$resolve_output" 2>/dev/null || true)
+  winner=$(jq -r '.record.winner // empty' <<<"$resolve_output" 2>/dev/null || true)
+  evidence_id=$(jq -r '.record.timestamp // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ -n "$pair_id" && -n "$winner" && -n "$evidence_id" ]] || return 0
+
+  primary_pr_url=$(jq -r '.record.primaryPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  challenger_pr_url=$(jq -r '.record.challengerPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  primary_pr=$(challenge_pr_number_from_url "$primary_pr_url")
+  challenger_pr=$(challenge_pr_number_from_url "$challenger_pr_url")
+  if [[ "$winner" == "primary" ]]; then
+    winner_pr="$primary_pr"
+    loser_pr="$challenger_pr"
+    loser_key="${pair_id}_c"
+  elif [[ "$winner" == "challenger" ]]; then
+    winner_pr="$challenger_pr"
+    loser_pr="$primary_pr"
+    loser_key="$pair_id"
+  else
+    return 0
+  fi
+
+  [[ "$winner_pr" =~ ^[0-9]+$ && "$loser_pr" =~ ^[0-9]+$ ]] || return 0
+  [[ "$winner_pr" -gt 0 && "$loser_pr" -gt 0 && "$winner_pr" != "$loser_pr" ]] || return 0
+
+  if [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+    gh pr close "$loser_pr" \
+      --comment "Closing losing arm of pair $pair_id (forfeit resolution)." 2>/dev/null || true
+    log "status" "Closed losing forfeit PR #$loser_pr"
+  fi
+  loser_slug=$(get_task_meta "$loser_key" "slug")
+  if [[ -n "$loser_slug" ]]; then
+    cleanup_completed_task "$loser_key" "$loser_slug" "challenge forfeit loser"
+  fi
+}
+
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
@@ -1031,6 +1085,7 @@ resolve_challenge_pair_hard_failure() {
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
+        cleanup_forfeit_loser_from_resolution "$resolve_output"
       fi
       return 0
     fi
@@ -1761,9 +1816,41 @@ trap cleanup_on_exit INT TERM
 init_state_ledger
 
 
+cleanup_terminal_missing_worktree_entries() {
+  local terminal_issues
+  terminal_issues=$(jq -r '
+    (.tasks // {})
+    | to_entries[]
+    | select((.value.worktree // "") != "")
+    | select(.value.status as $status
+        | ["aborted","merged","completed-external","complete","completed","closed","done"] | index($status))
+    | select((.value.worktree | type) == "string")
+    | "\(.key)|\(.value.worktree)|\(.value.status)"
+  ' "$STATE_FILE" 2>/dev/null || true)
+  [[ -n "$terminal_issues" ]] || return 0
+
+  local issue worktree status dropped=0
+  while IFS='|' read -r issue worktree status; do
+    [[ -n "$issue" && -n "$worktree" ]] || continue
+    if [[ ! -e "$worktree" ]]; then
+      remove_task_state "$issue"
+      dropped=$((dropped + 1))
+      log "debug" "  Dropped terminal task state for $issue ($status, missing worktree: $worktree)"
+    fi
+  done <<<"$terminal_issues"
+
+  if (( dropped > 0 )); then
+    local entry_label="entries"
+    (( dropped == 1 )) && entry_label="entry"
+    log "debug" "  Dropped $dropped terminal task state $entry_label with missing worktrees"
+  fi
+}
+
 # Prune stale tasks from previous runs
 # Check each task: if PR merged or branch deleted, clean up worktree + state
 cleanup_stale_tasks() {
+  cleanup_terminal_missing_worktree_entries
+
   local stale_issues
   stale_issues=$(jq -r '.tasks | to_entries[] | .key' "$STATE_FILE" 2>/dev/null)
   [[ -z "$stale_issues" ]] && return 0
@@ -3231,7 +3318,6 @@ handle_agent_error_recovery() {
 
   now="$(date +%s)"
   staleness=$(( now - hook_ts ))
-  (( staleness < 300 )) || return 0
 
   if [[ "$hook_state" != "error" ]]; then
     if [[ -f "$retry_file" ]] && [[ "$hook_state" == "working" || "$hook_state" == "waiting" || "$hook_state" == "idle" ]]; then
@@ -3250,11 +3336,22 @@ handle_agent_error_recovery() {
 
   retry_count="$(get_retry_count "$SESSION" "$issue")"
   max_retries=4
-  if (( retry_count >= max_retries )); then
+  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( staleness >= 300 )); then
+    if (( retry_count > 0 )); then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry process stopped updating after a transient error"
+    fi
     return 0
   fi
 
-  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( retry_count >= max_retries )); then
+    time_since_last_retry=$(( now - last_retry_ts ))
+    if (( hook_ts >= last_retry_ts )) || [[ "$time_since_last_retry" -ge 300 ]]; then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "transient retries exhausted"
+    fi
+    return 0
+  fi
+
   backoff_delay="$(get_backoff_delay $((retry_count + 1)))"
   time_since_last_retry=$(( now - last_retry_ts ))
 
@@ -3273,7 +3370,63 @@ handle_agent_error_recovery() {
     log "debug" "  Resume command sent to $issue"
   else
     log_error "  Failed to resume $issue after transient error"
+    terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry resume command failed"
   fi
+}
+
+terminalize_transient_retry_failure() {
+  local issue="$1" agent_cmd="${2:-}" error_detail="${3:-}" terminal_reason="${4:-transient retry failed}"
+  local slug wt_dir phase result_stage feature_dir is_challenge pr model notes artifacts_json win next_action
+
+  [[ -n "$issue" ]] || return 1
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+  phase=$(read_state_value "coding" --arg i "$issue" '.tasks[$i].phase // "coding"')
+  case "$phase" in
+    planning|coding|review|ready) result_stage="$phase" ;;
+    *) result_stage="coding" ;;
+  esac
+  [[ -n "$wt_dir" && -n "$slug" ]] && feature_dir="${wt_dir}/features/${slug}"
+
+  next_action="transient upstream failure persisted, retire the challenge arm and relaunch if needed"
+  notes="Native ${result_stage} failed after retry recovery (${terminal_reason}): ${error_detail}. Next: ${next_action}"
+  artifacts_json="$(jq -cn \
+    --arg failureKind "provider-transient-error" \
+    --arg detail "$error_detail" \
+    --arg terminalReason "$terminal_reason" \
+    --arg nextAction "$next_action" \
+    '{type:"transientRetryFailure", failureKind:$failureKind, detail:$detail, terminalReason:$terminalReason, nextAction:$nextAction}' \
+    2>/dev/null || printf '{}')"
+
+  if [[ -n "$feature_dir" ]]; then
+    model="$(stage_result_field "$feature_dir" "$result_stage" "model" 2>/dev/null || true)"
+    write_stage_result "$feature_dir" "$result_stage" "failed" "$agent_cmd" "$model" "$notes" "$artifacts_json"
+  fi
+
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].status = "error"
+      | .tasks[$issue].retryFailure = $reason
+      | .tasks[$issue].retryFailureDetail = $detail
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$terminal_reason" --arg detail "$error_detail" >/dev/null 2>&1 || true
+
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  if [[ "$is_challenge" == "true" && -z "$pr" && -n "$feature_dir" ]]; then
+    win="${issue}-${slug}"
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$result_stage" "$model" \
+      "retry_exhausted:provider-transient-error" "$notes" "$next_action" || true
+    cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$result_stage" "$terminal_reason" || true
+    log_warn "$issue → challenge arm failed after transient retry recovery. Pair quarantined. $next_action"
+  else
+    log_warn "$issue → transient retry recovery reached terminal state: $terminal_reason"
+  fi
+  return 0
 }
 
 transient_error_recovery_pending() {
@@ -3350,6 +3503,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
   local _trace_id_for_state=""
@@ -4507,6 +4664,7 @@ challenge_pair_record_exists() {
       ] | length == 0)
   ' "$records_file" >/dev/null 2>&1
 }
+
 
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
@@ -7014,6 +7172,12 @@ emit_native_terminal_failure_attention() {
   if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
     wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
   fi
+  if [[ "$is_challenge" == "true" ]]; then
+    if cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "native terminal failure" 2>/dev/null; then
+      log_warn "$issue → Native ${stage} failed (${failure_kind}). Pair quarantined. ${next_action}"
+      return 0
+    fi
+  fi
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} failed (${failure_kind}). ${next_action}"
   active_count=$((active_count + 1))
@@ -7054,6 +7218,7 @@ emit_challenge_stage_failure_quarantine() {
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
 
   log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
+  cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "terminal stage failure:${failure_kind}" || true
   return 0
 }
 
@@ -9135,6 +9300,100 @@ review_result_passes_ready_gate() {
   ' "$review_file" >/dev/null 2>&1
 }
 
+review_result_infra_failure() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (
+      (($review.failureCategory // "") == "native-runtime-unavailable") or
+      (($review.failureCategory // "") == "native-review-prompt-missing") or
+      ((($review.verdict // "") == "error") and ((($review.reviewToolError // "") | tostring | length) > 0))
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_infra_retry_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.review-infra-retries"
+  if [[ -f "$count_file" ]] && [[ "$(cat "$count_file" 2>/dev/null || echo "")" =~ ^[0-9]+$ ]]; then
+    cat "$count_file"
+    return 0
+  fi
+  echo "0"
+}
+
+increment_review_infra_retry_count() {
+  local state_dir="$1"
+  local count
+  count=$(review_infra_retry_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.review-infra-retries"
+  echo "$count"
+}
+
+clear_review_infra_retry_state() {
+  local state_dir="$1"
+  rm -f "$state_dir/.review-infra-retries"
+}
+
+relaunch_review_after_infra_recovery() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6" pr_number="$7" state_dir="$8"
+  local review_file="$state_dir/.review-result.json"
+  local retry_count retry_max reviewer_agent reviewer_model review_mode contract_payload retry_number rc=0
+
+  retry_count=$(review_infra_retry_count "$state_dir")
+  retry_max="${WAVEMILL_REVIEW_INFRA_RETRY_MAX:-2}"
+  [[ "$retry_max" =~ ^[0-9]+$ ]] || retry_max=2
+  if (( retry_count >= retry_max )); then
+    write_ready_attention_file "$state_dir" "Review failed on infrastructure ${retry_count}/${retry_max} times for PR #$pr_number, manual re-review required."
+    log_error "  $issue: review infrastructure retry cap reached for PR #$pr_number (${retry_count}/${retry_max})"
+    return 1
+  fi
+
+  reviewer_agent="$(jq -r '.agent // empty' "$review_file" 2>/dev/null || echo "")"
+  reviewer_model="$(jq -r '.model // empty' "$review_file" 2>/dev/null || echo "")"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$AGENT_CMD"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
+
+  if ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    write_ready_attention_file "$state_dir" "Review infrastructure is still unavailable for PR #$pr_number; waiting for reviewer runtime recovery."
+    log_error "  $issue: waiting for reviewer runtime recovery before re-reviewing PR #$pr_number"
+    return 1
+  fi
+
+  retry_number=$(increment_review_infra_retry_count "$state_dir")
+  review_mode="static"
+  if declare -F read_phase_config >/dev/null 2>&1; then
+    review_mode=$(read_phase_config "$state_dir" "review" "mode")
+    [[ -n "$review_mode" ]] || review_mode="static"
+  fi
+  contract_payload="$(jq -cn --arg agent "$reviewer_agent" --arg model "$reviewer_model" '{stageRole:"review",agent:$agent,model:$model}')"
+
+  if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$state_dir" "$wt_dir" "$reviewer_agent" "$reviewer_model" "$contract_payload" "review"; then
+    write_ready_attention_file "$state_dir" "Could not prepare infrastructure re-review for PR #$pr_number."
+    return 1
+  fi
+
+  launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" \
+    "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$state_dir/.needs-attention"
+    log "status" "♻ $issue → review relaunched after infrastructure recovery (attempt ${retry_number}/${retry_max})"
+    return 6
+  fi
+  if [[ "$rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    return 2
+  fi
+  write_ready_attention_file "$state_dir" "Could not relaunch infrastructure re-review for PR #$pr_number (rc=$rc)."
+  return 1
+}
+
 review_result_summary() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
@@ -9359,12 +9618,17 @@ launch_ready_phase() {
   if ! review_result_passes_ready_gate "$state_dir"; then
     local review_summary
     review_summary="$(review_result_summary "$state_dir")"
+    if review_result_infra_failure "$state_dir"; then
+      relaunch_review_after_infra_recovery "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" "$state_dir"
+      return $?
+    fi
     strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
     write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
     log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
     return 1
   fi
 
+  clear_review_infra_retry_state "$state_dir"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -10759,6 +11023,26 @@ mark_task_aborted_for_cleanup() {
   return 0
 }
 
+cleanup_quarantined_no_pr_challenge_arm() {
+  local issue="$1" feature_dir="${2:-}" stage="${3:-challenge}" reason="${4:-challenge quarantined}"
+  local is_challenge pr slug
+
+  [[ -n "$issue" ]] || return 1
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  [[ -z "$pr" ]] || return 1
+
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  if [[ -z "$slug" && -n "$feature_dir" ]]; then
+    slug="$(basename "$feature_dir")"
+  fi
+  [[ -n "$slug" ]] || return 1
+
+  cleanup_aborted_challenge_arm "$issue" "$slug" "quarantined ${stage}: ${reason}"
+}
+
 cleanup_aborted_challenge_arm() {
   local issue="$1" slug="${2:-}" reason="${3:-challenge aborted}"
   local win target target_gone wt_dir task_branch state_branch pr
@@ -10833,6 +11117,7 @@ cleanup_aborted_challenge_arm() {
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  remove_task_state "$issue"
   CLEANED["$issue"]=1
   log "$issue: Complete (aborted challenge cleanup)"
 }
@@ -11736,7 +12021,7 @@ run_queue_planner_with_policy() {
   # diagnostics file rather than shell variables; without the real stderr and
   # exit code the reason classifier degrades every planner failure to a
   # generic dependency_planning_failed.
-  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code" "$cancellation_owner"
 
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
@@ -11769,7 +12054,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" cancellation_owner="${4:-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -11780,7 +12065,11 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  if [[ -n "$cancellation_owner" ]]; then
+    printf 'step=%s exit=%s cancellationOwner=%s stderr=%s\n' "$step" "$exit_code" "$cancellation_owner" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  else
+    printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  fi
 }
 
 log_fetch_queue_plan_failure() {
@@ -11795,7 +12084,19 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered
+  local step="$1" details="${2:-}" lowered exit_code cancellation_owner
+  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
+  cancellation_owner="$(printf '%s' "$details" | sed -n 's/.*cancellationOwner=\([^ ]*\).*/\1/p')"
+
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    echo "timeout"
+    return 0
+  fi
+  if [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    echo "external_cancellation"
+    return 0
+  fi
+
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
@@ -11882,7 +12183,11 @@ build_queue_plan_once() {
   # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     timeout_secs=60
-    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
+    local now_ms classifier_deadline_ms classifier_grace_secs=8
+    now_ms="$(date +%s%3N 2>/dev/null || true)"
+    [[ "$now_ms" =~ ^[0-9]+$ ]] || now_ms="$(date +%s)000"
+    classifier_deadline_ms=$(( now_ms + ((timeout_secs - classifier_grace_secs) * 1000) ))
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache --queue-classifier-deadline-ms \"$classifier_deadline_ms\""
   else
     timeout_secs=15
     planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"
@@ -14134,7 +14439,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -14922,7 +15227,7 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
-            if [[ "$launch_rc" -eq 4 ]]; then
+            if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
@@ -15017,7 +15322,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              if [[ "$launch_rc" -eq 4 ]]; then
+              if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -15305,7 +15610,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15394,7 +15699,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15488,7 +15793,7 @@ monitor_issue_state() {
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15545,7 +15850,7 @@ monitor_issue_state() {
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
-      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -15594,7 +15899,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
