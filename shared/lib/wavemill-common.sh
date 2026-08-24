@@ -1651,16 +1651,32 @@ route_summary_signature() {
   local route_file="$1"
   [[ -n "$route_file" && -f "$route_file" ]] || return 1
 
-  jq -r '
-    [
-      (if ((.planner // "") | length) > 0 then "planner=\(.planner)" else empty end),
-      (if ((.planDepth // "") | length) > 0 then "planDepth=\(.planDepth)" else empty end),
-      (if ((.coder // "") | length) > 0 then "coder=\(.coder)" else empty end),
-      (if ((.codeDepth // "") | length) > 0 then "codeDepth=\(.codeDepth)" else empty end),
-      (if ((.reviewer // "") | length) > 0 then "reviewer=\(.reviewer)" else empty end),
-      (if ((.reviewMode // .reviewRecommended // "") | length) > 0 then "reviewMode=\(.reviewMode // .reviewRecommended)" else empty end)
-    ] | join(", ")
-  ' "$route_file" 2>/dev/null
+  local parts=() value
+  value="$(jq -r '.planner // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("planner=$value")
+  value="$(jq -r '.planDepth // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("planDepth=$value")
+  value="$(jq -r '.coder // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("coder=$value")
+  value="$(jq -r '.codeDepth // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("codeDepth=$value")
+  value="$(jq -r '.reviewer // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("reviewer=$value")
+  value="$(jq -r '.reviewMode // .reviewRecommended // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("reviewMode=$value")
+  value="$(jq -r '.signals.taskType // .provenance.signalVector.taskType // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("taskType=$value")
+  value="$(jq -r '.signals.complexityScore // .provenance.signalVector.complexityScore // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("complexity=$value")
+  value="$(jq -r '.signals.complexityBand // .provenance.signalVector.complexityBand // empty' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("band=$value")
+  value="$(jq -r '(.signals.riskFlags // .provenance.signalVector.riskFlags // []) | if type == "array" then join("|") else tostring end' "$route_file" 2>/dev/null || true)"
+  [[ -n "$value" ]] && parts+=("riskFlags=$value")
+  value="$(jq -r '.signals.suspiciousZero // .provenance.signalVector.suspiciousZero // false' "$route_file" 2>/dev/null || true)"
+  [[ "$value" == "true" ]] && parts+=("suspiciousZero=true")
+
+  local IFS=", "
+  printf '%s\n' "${parts[*]}"
 }
 
 route_summary_mode_tag() {

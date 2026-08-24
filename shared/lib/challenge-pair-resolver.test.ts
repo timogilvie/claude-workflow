@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -48,7 +48,7 @@ function makeWorkItem(number: number, headRefName: string, challengePairId: stri
   };
 }
 
-test('resolver is idempotent for orphaned pairs', () => {
+test('resolver is idempotent for orphaned pairs', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -64,8 +64,8 @@ test('resolver is idempotent for orphaned pairs', () => {
     });
 
     const now = () => new Date('2026-07-17T12:00:00Z');
-    const first = resolveUnresolvablePair({ pairId: 'pair-1', repoDir, now });
-    const second = resolveUnresolvablePair({ pairId: 'pair-1', repoDir, now });
+    const first = await resolveUnresolvablePair({ pairId: 'pair-1', repoDir, now });
+    const second = await resolveUnresolvablePair({ pairId: 'pair-1', repoDir, now });
 
     assert.equal(first.status, 'resolved');
     assert.equal(second.status, 'already-resolved');
@@ -75,7 +75,7 @@ test('resolver is idempotent for orphaned pairs', () => {
   }
 });
 
-test('resolver writes a forfeit for an orphaned pair with a completed survivor', () => {
+test('resolver writes a forfeit for an orphaned pair with a completed survivor', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -90,7 +90,7 @@ test('resolver writes a forfeit for an orphaned pair with a completed survivor',
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'orphan-sibling',
@@ -107,7 +107,7 @@ test('resolver writes a forfeit for an orphaned pair with a completed survivor',
   }
 });
 
-test('resolver marks lone primary with launched challenger marker as orphan_pair', () => {
+test('resolver marks lone primary with launched challenger marker as orphan_pair', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -123,7 +123,7 @@ test('resolver marks lone primary with launched challenger marker as orphan_pair
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'orphan-sibling',
@@ -140,7 +140,48 @@ test('resolver marks lone primary with launched challenger marker as orphan_pair
   }
 });
 
-test('resolver suppresses a non-decisive orphan record when no side completed eval', () => {
+test('resolver repairs a blank primary role instead of writing an orphan forfeit', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      'HOK-2870': {
+        pr: 1226,
+        branch: 'task/eight-test-files',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'HOK-2870',
+        challengeRole: '',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      'HOK-2870_c': {
+        pr: 1225,
+        branch: 'task/eight-test-files-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'HOK-2870',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        evalCompleted: true,
+      },
+    });
+
+    const result = await resolveUnresolvablePair({
+      pairId: 'HOK-2870',
+      repoDir,
+      reason: 'orphan-sibling',
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /manual repair|not currently unresolvable|requires manual repair/);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks['HOK-2870'].challengeRole, 'primary');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver suppresses a non-decisive orphan record when no side completed eval', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -154,7 +195,7 @@ test('resolver suppresses a non-decisive orphan record when no side completed ev
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'orphan-sibling',
@@ -169,7 +210,7 @@ test('resolver suppresses a non-decisive orphan record when no side completed ev
   }
 });
 
-test('resolver writes a forfeit when one side exhausted eval hard-failure retries', () => {
+test('resolver writes a forfeit when one side exhausted eval hard-failure retries', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -194,7 +235,7 @@ test('resolver writes a forfeit when one side exhausted eval hard-failure retrie
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'sibling-eval-hard-failed',
@@ -210,7 +251,7 @@ test('resolver writes a forfeit when one side exhausted eval hard-failure retrie
   }
 });
 
-test('resolver writes a double-forfeit when both sides exhausted eval hard-failure retries', () => {
+test('resolver writes a double-forfeit when both sides exhausted eval hard-failure retries', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -236,7 +277,7 @@ test('resolver writes a double-forfeit when both sides exhausted eval hard-failu
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'both-eval-hard-failed',
@@ -266,7 +307,7 @@ test('resolver unblocks the surviving PR in applyChallengePairGates', async () =
       },
     });
 
-    const resolution = resolveUnresolvablePair({
+    const resolution = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       reason: 'orphan-sibling',
@@ -292,7 +333,7 @@ test('resolver unblocks the surviving PR in applyChallengePairGates', async () =
   }
 });
 
-test('resolver auto-detects both aborted arms and forfeits to completed survivor', () => {
+test('resolver auto-detects both aborted arms and forfeits to completed survivor', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -320,7 +361,7 @@ test('resolver auto-detects both aborted arms and forfeits to completed survivor
       },
     });
 
-    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    const result = await resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
 
     assert.equal(result.status, 'resolved');
     assert.equal(result.reason, 'both-challenge-aborted');
@@ -342,7 +383,7 @@ test('resolver auto-detects both aborted arms and forfeits to completed survivor
   }
 });
 
-test('resolver skips aborted pair when lone surviving PR has not persisted eval', () => {
+test('resolver skips aborted pair when lone surviving PR has not persisted eval', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -367,7 +408,7 @@ test('resolver skips aborted pair when lone surviving PR has not persisted eval'
       },
     });
 
-    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    const result = await resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
 
     assert.equal(result.status, 'skipped');
     assert.match(result.reason, /surviving arm has not persisted an eval/);
@@ -377,7 +418,7 @@ test('resolver skips aborted pair when lone surviving PR has not persisted eval'
   }
 });
 
-test('resolver writes forfeit when a sibling challenge-aborted and survivor completed eval', () => {
+test('resolver writes forfeit when a sibling challenge-aborted and survivor completed eval', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -403,7 +444,7 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
       },
     });
 
-    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    const result = await resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
 
     assert.equal(result.status, 'resolved');
     assert.equal(result.reason, 'sibling-challenge-aborted');
@@ -423,7 +464,7 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
   }
 });
 
-test('resolver writes double-forfeit when both aborted arms have no completed evals but both produced PRs', () => {
+test('resolver writes double-forfeit when both aborted arms have no completed evals but both produced PRs', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -447,7 +488,7 @@ test('resolver writes double-forfeit when both aborted arms have no completed ev
       },
     });
 
-    const result = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    const result = await resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
 
     assert.equal(result.status, 'resolved');
     assert.equal(result.outcome, 'double-forfeit');
@@ -490,7 +531,7 @@ test('resolver and gate agree on aborted pair reason and unblock after resolutio
     assert.equal(blocked.eligible.length, 0);
     assert.equal(blocked.blocked[0]?.reason, 'challenge:pair-unresolvable:both-challenge-aborted');
 
-    const resolution = resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
+    const resolution = await resolveUnresolvablePair({ pairId: 'pair-abort', repoDir });
     assert.equal(resolution.status, 'resolved');
 
     const unblocked = await applyChallengePairGates(
@@ -520,7 +561,7 @@ test('resolver treats a removed primary with stale refs as orphan-sibling', asyn
       },
     });
 
-    const resolution = resolveUnresolvablePair({
+    const resolution = await resolveUnresolvablePair({
       pairId: 'pair-2767',
       repoDir,
       remoteBranches: [
@@ -556,7 +597,7 @@ test('resolver treats a removed primary with stale refs as orphan-sibling', asyn
   }
 });
 
-test('resolver keeps both tracked arms unresolved even with stale refs', () => {
+test('resolver keeps both tracked arms unresolved even with stale refs', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -580,7 +621,7 @@ test('resolver keeps both tracked arms unresolved even with stale refs', () => {
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
@@ -594,7 +635,7 @@ test('resolver keeps both tracked arms unresolved even with stale refs', () => {
   }
 });
 
-test('resolver dry run reports orphan-sibling without writing a comparison', () => {
+test('resolver dry run reports orphan-sibling without writing a comparison', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -609,7 +650,7 @@ test('resolver dry run reports orphan-sibling without writing a comparison', () 
       },
     });
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId: 'pair-1',
       repoDir,
       dryRun: true,
