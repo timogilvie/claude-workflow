@@ -31,6 +31,7 @@ import { getModelStatus, markExhausted, readQuotaSnapshot, recordSuccess } from 
 import { filterDisabledModels } from './disabled-models.ts';
 import { fallbackLog } from './router-log.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
+import { resolveEnvValue } from './env-file.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -80,6 +81,12 @@ export interface LLMCallOptions {
   difficulty?: DifficultyBand;
   /** Override fallback candidates instead of consulting the registry */
   fallbackModels?: string[];
+  /** Absolute epoch-millisecond deadline for fallback ladders. */
+  fallbackDeadlineMs?: number;
+  /** Per-candidate timeout cap for fallback ladders. */
+  fallbackPerAttemptTimeoutMs?: number;
+  /** Grace reserved before the absolute fallback deadline. */
+  fallbackDeadlineGraceMs?: number;
   /** Disable best-effort eval emission for fallback events */
   logFallbackEvents?: boolean;
   /** Feature directory for trace event emission (HOK-2259) */
@@ -189,6 +196,7 @@ const SLOW_CALL_WARNING_MS = 30_000;
 const SLOW_CALL_REPEAT_MS = 15_000;
 const FALLBACK_DEFAULT_TASK_TYPE: RegistryTaskType = 'classify';
 const FALLBACK_EVENT_SCHEMA_VERSION = '1.0';
+const FALLBACK_MIN_ATTEMPT_TIMEOUT_MS = 500;
 const warnedMissingTaskType = new Set<string>();
 
 function withElapsed(error: Error, elapsedMs: number): ObservedError {
@@ -275,6 +283,85 @@ function uniqueModels(models: string[]): string[] {
     deduped.push(model);
   }
   return deduped;
+}
+
+function hasFallbackDeadline(options: LLMCallOptions): boolean {
+  return typeof options.fallbackDeadlineMs === 'number' && Number.isFinite(options.fallbackDeadlineMs);
+}
+
+function shouldEnforceClassifierProviderCredentials(options: LLMCallOptions): boolean {
+  return options.taskType === 'classify' && hasFallbackDeadline(options);
+}
+
+function credentialEnvForCandidate(
+  registry: ReturnType<typeof getEffectiveRegistry>,
+  modelId: string,
+  provider: LLMProvider,
+): string | null {
+  const model = getModel(registry, modelId);
+  const vendor = model?.vendor?.toLowerCase() ?? '';
+
+  if (provider === 'claude') {
+    if (vendor === 'anthropic') return 'ANTHROPIC_API_KEY';
+    if (vendor === 'deepseek') return 'DEEPSEEK_API_KEY';
+    return null;
+  }
+
+  if (provider === 'openai') {
+    return 'OPENAI_API_KEY';
+  }
+
+  return null;
+}
+
+function filterCandidatesWithCredentials(
+  candidates: string[],
+  provider: LLMProvider,
+  options: LLMCallOptions,
+  taskType: RegistryTaskType,
+): string[] {
+  if (!shouldEnforceClassifierProviderCredentials(options)) {
+    return candidates;
+  }
+
+  const repoDir = repoDirForOptions(options);
+  const registry = getEffectiveRegistry(repoDir);
+  const eligible: string[] = [];
+
+  for (const candidate of candidates) {
+    const envVar = credentialEnvForCandidate(registry, candidate, provider);
+    if (!envVar || resolveEnvValue([envVar], repoDir)) {
+      eligible.push(candidate);
+      continue;
+    }
+
+    const label = taskType === 'classify' ? 'classifier' : taskType;
+    console.warn(`[${label}] ${candidate} skipped (missing ${envVar})`);
+  }
+
+  return eligible;
+}
+
+function fallbackAttemptTimeout(options: LLMCallOptions): number | null | undefined {
+  if (!hasFallbackDeadline(options)) {
+    return undefined;
+  }
+
+  const graceMs = Math.max(0, Math.floor(options.fallbackDeadlineGraceMs ?? 1_500));
+  const usableRemainingMs = Math.floor(options.fallbackDeadlineMs! - Date.now() - graceMs);
+  if (usableRemainingMs < FALLBACK_MIN_ATTEMPT_TIMEOUT_MS) {
+    return null;
+  }
+
+  const caps = [usableRemainingMs];
+  if (typeof options.fallbackPerAttemptTimeoutMs === 'number' && Number.isFinite(options.fallbackPerAttemptTimeoutMs)) {
+    caps.push(Math.max(1, Math.floor(options.fallbackPerAttemptTimeoutMs)));
+  }
+  if (typeof options.timeout === 'number' && Number.isFinite(options.timeout)) {
+    caps.push(Math.max(1, Math.floor(options.timeout)));
+  }
+
+  return Math.max(1, Math.min(...caps));
 }
 
 function summarizePrompt(prompt: string, maxLength = 200): string {
@@ -1639,12 +1726,17 @@ async function callLLMWithFallback(
 ): Promise<LLMCallResult> {
   const startedAt = Date.now();
   const repoDir = repoDirForOptions(options);
-  const { taskType, candidates } = resolveCandidateModels(provider, options);
+  const resolved = resolveCandidateModels(provider, options);
+  const taskType = resolved.taskType;
+  const candidates = filterCandidatesWithCredentials(resolved.candidates, provider, options, taskType);
   const retry = options.retry ?? false;
   const shouldLogFallbackEvents = options.logFallbackEvents !== false;
   const preferredModel = candidates[0] ?? options.model ?? '(unknown)';
 
   if (candidates.length === 0) {
+    if (shouldEnforceClassifierProviderCredentials(options) || hasFallbackDeadline(options)) {
+      throw new Error(`No eligible ${taskType} fallback candidates remained within the configured classifier budget`);
+    }
     return retry
       ? callLLMWithRetry(prompt, options, provider, maxRetries)
       : callLLMOnce(prompt, options, provider);
@@ -1656,7 +1748,16 @@ async function callLLMWithFallback(
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
-    const candidateOptions: LLMCallOptions = { ...options, model: candidate, repoDir };
+    const attemptTimeout = fallbackAttemptTimeout(options);
+    if (attemptTimeout === null) {
+      throw new Error(`LLM fallback deadline exhausted before ${candidate}`);
+    }
+    const candidateOptions: LLMCallOptions = {
+      ...options,
+      model: candidate,
+      repoDir,
+      ...(attemptTimeout === undefined ? {} : { timeout: attemptTimeout }),
+    };
 
     try {
       const result = retry

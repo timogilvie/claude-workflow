@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -250,6 +250,62 @@ describe('plan-queue CLI', () => {
       assert.equal(result.status, 0);
       assert.doesNotThrow(() => parseJson(result.stdout));
       assert.doesNotMatch(result.stderr, /ENOENT: no such file or directory, open 'tools\/prompts\/queue-analysis\.md'/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to explicit edges when a cache-refresh classifier exceeds its budget', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'plan-queue-classifier-budget-test-'));
+    try {
+      const backlog = [
+        { id: 'HOK-1', title: 'Root', state: 'Todo', labels: [], blocks: ['HOK-2'] },
+        { id: 'HOK-2', title: 'Dependent', state: 'Todo', labels: [], blocks: [], dependsOn: ['HOK-1'] },
+      ];
+      const backlogPath = join(tempDir, 'backlog.json');
+      writeFileSync(backlogPath, `${JSON.stringify(backlog, null, 2)}\n`, 'utf8');
+
+      const cliLog = join(tempDir, 'classifier.log');
+      const cliPath = join(tempDir, 'slow-classifier.sh');
+      writeFileSync(
+        cliPath,
+        `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${cliLog}"
+sleep 10
+printf 'too slow\\n' >&2
+exit 1
+`,
+        'utf8',
+      );
+      chmodSync(cliPath, 0o755);
+
+      const result = runPlanQueue(
+        [
+          '--backlog-file', backlogPath,
+          '--cache-key', 'classifier-budget',
+          '--refresh-missing-cache',
+          '--queue-classifier-deadline-ms', String(Date.now() + 30_000),
+          '--json',
+        ],
+        undefined,
+        tempDir,
+        {
+          CLAUDE_CMD: cliPath,
+          ANTHROPIC_API_KEY: '',
+          DEEPSEEK_API_KEY: 'test-deepseek-key',
+        },
+      );
+
+      assert.equal(result.status, 0);
+      assert.deepEqual(parseJson(result.stdout), {
+        availableNow: ['HOK-1'],
+        queuedAfterDependencies: [{ taskId: 'HOK-2', ancestors: ['HOK-1'] }],
+        avoidRunningTogether: [],
+        needsTriage: [],
+      });
+      assert.match(result.stderr, /initial refresh failed, falling back to cached edges/);
+      assert.match(result.stderr, /unavailable \(timeout\)/);
+      assert.deepEqual(readFileSync(cliLog, 'utf8').trim().split('\n').filter(Boolean).length, 1);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
