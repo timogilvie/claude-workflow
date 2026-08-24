@@ -44,10 +44,12 @@ import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
 import { getGlobalModelRegistry, listEffectiveModelsForStage, resolveEffectiveAgent } from './effective-models.ts';
-import { classifyTaskPacket, isSuspiciousZeroClassification, type TaskPacketClassification } from './task-packet-classifier.ts';
+import { classifyTaskPacket, type TaskPacketClassification } from './task-packet-classifier.ts';
 
 export type { RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 export { STAGE_PHASE_REQUIREMENT } from './native-agent/certification/router-filter.ts';
+
+const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sql|go|rs|rb)\b/gi;
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -189,9 +191,18 @@ function buildRoutingSignalContext(
   riskScore: number;
   signals: WorkflowRouteDecision['signals'];
 } {
-  const characteristics = analyzePrompt(prompt);
   const classification = classifyTaskPacket(prompt);
-  const suspiciousZero = isSuspiciousZeroClassification(classification);
+  const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
+  const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
+  const characteristics: PromptCharacteristics = {
+    length: classification.evidence.promptLength,
+    charCount: classification.evidence.charCount,
+    complexityScore: classification.complexityScore,
+    complexityBand: classification.complexityBand,
+    riskFlags: classification.riskFlags,
+    fileTypes: fileTypes.length > 0 ? fileTypes : classification.evidence.fileTypes,
+    taskType: classification.taskType,
+  };
   const riskScore = Math.max(computeRiskScore(prompt, characteristics), classification.riskScore);
 
   return {
@@ -204,9 +215,9 @@ function buildRoutingSignalContext(
       complexityScore: classification.complexityScore,
       complexityBand: classification.complexityBand,
       riskFlags: classification.riskFlags,
-      ...(suspiciousZero.suspicious ? {
+      ...(classification.suspiciousZero ? {
         suspiciousZero: true,
-        suspiciousZeroReason: suspiciousZero.reason,
+        suspiciousZeroReason: classification.suspiciousZeroReason,
       } : {}),
       fileTypes: characteristics.fileTypes,
       riskScore,
