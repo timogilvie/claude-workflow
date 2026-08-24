@@ -250,6 +250,76 @@ test('single observer pane does not produce duplicate finding', () => {
   assert.equal(findings.some((finding) => finding.id === 'duplicate-observer-wavemill'), false);
 });
 
+test('stale active challenge arm with no live pane or process is surfaced', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stale-arm-'));
+  const worktree = join(repoDir, 'worktrees', 'demo-challenger');
+  mkdirSync(worktree, { recursive: true });
+  try {
+    const findings = buildFindings({
+      timestamp: new Date().toISOString(),
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        stateMtime: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+        tasks: [{
+          issue: 'HOK-2846_c',
+          slug: 'demo-challenger',
+          phase: 'coding',
+          status: 'active',
+          worktree,
+          updated: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+          challengeRole: 'challenger',
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const stuck = findings.find((finding) => finding.id === 'stale-active-task-no-live-process-wavemill-HOK-2846_c');
+    assert.ok(stuck);
+    assert.equal(stuck.severity, 'high');
+    assert.equal(stuck.category, 'stuck');
+    assert.equal(stuck.confidence, 'high');
+    assert.equal(stuck.issue, 'HOK-2846_c');
+    assert.match(stuck.title, /no live pane or process evidence/);
+    assert.ok(stuck.evidence.includes(`worktree=${worktree}`));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('fresh active challenge arm is not surfaced as stale', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-fresh-arm-'));
+  const worktree = join(repoDir, 'worktrees', 'fresh-challenger');
+  mkdirSync(worktree, { recursive: true });
+  try {
+    const findings = buildFindings({
+      timestamp: new Date().toISOString(),
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        tasks: [{
+          issue: 'HOK-2846_c',
+          slug: 'fresh-challenger',
+          phase: 'coding',
+          status: 'active',
+          worktree,
+          updated: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+          challengeRole: 'challenger',
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('stale-active-task-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('duplicate observer finding respects pane title override', () => {
   const previous = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE;
   process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE = 'Custom Observer';
