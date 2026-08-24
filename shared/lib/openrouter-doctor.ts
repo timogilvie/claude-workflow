@@ -28,6 +28,7 @@ import {
 import { tryResolveAgent } from './model-router.ts';
 import {
   buildGlobalCertificationPath,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   filterNativeModels,
   STAGE_PHASE_REQUIREMENT,
   type RouterCertificationRejection,
@@ -269,7 +270,7 @@ function resolveStoragePath(
   registry: ReturnType<typeof getEffectiveRegistry>,
   certificationRoot?: string,
 ): string | null {
-  const suiteVersion = capabilities?.nativeCapability?.certification?.certificationSuiteVersion ?? 'v1';
+  const suiteVersion = capabilities?.nativeCapability?.certification?.certificationSuiteVersion ?? DEFAULT_CERTIFICATION_SUITE_VERSION;
   const identity = registryModelId ? resolveProviderNativeModelId(registryModelId, registry) : undefined;
   const modelId = identity?.providerNativeId ?? candidate.nativeProviderId ?? registryModelId;
   const provider = identity?.provider ?? 'openrouter';

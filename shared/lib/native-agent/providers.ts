@@ -17,6 +17,7 @@ import {
 import { resolveOpenRouterModelId } from '../openrouter-provider.ts';
 import {
   evaluateNativeProviderGate,
+  evaluateSuiteCoverage,
   type CertificationPhase,
   type NativeGateMode,
   type NativeGateRejectReason,
@@ -244,6 +245,19 @@ export function buildNativeProviderResolutionFailureMessage(
       `Native ${launchLabel} is unavailable: no native providers are configured.`,
       `Configure nativeAgent.providers and run ${NATIVE_PROVIDER_REMEDIATION_REPORT}.`,
     ].join(' ');
+  }
+
+  if (entries.every((entry) => entry.status === 'uncertified')) {
+    const coverage = evaluateSuiteCoverage();
+    if (coverage.status === 'bump-without-publish') {
+      const otherSuites = Object.entries(coverage.artifactCountByOtherSuite)
+        .map(([suiteVersion, count]) => `${count} ${suiteVersion}`)
+        .join(', ');
+      return [
+        `Native ${launchLabel} is unavailable: certificationSuiteVersion is '${coverage.requiredSuiteVersion}' but the global store (${coverage.root}) has 0 matching artifacts${otherSuites ? ` (${otherSuites} found)` : ''}.`,
+        `The suite version was bumped without republishing the matrix. Run ${coverage.remediationCommand}.`,
+      ].join(' ');
+    }
   }
 
   const details = entries.map((entry) => describeNativeProviderFailure(entry, requiredCertificationPhase));

@@ -82,6 +82,7 @@ function nativeReviewFailure(
   return {
     verdict: 'not_ready',
     codeReviewFindings: [blocker],
+    failureCategory: category,
     metadata: {
       branch: context.metadata.branch,
       files: context.metadata.files,

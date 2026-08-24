@@ -4,6 +4,10 @@ import {
   buildModelCertificationReport,
   type ModelCertificationReportRow,
 } from './native-agent/certification/report.ts';
+import {
+  evaluateSuiteCoverage,
+  type SuiteCoverageStatus,
+} from './native-agent/certification/coverage.ts';
 import { resolveCertificationStorage } from './native-agent/certification/storage.ts';
 import { explainEffectiveModelAvailability } from './effective-models.ts';
 import type { SupportedModelStage } from './model-registry.ts';
@@ -37,6 +41,9 @@ export interface GlobalModelParityReport {
   repoDir: string;
   globalRoot: string;
   globalCatalogVersion?: string;
+  requiredSuiteVersion: string;
+  publishedArtifactCountForRequiredSuite: number;
+  certificationSuiteCoverageStatus: SuiteCoverageStatus;
   certifiedModelCountByStage: Record<SupportedModelStage, number>;
   runtimeReadyCountByStage: Record<SupportedModelStage, number>;
   stages: StageAvailability[];
@@ -122,6 +129,10 @@ export function buildGlobalModelParityReport(opts: {
     now,
     certificationRoot: opts.certificationRoot,
   });
+  const suiteCoverage = evaluateSuiteCoverage({
+    repoDir: effectiveRepoDir,
+    root: opts.certificationRoot,
+  });
   const certifiedModelCountByStage = {} as Record<SupportedModelStage, number>;
   const runtimeReadyCountByStage = {} as Record<SupportedModelStage, number>;
   const challengePairAvailability = {} as Record<SupportedModelStage, boolean>;
@@ -196,6 +207,9 @@ export function buildGlobalModelParityReport(opts: {
     repoDir,
     globalRoot: resolveCertificationStorage({ scope: 'global', root: opts.certificationRoot }).root,
     ...(catalogVersion(rows) ? { globalCatalogVersion: catalogVersion(rows) } : {}),
+    requiredSuiteVersion: suiteCoverage.requiredSuiteVersion,
+    publishedArtifactCountForRequiredSuite: suiteCoverage.artifactCountForRequiredSuite,
+    certificationSuiteCoverageStatus: suiteCoverage.status,
     certifiedModelCountByStage,
     runtimeReadyCountByStage,
     stages,
@@ -211,6 +225,7 @@ export function renderGlobalModelParityReport(report: GlobalModelParityReport): 
     'Global Model Report',
     '===================',
     `Catalog version: ${report.globalCatalogVersion ?? 'unknown'} (global root ${report.globalRoot})`,
+    `Required suite: ${report.requiredSuiteVersion || 'unknown'} (${report.publishedArtifactCountForRequiredSuite} published artifacts, ${report.certificationSuiteCoverageStatus})`,
     '',
     'Certified models by stage:',
   ];

@@ -69,6 +69,35 @@ export interface CertifyResult {
   knownLimitations: string[];
 }
 
+export interface CertifyAllOptions {
+  provider?: NativeProviderName;
+  phase: CertificationPhase;
+  repoDir: string;
+  dryRun?: boolean;
+  registry?: ModelRegistry;
+  runScenariosFn?: typeof runScenarios;
+  runOpenRouterSmokeFn?: typeof runOpenRouterSmoke;
+  writeCertificationFn?: typeof writeGlobalCertification | ((repoDir: string, record: NativeCertificationArtifact) => string);
+  now?: () => Date;
+  env?: NodeJS.ProcessEnv;
+}
+
+export interface CertifyAllEntry {
+  provider: string;
+  model: string;
+  reason?: string;
+  artifactPath?: string;
+}
+
+export interface CertifyAllResult {
+  phase: CertificationPhase;
+  suiteVersion: string;
+  dryRun: boolean;
+  published: CertifyAllEntry[];
+  skipped: CertifyAllEntry[];
+  failed: CertifyAllEntry[];
+}
+
 export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyResult> {
   const runScenariosFn = opts.runScenariosFn ?? runScenarios;
   const runOpenRouterSmokeFn = opts.runOpenRouterSmokeFn ?? runOpenRouterSmoke;
@@ -192,6 +221,83 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
   };
 }
 
+export async function certifyAllNativeAgents(opts: CertifyAllOptions): Promise<CertifyAllResult> {
+  const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
+  const published: CertifyAllEntry[] = [];
+  const skipped: CertifyAllEntry[] = [];
+  const failed: CertifyAllEntry[] = [];
+  const targets = Object.entries(registry.models)
+    .filter(([, model]) => {
+      const capability = model.nativeCapability;
+      if (!capability || capability.readOnlyNative === 'unsupported') return false;
+      if (opts.provider && capability.nativeProvider !== opts.provider) return false;
+      return true;
+    })
+    .map(([model, entry]) => ({
+      model,
+      provider: entry.nativeCapability!.nativeProvider,
+    }))
+    .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+
+  for (const target of targets) {
+    try {
+      const result = await certifyNativeAgent({
+        provider: target.provider,
+        model: target.model,
+        phase: opts.phase,
+        repoDir: opts.repoDir,
+        dryRun: opts.dryRun,
+        registry,
+        runScenariosFn: opts.runScenariosFn,
+        runOpenRouterSmokeFn: opts.runOpenRouterSmokeFn,
+        writeCertificationFn: opts.writeCertificationFn,
+        now: opts.now,
+        env: opts.env,
+      });
+      if (!result.harnessPassed) {
+        failed.push({
+          provider: result.provider,
+          model: result.model,
+          reason: 'certification harness failed',
+        });
+      } else if (result.artifactPath) {
+        published.push({
+          provider: result.provider,
+          model: result.model,
+          artifactPath: result.artifactPath,
+        });
+      } else {
+        skipped.push({
+          provider: result.provider,
+          model: result.model,
+          reason: result.dryRun ? 'dry-run' : 'not live-certifiable',
+        });
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const entry = { provider: target.provider, model: target.model, reason: message };
+      if (isPolicySkip(message)) {
+        skipped.push(entry);
+      } else {
+        failed.push(entry);
+      }
+    }
+  }
+
+  return {
+    phase: opts.phase,
+    suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+    dryRun: opts.dryRun ?? false,
+    published,
+    skipped,
+    failed,
+  };
+}
+
+function isPolicySkip(message: string): boolean {
+  return message.includes('OPENROUTER_LIVE_SMOKE=1 is required before publishing a provisional OpenRouter certification');
+}
+
 async function requireFreshOpenRouterSmokeEvidence(input: {
   subject: CertificationSubject;
   registryKey: string;
@@ -312,6 +418,10 @@ return runTool({
       type: 'boolean',
       description: 'Run scenarios without persisting a certification artifact.',
     },
+    all: {
+      type: 'boolean',
+      description: 'Certify every native-capable registry model. --provider filters the batch when set.',
+    },
     json: {
       type: 'boolean',
       description: 'Emit machine-readable JSON.',
@@ -325,25 +435,27 @@ return runTool({
     'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only --dry-run',
     'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only',
     'npx tsx tools/native-agent-certify.ts --provider openrouter --model openai/gpt-4o --phase read-only --json',
+    'npx tsx tools/native-agent-certify.ts --all --phase workflow',
   ],
   async run({ args }) {
     const repoDir = (args.repo as string | undefined) || process.cwd();
     const rawProvider = args.provider as string | undefined;
     const rawModel = args.model as string | undefined;
-    const rawPhase = args.phase as string | undefined;
+    const rawPhase = (args.phase as string | undefined) ?? 'workflow';
     const dryRun = args['dry-run'] === true;
+    const all = args.all === true;
 
     // Validate required flags
-    if (!rawProvider) {
+    if (!all && !rawProvider) {
       console.error('Error: --provider is required');
       process.exit(2);
     }
-    if (!rawModel) {
+    if (!all && !rawModel) {
       console.error('Error: --model is required');
       process.exit(2);
     }
-    if (!rawPhase) {
-      console.error('Error: --phase is required');
+    if (all && rawModel) {
+      console.error('Error: --all cannot be combined with --model');
       process.exit(2);
     }
 
@@ -353,18 +465,31 @@ return runTool({
       process.exit(2);
     }
 
-    // Validate provider
-    if (!(NATIVE_PROVIDERS as readonly string[]).includes(rawProvider)) {
+    const phase = rawPhase as CertificationPhase;
+
+    if (rawProvider && !(NATIVE_PROVIDERS as readonly string[]).includes(rawProvider)) {
       console.error(`Error: invalid --provider "${rawProvider}". Must be one of: ${NATIVE_PROVIDERS.join(', ')}`);
       process.exit(2);
     }
 
-    const phase = rawPhase as CertificationPhase;
-    const provider = rawProvider as NativeProviderName;
+    const provider = rawProvider as NativeProviderName | undefined;
+
+    if (all) {
+      const result = await certifyAllNativeAgents({ provider, phase, repoDir, dryRun });
+      if (args.json === true) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        renderCertifyAllSummary(result);
+      }
+      if (result.failed.length > 0) {
+        process.exit(1);
+      }
+      return;
+    }
 
     let result: CertifyResult;
     try {
-      result = await certifyNativeAgent({ provider, model: rawModel, phase, repoDir, dryRun });
+      result = await certifyNativeAgent({ provider: provider!, model: rawModel!, phase, repoDir, dryRun });
     } catch (err: unknown) {
       const exitCode = (err as { exitCode?: number }).exitCode;
       const msg = err instanceof Error ? err.message : String(err);
@@ -411,6 +536,27 @@ return runTool({
     }
   },
 }, argv);
+}
+
+function renderCertifyAllSummary(result: CertifyAllResult): void {
+  const prefix = result.dryRun ? '[dry-run] ' : '';
+  console.log(`${prefix}Phase: ${result.phase}`);
+  console.log(`${prefix}Suite: ${result.suiteVersion}`);
+  console.log(`${prefix}Published: ${result.published.length}`);
+  console.log(`${prefix}Skipped:   ${result.skipped.length}`);
+  console.log(`${prefix}Failed:    ${result.failed.length}`);
+  for (const [label, entries] of [
+    ['Published', result.published],
+    ['Skipped', result.skipped],
+    ['Failed', result.failed],
+  ] as const) {
+    if (entries.length === 0) continue;
+    console.log('');
+    console.log(`${label}:`);
+    for (const entry of entries) {
+      console.log(`  ${entry.provider}/${entry.model}${entry.artifactPath ? ` -> ${entry.artifactPath}` : ''}${entry.reason ? ` - ${entry.reason}` : ''}`);
+    }
+  }
 }
 
 if (import.meta.main) {

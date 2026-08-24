@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import Ajv from 'ajv';
 import {
   CERTIFICATION_SCHEMA_VERSION,
@@ -19,7 +19,7 @@ import {
   type NativeCertificationArtifact,
 } from './schema.ts';
 import { buildLegacyRepoCertificationPath } from './loader.ts';
-import { resolveCertificationStorageIdentity } from './identity.ts';
+import { isValidCertificationPathSegment, resolveCertificationStorageIdentity } from './identity.ts';
 import {
   buildCertificationPathFromRoot,
   resolveCertificationStorage,
@@ -356,6 +356,19 @@ export function listGlobalCertifications(options: Omit<CertificationStorageOptio
   return listScopedCertifications({ ...options, scope: 'global' });
 }
 
+export function listGlobalCertificationSuiteVersions(
+  options: Omit<CertificationStorageOptions, 'scope' | 'repoDir'> = {},
+): Record<string, number> {
+  const root = resolveCertificationStorage({ ...options, scope: 'global' }).root;
+  const counts: Record<string, number> = {};
+  for (const filePath of listCertificationFilesUnderRoot(root)) {
+    const parsed = parseCertificationPathUnderRoot(root, filePath);
+    if (!parsed) continue;
+    counts[parsed.suiteVersion] = (counts[parsed.suiteVersion] ?? 0) + 1;
+  }
+  return counts;
+}
+
 function listCertificationFilesUnderRoot(baseDir: string): string[] {
   let entries: ReturnType<typeof readdirSync>;
   try {
@@ -378,4 +391,30 @@ function listCertificationFilesUnderRoot(baseDir: string): string[] {
   }
 
   return paths;
+}
+
+function parseCertificationPathUnderRoot(
+  root: string,
+  filePath: string,
+): { provider: string; model: string; suiteVersion: string } | undefined {
+  const relativePath = relative(root, filePath).replace(/\\/g, '/');
+  if (relativePath.startsWith('../') || relativePath === '..' || relativePath.startsWith('/')) {
+    return undefined;
+  }
+  const parts = relativePath.split('/');
+  if (parts.length !== 3) return undefined;
+
+  const [provider, model, filename] = parts;
+  if (!provider || !model || !filename.endsWith('.json')) return undefined;
+
+  const suiteVersion = filename.slice(0, -'.json'.length);
+  if (
+    !isValidCertificationPathSegment(provider)
+    || !isValidCertificationPathSegment(model)
+    || !isValidCertificationPathSegment(suiteVersion)
+  ) {
+    return undefined;
+  }
+
+  return { provider, model, suiteVersion };
 }

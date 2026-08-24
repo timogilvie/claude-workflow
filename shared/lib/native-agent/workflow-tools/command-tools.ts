@@ -378,6 +378,7 @@ export async function executeReviewChanges(
       iterations: 1,
       blockerCount: counts.blockingCount,
       warningCount: Math.max(0, counts.findingCount - counts.blockingCount),
+      failureCategory: reviewResult.failureCategory,
       metadata: { trust: buildTrustMetadata({ sourceKind: 'wavemill_artifact', details: findings }) },
     };
     deps.transcript.append({

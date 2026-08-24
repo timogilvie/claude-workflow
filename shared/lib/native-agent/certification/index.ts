@@ -20,6 +20,7 @@ export {
 export type { CertificationEligibility, IneligibilityReason, ScopedCertificationEligibility } from './loader.ts';
 export type { CertificationStorageIdentity, ResolvedCertificationSubject } from './identity.ts';
 export type { CertificationStorageOptions, CertificationStorageScope } from './storage.ts';
+export type { SuiteCoverageOptions, SuiteCoverageResult, SuiteCoverageStatus } from './coverage.ts';
 export type {
   NativeGateDecision,
   NativeGateInput,
@@ -58,11 +59,13 @@ export {
   subjectsEqual,
 } from './identity.ts';
 export { evaluateNativeProviderGate } from './eligibility-gate.ts';
+export { evaluateSuiteCoverage } from './coverage.ts';
 
 export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 
 export {
   listCertifications,
+  listGlobalCertificationSuiteVersions,
   listGlobalCertifications,
   listScopedCertifications,
   readCertification,
