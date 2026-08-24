@@ -3,6 +3,7 @@
 import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   CERTIFICATION_TTL_DAYS,
+  DEFAULT_CERTIFICATION_SUITE_VERSION,
   evaluateEligibility,
   loadGlobalCertification,
   resolveCertificationSubject,
@@ -97,7 +98,7 @@ export function runInspectCommand(argv = process.argv.slice(2)): Promise<void> {
     options: {
       provider: { type: 'string', description: 'Provider or canonical storage provider.' },
       model: { type: 'string', description: 'Model alias, OpenRouter ID, or canonical storage model.' },
-      suite: { type: 'string', description: 'Required suite version.', default: 'v2' },
+      suite: { type: 'string', description: 'Required suite version.', default: DEFAULT_CERTIFICATION_SUITE_VERSION },
       phase: { type: 'string', description: 'Required phase for eligibility.', default: 'patch' },
       json: { type: 'boolean', description: 'Emit machine-readable JSON.' },
     },
@@ -115,7 +116,7 @@ export function runInspectCommand(argv = process.argv.slice(2)): Promise<void> {
       const inspection = inspectGlobalCertification({
         provider,
         model,
-        suiteVersion: (args.suite as string | undefined) ?? 'v2',
+        suiteVersion: (args.suite as string | undefined) ?? DEFAULT_CERTIFICATION_SUITE_VERSION,
         requiredPhase: ((args.phase as string | undefined) ?? 'patch') as CertificationPhase,
       });
       if (args.json === true) {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
@@ -10,6 +10,7 @@ import {
 } from './schema.ts';
 import {
   listCertifications,
+  listGlobalCertificationSuiteVersions,
   listScopedCertifications,
   readCertification,
   serializeCertification,
@@ -265,6 +266,25 @@ describe('writeCertification', () => {
     } finally {
       cleanupRepo(repoDir);
     }
+  });
+});
+
+describe('listGlobalCertificationSuiteVersions', () => {
+  it('counts suite versions from global artifact paths without reading files', () => {
+    withIsolatedGlobalCertificationRoot((root) => {
+      for (const rel of [
+        'openai/gpt-4o/v3.json',
+        'openrouter/qwen3-coder/v3.json',
+        'openrouter/glm-5.2/v2.json',
+        'openrouter/glm-5.2/not-json.txt',
+      ]) {
+        const path = join(root, rel);
+        mkdirSync(path.substring(0, path.lastIndexOf('/')), { recursive: true });
+        writeFileSync(path, '{}', { flag: 'w' });
+      }
+
+      assert.deepEqual(listGlobalCertificationSuiteVersions(), { v2: 1, v3: 2 });
+    });
   });
 });
 

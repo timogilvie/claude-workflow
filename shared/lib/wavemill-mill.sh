@@ -9166,6 +9166,100 @@ review_result_passes_ready_gate() {
   ' "$review_file" >/dev/null 2>&1
 }
 
+review_result_infra_failure() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (
+      (($review.failureCategory // "") == "native-runtime-unavailable") or
+      (($review.failureCategory // "") == "native-review-prompt-missing") or
+      ((($review.verdict // "") == "error") and ((($review.reviewToolError // "") | tostring | length) > 0))
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_infra_retry_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.review-infra-retries"
+  if [[ -f "$count_file" ]] && [[ "$(cat "$count_file" 2>/dev/null || echo "")" =~ ^[0-9]+$ ]]; then
+    cat "$count_file"
+    return 0
+  fi
+  echo "0"
+}
+
+increment_review_infra_retry_count() {
+  local state_dir="$1"
+  local count
+  count=$(review_infra_retry_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.review-infra-retries"
+  echo "$count"
+}
+
+clear_review_infra_retry_state() {
+  local state_dir="$1"
+  rm -f "$state_dir/.review-infra-retries"
+}
+
+relaunch_review_after_infra_recovery() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6" pr_number="$7" state_dir="$8"
+  local review_file="$state_dir/.review-result.json"
+  local retry_count retry_max reviewer_agent reviewer_model review_mode contract_payload retry_number rc=0
+
+  retry_count=$(review_infra_retry_count "$state_dir")
+  retry_max="${WAVEMILL_REVIEW_INFRA_RETRY_MAX:-2}"
+  [[ "$retry_max" =~ ^[0-9]+$ ]] || retry_max=2
+  if (( retry_count >= retry_max )); then
+    write_ready_attention_file "$state_dir" "Review failed on infrastructure ${retry_count}/${retry_max} times for PR #$pr_number, manual re-review required."
+    log_error "  $issue: review infrastructure retry cap reached for PR #$pr_number (${retry_count}/${retry_max})"
+    return 1
+  fi
+
+  reviewer_agent="$(jq -r '.agent // empty' "$review_file" 2>/dev/null || echo "")"
+  reviewer_model="$(jq -r '.model // empty' "$review_file" 2>/dev/null || echo "")"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$AGENT_CMD"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
+
+  if ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    write_ready_attention_file "$state_dir" "Review infrastructure is still unavailable for PR #$pr_number; waiting for reviewer runtime recovery."
+    log_error "  $issue: waiting for reviewer runtime recovery before re-reviewing PR #$pr_number"
+    return 1
+  fi
+
+  retry_number=$(increment_review_infra_retry_count "$state_dir")
+  review_mode="static"
+  if declare -F read_phase_config >/dev/null 2>&1; then
+    review_mode=$(read_phase_config "$state_dir" "review" "mode")
+    [[ -n "$review_mode" ]] || review_mode="static"
+  fi
+  contract_payload="$(jq -cn --arg agent "$reviewer_agent" --arg model "$reviewer_model" '{stageRole:"review",agent:$agent,model:$model}')"
+
+  if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$state_dir" "$wt_dir" "$reviewer_agent" "$reviewer_model" "$contract_payload" "review"; then
+    write_ready_attention_file "$state_dir" "Could not prepare infrastructure re-review for PR #$pr_number."
+    return 1
+  fi
+
+  launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" \
+    "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$state_dir/.needs-attention"
+    log "status" "♻ $issue → review relaunched after infrastructure recovery (attempt ${retry_number}/${retry_max})"
+    return 6
+  fi
+  if [[ "$rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    return 2
+  fi
+  write_ready_attention_file "$state_dir" "Could not relaunch infrastructure re-review for PR #$pr_number (rc=$rc)."
+  return 1
+}
+
 review_result_summary() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
@@ -9390,12 +9484,17 @@ launch_ready_phase() {
   if ! review_result_passes_ready_gate "$state_dir"; then
     local review_summary
     review_summary="$(review_result_summary "$state_dir")"
+    if review_result_infra_failure "$state_dir"; then
+      relaunch_review_after_infra_recovery "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" "$state_dir"
+      return $?
+    fi
     strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
     write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
     log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
     return 1
   fi
 
+  clear_review_infra_retry_state "$state_dir"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -11788,7 +11887,7 @@ run_queue_planner_with_policy() {
   # diagnostics file rather than shell variables; without the real stderr and
   # exit code the reason classifier degrades every planner failure to a
   # generic dependency_planning_failed.
-  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code" "$cancellation_owner"
 
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
@@ -11821,7 +11920,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" cancellation_owner="${4:-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -11832,7 +11931,11 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  if [[ -n "$cancellation_owner" ]]; then
+    printf 'step=%s exit=%s cancellationOwner=%s stderr=%s\n' "$step" "$exit_code" "$cancellation_owner" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  else
+    printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  fi
 }
 
 log_fetch_queue_plan_failure() {
@@ -11847,7 +11950,19 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered
+  local step="$1" details="${2:-}" lowered exit_code cancellation_owner
+  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
+  cancellation_owner="$(printf '%s' "$details" | sed -n 's/.*cancellationOwner=\([^ ]*\).*/\1/p')"
+
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    echo "timeout"
+    return 0
+  fi
+  if [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    echo "external_cancellation"
+    return 0
+  fi
+
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
@@ -11934,7 +12049,11 @@ build_queue_plan_once() {
   # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     timeout_secs=60
-    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
+    local now_ms classifier_deadline_ms classifier_grace_secs=8
+    now_ms="$(date +%s%3N 2>/dev/null || true)"
+    [[ "$now_ms" =~ ^[0-9]+$ ]] || now_ms="$(date +%s)000"
+    classifier_deadline_ms=$(( now_ms + ((timeout_secs - classifier_grace_secs) * 1000) ))
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache --queue-classifier-deadline-ms \"$classifier_deadline_ms\""
   else
     timeout_secs=15
     planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"
@@ -14186,7 +14305,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -14974,7 +15093,7 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
-            if [[ "$launch_rc" -eq 4 ]]; then
+            if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
@@ -15069,7 +15188,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              if [[ "$launch_rc" -eq 4 ]]; then
+              if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -15357,7 +15476,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15446,7 +15565,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15540,7 +15659,7 @@ monitor_issue_state() {
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15597,7 +15716,7 @@ monitor_issue_state() {
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
-      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -15646,7 +15765,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
