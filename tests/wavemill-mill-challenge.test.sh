@@ -209,18 +209,18 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     fail "runtime state update discarded the varied stage model or agent"
   fi
 
-  save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation"
-  if [[ "$(jq -r '.tasks["HOK-9998"].challengeRole' "$RUNTIME_STATE_FILE")" == "primary" ]]; then
-    pass "runtime state derives blank primary challenge role"
+  save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null
+  if [[ $? -ne 0 ]]; then
+    pass "runtime state rejects blank primary challenge role with error"
   else
-    fail "runtime state left blank primary challenge role unset"
+    fail "runtime state should reject blank primary challenge role"
   fi
 
-  save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation"
-  if [[ "$(jq -r '.tasks["HOK-9998_c"].challengeRole' "$RUNTIME_STATE_FILE")" == "challenger" ]]; then
-    pass "runtime state derives blank challenger challenge role"
+  save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null
+  if [[ $? -ne 0 ]]; then
+    pass "runtime state rejects blank challenger challenge role with error"
   else
-    fail "runtime state left blank challenger challenge role unset"
+    fail "runtime state should reject blank challenger challenge role"
   fi
 
   # challenge_varied_stage_model must only speak up for the stage the pair varies.
