@@ -306,15 +306,19 @@ wavemill native-agent certify --provider openai --model gpt-4o --phase read-only
 
 # OpenRouter example
 wavemill native-agent certify --provider openrouter --model openai/gpt-4o --phase read-only --dry-run
+
+# Publish the full current-suite matrix for every native-capable registry model
+wavemill native-agent certify --all --phase workflow
 ```
 
 **Flags:**
 
 | Flag | Required | Default | Description |
 |---|---|---|---|
-| `--provider` | yes | — | `openai` or `openrouter` |
-| `--model` | yes | — | Model ID (e.g. `gpt-4o`) |
-| `--phase` | yes | — | `read-only`, `patch`, or `workflow` |
+| `--provider` | yes unless `--all` | — | `openai` or `openrouter`; filters the batch with `--all` |
+| `--model` | yes unless `--all` | — | Model ID (e.g. `gpt-4o`) |
+| `--phase` | no | `workflow` | `read-only`, `patch`, or `workflow` |
+| `--all` | no | false | Certify every native-capable registry model for the current suite |
 | `--dry-run` | no | false | Run scenarios without writing an artifact |
 | `--json` | no | false | Machine-readable JSON output |
 | `--repo` | no | cwd | Repository root |
@@ -336,8 +340,8 @@ Successful provider/model certifications are Wavemill-wide. `wavemill native-age
 Set `WAVEMILL_NATIVE_CERTIFICATION_ROOT` to override the shared root in tests or controlled operator environments. Legacy repo-local artifacts can be imported explicitly:
 
 ```bash
-wavemill native-agent certifications import --repo /path/to/repo --dry-run --json
-wavemill native-agent certifications import --repo /path/to/repo
+wavemill native-agent certifications migrate --repo /path/to/repo --dry-run --json
+wavemill native-agent certifications migrate --repo /path/to/repo
 ```
 
 Routing and challenge mode derive candidates from the global effective-model projection, then apply provider availability, API-key checks, disabled-model policy, budgets, stage capability filters, global certification validity, and local readiness checks.

@@ -61,7 +61,7 @@ Subcommands:
   inspect      Inspect one global artifact and derived TTL/eligibility.
   verify       Verify one global artifact without running live scenarios.
   report       Report registry models as not-certified, certified-unavailable, stale, or ready-for-challenge.
-  certify      Run the live certification suite and publish a global artifact.
+  certify      Run the live certification suite and publish a global artifact; use --all for the full matrix.
   re-certify   Alias for certify.
   reidentify   Dry-run identity change impact; --execute writes only an audit artifact.
   invalidate   Dry-run invalidation impact; --execute writes only an audit artifact.
@@ -70,6 +70,7 @@ Subcommands:
 Examples:
   wavemill native-agent certifications list --json
   wavemill native-agent certifications verify --provider openrouter --model qwen-3-coder --phase patch
+  wavemill native-agent certifications certify --all --phase workflow
   wavemill native-agent certifications migrate --repo /path/to/repo --dry-run --json
 `);
 }

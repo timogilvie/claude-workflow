@@ -46,6 +46,7 @@ export interface ReviewResult {
   uiFindings?: ReviewFinding[];
   needsStrongerReviewer?: boolean;
   strongerReviewerReason?: string;
+  failureCategory?: string;
   metadata?: {
     branch: string;
     files: string[];

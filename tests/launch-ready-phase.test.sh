@@ -75,6 +75,11 @@ extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_result_passes_ready_gate" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_result_infra_failure" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "increment_review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_review_infra_retry_state" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "relaunch_review_after_infra_recovery" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_result_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
@@ -100,9 +105,10 @@ run_launch_case() {
 
     SESSION="ready-phase-test-$TEST_CASE"
     TOOLS_DIR="$CASE_DIR/tools"
+    REPO_DIR="$CASE_DIR/repo"
     AGENT_CMD="codex"
     READY_TRANSIENT_MAX_ATTEMPTS=6
-    mkdir -p "$TOOLS_DIR"
+    mkdir -p "$TOOLS_DIR" "$REPO_DIR"
 
     STATE_DIR="$CASE_DIR/feature/ready"
     WT_DIR="$CASE_DIR/worktree"
@@ -136,6 +142,27 @@ EOF
 {"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":2,"blockerCount":0,"warningCount":0,"reviewToolError":"provider failed"}}
 EOF
         ;;
+      infra_retry_healthy)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_unhealthy)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_capped)
+        printf "%s\n" "2" > "$STATE_DIR/.review-infra-retries"
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_error_tool)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":1,"blockerCount":0,"warningCount":0,"reviewToolError":"spawnSync /bin/bash ETIMEDOUT"}}
+EOF
+        ;;
     esac
 
     WRITE_STAGE_CALLS=""
@@ -144,6 +171,9 @@ EOF
     LOG_ERROR_OUTPUT=""
     LOG_WARN_OUTPUT=""
     LAUNCH_AGENT_CALLS=0
+    REVIEW_LAUNCH_CALLS=0
+    PREPARE_RECOVERY_CALLS=0
+    AGENT_VALIDATE_CALLS=0
     READY_PROMPT_CALLS=0
     READY_PROMPT_SUMMARY=""
     READY_LABEL_COUNT_FILE="$CASE_DIR/ready-label-calls"
@@ -206,6 +236,21 @@ EOF
       LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
       case "$TEST_CASE" in
         remediation_launch_failure) return 1 ;;
+        *) return 0 ;;
+      esac
+    }
+    _prepare_recovery_phase_launch() {
+      PREPARE_RECOVERY_CALLS=$((PREPARE_RECOVERY_CALLS + 1))
+      return 0
+    }
+    launch_review_phase() {
+      REVIEW_LAUNCH_CALLS=$((REVIEW_LAUNCH_CALLS + 1))
+      return 0
+    }
+    agent_validate_phase_launch() {
+      AGENT_VALIDATE_CALLS=$((AGENT_VALIDATE_CALLS + 1))
+      case "$TEST_CASE" in
+        infra_retry_unhealthy) return 1 ;;
         *) return 0 ;;
       esac
     }
@@ -369,6 +414,7 @@ EOF
     transient_attention="absent"
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
+    infra_retry_count="$(cat "$STATE_DIR/.review-infra-retries" 2>/dev/null || echo "")"
     ready_label_calls="$(cat "$READY_LABEL_COUNT_FILE" 2>/dev/null || echo "0")"
     ready_result_payload=""
     [[ -f "$STATE_DIR/.ready-result.json" ]] && ready_result_payload=$(cat "$STATE_DIR/.ready-result.json")
@@ -378,8 +424,8 @@ EOF
     debug_payload=""
     [[ -f "$DEBUG_FILE" ]] && debug_payload=$(cat "$DEBUG_FILE")
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nready_result_payload=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$ready_result_payload"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nreview_launch_calls=%s\nprepare_recovery_calls=%s\nagent_validate_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\ninfra_retry_count=%s\nready_result_payload=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$REVIEW_LAUNCH_CALLS" "$PREPARE_RECOVERY_CALLS" "$AGENT_VALIDATE_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$infra_retry_count" "$ready_result_payload"
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
   ' 2>&1
@@ -714,10 +760,34 @@ check_contains "pass after remediation demotes ready completion to debug" "$outp
 check_not_contains "pass after remediation no longer emits restored labels at status" "$output" "status   HOK-1300: Restored ready labels for PR #304"
 
 output="$(run_launch_case review_tool_error_gate)"
-check_contains "review tool error gate returns failure" "$output" "rc=1"
-check_contains "review tool error gate does not run ready tool" "$output" "ready_label_calls=0"
-check_contains "review tool error gate writes attention" "$output" "Review verdict does not pass readiness gate for PR #304"
-check_contains "review tool error gate surfaces exit code" "$output" "exitCode=2"
+check_contains "review tool error gate retries review" "$output" "rc=6"
+check_contains "review tool error gate probes runtime" "$output" "agent_validate_calls=1"
+check_contains "review tool error gate relaunches review" "$output" "review_launch_calls=1"
+check_contains "review tool error gate increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_healthy)"
+check_contains "infra retry healthy returns relaunch rc" "$output" "rc=6"
+check_contains "infra retry healthy probes runtime" "$output" "agent_validate_calls=1"
+check_contains "infra retry healthy prepares recovery" "$output" "prepare_recovery_calls=1"
+check_contains "infra retry healthy launches review" "$output" "review_launch_calls=1"
+check_contains "infra retry healthy increments counter" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_unhealthy)"
+check_contains "infra retry unhealthy refuses ready" "$output" "rc=1"
+check_contains "infra retry unhealthy probes runtime" "$output" "agent_validate_calls=1"
+check_contains "infra retry unhealthy does not launch review" "$output" "review_launch_calls=0"
+check_contains "infra retry unhealthy does not increment counter" "$output" "infra_retry_count="
+check_contains "infra retry unhealthy writes waiting attention" "$output" "waiting for reviewer runtime recovery"
+
+output="$(run_launch_case infra_retry_capped)"
+check_contains "infra retry capped refuses ready" "$output" "rc=1"
+check_contains "infra retry capped does not probe" "$output" "agent_validate_calls=0"
+check_contains "infra retry capped keeps counter" "$output" "infra_retry_count=2"
+check_contains "infra retry capped writes manual attention" "$output" "manual re-review required"
+
+output="$(run_launch_case infra_retry_error_tool)"
+check_contains "infra retry tool timeout retries review" "$output" "rc=6"
+check_contains "infra retry tool timeout launches review" "$output" "review_launch_calls=1"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"

@@ -254,6 +254,7 @@ TESTS=(
   shared/lib/native-agent/certification/identity.test.ts
   shared/lib/native-agent/certification/schema.test.ts
   shared/lib/native-agent/certification/store.test.ts
+  shared/lib/native-agent/certification/coverage.test.ts
   shared/lib/native-agent/certification/validator.test.ts
   shared/lib/native-agent/certification/scenarios.test.ts
   shared/lib/native-agent/certification/scenario-runner.test.ts

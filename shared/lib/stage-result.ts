@@ -87,6 +87,11 @@ export interface PlanningArtifacts {
 
 /** Artifacts produced during the review stage. */
 export type ReviewOutcomeVerdict = 'ready' | 'not_ready' | 'error';
+export const INFRA_REVIEW_FAILURE_CATEGORIES = [
+  'native-runtime-unavailable',
+  'native-review-prompt-missing',
+] as const;
+export type InfrastructureReviewFailureCategory = typeof INFRA_REVIEW_FAILURE_CATEGORIES[number];
 
 export interface ReviewArtifacts {
   type: 'review';
@@ -106,6 +111,8 @@ export interface ReviewArtifacts {
   warningCount?: number;
   /** Review tool failure summary when the final run errored. */
   reviewToolError?: string;
+  /** Retryable infrastructure category when review could not run meaningfully. */
+  failureCategory?: string;
   /** Structured diagnostics captured for review tool failures. */
   diagnostics?: Record<string, unknown>;
 }
@@ -117,6 +124,7 @@ export interface ReviewOutcome {
   blockerCount?: number;
   warningCount?: number;
   reviewToolError?: string;
+  failureCategory?: string;
   diagnostics?: Record<string, unknown>;
 }
 
@@ -345,6 +353,7 @@ export function extractReviewOutcome(result: StageResult | null | undefined): Re
       blockerCount,
       warningCount,
       reviewToolError: typeof artifacts.reviewToolError === 'string' ? artifacts.reviewToolError : undefined,
+      failureCategory: typeof artifacts.failureCategory === 'string' ? artifacts.failureCategory : undefined,
       diagnostics: objectRecord(artifacts.diagnostics),
     };
   }
@@ -360,11 +369,37 @@ export function extractReviewOutcome(result: StageResult | null | undefined): Re
       blockerCount,
       warningCount,
       reviewToolError: typeof nested.reviewToolError === 'string' ? nested.reviewToolError : undefined,
+      failureCategory: typeof nested.failureCategory === 'string' ? nested.failureCategory : undefined,
       diagnostics: objectRecord(nested.diagnostics),
     };
   }
 
   return null;
+}
+
+export function isInfrastructureReviewFailure(
+  input: StageResult | ReviewArtifacts | ReviewOutcome | null | undefined,
+): boolean {
+  if (!input) return false;
+  const outcome = isStageResultLike(input)
+    ? extractReviewOutcome(input)
+    : input as ReviewArtifacts | ReviewOutcome;
+  if (!outcome) return false;
+  const failureCategory = typeof outcome.failureCategory === 'string' ? outcome.failureCategory : undefined;
+  if (
+    failureCategory
+    && (INFRA_REVIEW_FAILURE_CATEGORIES as readonly string[]).includes(failureCategory)
+  ) {
+    return true;
+  }
+  return outcome.verdict === 'error'
+    && typeof outcome.reviewToolError === 'string'
+    && outcome.reviewToolError.trim() !== '';
+}
+
+function isStageResultLike(value: unknown): value is StageResult {
+  const record = objectRecord(value);
+  return record?.stage === 'review' && typeof record.status === 'string';
 }
 
 /**

@@ -41,6 +41,7 @@ export interface RouteProvenance {
   alternatives?: unknown;
   tradeoffs?: unknown;
   nearestNeighbors?: unknown;
+  escalation?: RouteEscalationProvenance;
   hokusai?: {
     apiVersion?: string;
     inferenceMethod?: string;
@@ -53,6 +54,46 @@ export interface RouteProvenance {
     exactRouteMatchCount?: number;
   };
   signalVector?: Record<string, unknown>;
+}
+
+export type RouteEscalationTriggerMetric = 'expectedSuccess' | 'confidence';
+export type RouteEscalationOutcome =
+  | 'escalated'
+  | 'not_triggered'
+  | 'no_stronger_candidate'
+  | 'no_affordable_stronger_candidate'
+  | 'retry_failed';
+
+export interface RouteEscalationTrigger {
+  metric: RouteEscalationTriggerMetric;
+  value: number;
+  threshold: number;
+}
+
+export interface RouteEscalationSummary {
+  planner: string;
+  coder: string;
+  reviewer: string;
+  cost: number;
+  expectedSuccess: number;
+  confidence: number;
+}
+
+export interface RouteEscalationProvenance {
+  enabled: boolean;
+  triggered: boolean;
+  triggers: RouteEscalationTrigger[];
+  outcome: RouteEscalationOutcome;
+  initialRoute: RouteEscalationSummary;
+  finalRoute: RouteEscalationSummary;
+  candidateCount: number;
+  thresholds: {
+    expectedSuccessFloor: number;
+    confidenceFloor: number;
+    minCoderClassRankIncrease: number;
+  };
+  budget?: number | null;
+  reason?: string;
 }
 
 export interface RouteDecisionWithProvenance extends WorkflowRouteDecision {
