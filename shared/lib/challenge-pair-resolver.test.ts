@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -135,6 +135,47 @@ test('resolver marks lone primary with launched challenger marker as orphan_pair
     assert.equal(result.record.winner, 'primary');
     assert.equal(result.record.terminalReason, 'orphan_pair');
     assert.equal(result.record.noComparisonReason, 'orphan_pair');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver repairs a blank primary role instead of writing an orphan forfeit', () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      'HOK-2870': {
+        pr: 1226,
+        branch: 'task/eight-test-files',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'HOK-2870',
+        challengeRole: '',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      'HOK-2870_c': {
+        pr: 1225,
+        branch: 'task/eight-test-files-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'HOK-2870',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        evalCompleted: true,
+      },
+    });
+
+    const result = resolveUnresolvablePair({
+      pairId: 'HOK-2870',
+      repoDir,
+      reason: 'orphan-sibling',
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /manual repair|not currently unresolvable|requires manual repair/);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks['HOK-2870'].challengeRole, 'primary');
   } finally {
     cleanup();
   }

@@ -8,6 +8,7 @@ import { listOpenIssuesByIdentifierPrefix, type LinearIssueSummary } from './lin
 import type { PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { resolveEffectiveChallengeRole } from './challenge-role-utils.ts';
 
 export type ChallengeRole = 'primary' | 'challenger';
 export const UNRESOLVABLE_REASONS = [
@@ -44,6 +45,7 @@ const TASK_IDENTIFIER_PATTERN = /^[A-Z]+-\d+(?:_c)?$/;
 const ORPHAN_PAIR_GRACE_MS = 60_000;
 const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
 const UNRESOLVABLE_REASON_SET = new Set<string>(UNRESOLVABLE_REASONS);
+const warnedInvalidChallengeRoleKeys = new Set<string>();
 
 interface ChallengePairInfo {
   pairId: string;
@@ -241,15 +243,22 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
 
     for (const [issueId, task] of Object.entries(tasks)) {
       const prNumber = parseWorkflowStatePr(task.pr);
-      if (
-        typeof task.challengePairId === 'string' &&
-        (task.challengeRole === 'primary' || task.challengeRole === 'challenger')
-      ) {
+      if (typeof task.challengePairId === 'string' && task.challengePairId.trim()) {
+        const pairId = task.challengePairId.trim();
+        const role = resolveEffectiveChallengeRole(issueId, pairId, task.challengeRole);
+        if (!role) {
+          const warnKey = `${pairId}:${issueId}`;
+          if (!warnedInvalidChallengeRoleKeys.has(warnKey)) {
+            warnedInvalidChallengeRoleKeys.add(warnKey);
+            console.warn(`[tend-challenge-gate] Skipping challenge task ${issueId} for pair ${pairId}: invalid challengeRole ${JSON.stringify(task.challengeRole)}`);
+          }
+          continue;
+        }
         const updatedAt = parseWorkflowStateTimestamp(task.updated);
         const branch = typeof task.branch === 'string' ? task.branch : null;
         const info: ChallengePairInfo = {
-          pairId: task.challengePairId,
-          role: task.challengeRole,
+          pairId,
+          role,
           issueId,
           branch,
           updatedAt,
@@ -258,11 +267,11 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
           challengePairMap.set(prNumber, info);
         }
 
-        const pairTaskState = taskStateByPair.get(task.challengePairId) ?? {};
-        pairTaskState[task.challengeRole] = {
+        const pairTaskState = taskStateByPair.get(pairId) ?? {};
+        pairTaskState[role] = {
           issueId,
           prNumber,
-          role: task.challengeRole,
+          role,
           branch,
           model: typeof task.challengeModel === 'string'
             ? task.challengeModel
@@ -286,7 +295,7 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
             : null,
           challengerLaunched: task.challengerLaunched === true,
         };
-        taskStateByPair.set(task.challengePairId, pairTaskState);
+        taskStateByPair.set(pairId, pairTaskState);
       }
     }
 

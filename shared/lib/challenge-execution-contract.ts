@@ -3,6 +3,7 @@ import path from 'node:path';
 import type { ChallengeStage } from './challenge-mode.ts';
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { EvalRecord, EvalRouting } from './eval-schema.ts';
+import { resolveEffectiveChallengeRole } from './challenge-role-utils.ts';
 
 export type ChallengeValidity = 'valid' | 'invalid_challenge' | 'identical_control';
 export type InvalidChallengeReason =
@@ -221,7 +222,11 @@ export function loadChallengeRoleFromState(
   if (!challengePairId) return undefined;
   const state = loadWorkflowChallengeState(repoDir);
   for (const key of stateTaskKeys(issueId, challengePairId)) {
-    const role = asChallengeSide(state?.tasks?.[key]?.challengeRole);
+    const task = state?.tasks?.[key];
+    if (!task) continue;
+    const role = asChallengeSide(task.challengeRole)
+      ?? resolveEffectiveChallengeRole(key, challengePairId, task.challengeRole)
+      ?? undefined;
     if (role) return role;
   }
   return undefined;

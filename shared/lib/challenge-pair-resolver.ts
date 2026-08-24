@@ -24,6 +24,7 @@ import {
   parseAbortFailureKind,
   type ChallengeArmFailure,
 } from './arm-failure-taxonomy.ts';
+import { repairChallengePairingSync } from './challenge-pairing-repair.ts';
 
 const ORPHAN_PAIR_GRACE_MS = 60_000;
 const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
@@ -58,6 +59,12 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
     return { status: 'already-resolved', recordExists: true };
   }
 
+  try {
+    repairChallengePairingSync({ pairId: input.pairId, repoDir: input.repoDir });
+  } catch (error) {
+    console.warn(`[challenge-pair-resolver] Failed to repair pairing metadata for ${input.pairId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
   const workflow = loadWorkflowStateChallengeData(input.repoDir);
   const pairState = workflow.taskStateByPair.get(input.pairId);
   if (!pairState) {
@@ -85,6 +92,7 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
   const resolution = buildResolutionRecord({
     pairId: input.pairId,
     pairState,
+    challengePairMap: workflow.challengePairMap,
     reason: resolvedReason,
     timestamp: (input.now ?? (() => new Date()))().toISOString(),
     retryMax,
@@ -176,6 +184,7 @@ function isHardFailureExhausted(task: TaskEvalState | undefined, retryMax: numbe
 function buildResolutionRecord(input: {
   pairId: string;
   pairState: PairTaskState;
+  challengePairMap: Map<number, { pairId: string }>;
   reason: UnresolvableReason;
   timestamp: string;
   retryMax: number;
@@ -316,10 +325,19 @@ function buildResolutionRecord(input: {
     };
   }
 
+  if (input.reason === 'orphan-sibling' && primary && challenger) {
+    return null;
+  }
+
   const loneSide = primary ?? challenger;
   if (!loneSide) {
     return null;
   }
+
+  if (input.reason === 'orphan-sibling' && hasOtherOpenPrForPair(input.challengePairMap, input.pairId, loneSide.prNumber)) {
+    return null;
+  }
+
   const armFailures = buildArmFailures(primary, challenger);
   if (!loneSide.evalCompleted) {
     return {
@@ -368,6 +386,19 @@ function buildResolutionRecord(input: {
       timestamp: input.timestamp,
     }),
   };
+}
+
+function hasOtherOpenPrForPair(
+  challengePairMap: Map<number, { pairId: string }>,
+  pairId: string,
+  representativePr: number | null,
+): boolean {
+  for (const [prNumber, info] of challengePairMap) {
+    if (info.pairId === pairId && prNumber > 0 && prNumber !== representativePr) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function buildArmFailures(
