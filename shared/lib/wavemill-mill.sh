@@ -510,6 +510,8 @@ write_launch_plan() {
     route_review_mode="${TASK_REVIEW_MODE_BY_ISSUE[$issue]:-$(echo "$route_json" | jq -r '.reviewRecommended // .reviewMode // "static"' 2>/dev/null)}"
     route_max_cost_usd="$(echo "$route_json" | jq -r '.constraints.maxCostUsd // empty' 2>/dev/null)"
     [[ -z "$route_max_cost_usd" ]] && route_max_cost_usd="${DEFAULT_MAX_COST_USD:-}"
+    local route_signals_json="$(echo "$route_json" | jq -c '.signals // {}')"
+    log "info" "[Wavemill Router] Signals: $route_signals_json"
     challenge_flag="${TASK_CHALLENGE_BY_ISSUE[$issue]:-false}"
     challenge_pair="${TASK_CHALLENGE_PAIR_BY_ISSUE[$issue]:-}"
     challenge_role="${TASK_CHALLENGE_ROLE_BY_ISSUE[$issue]:-}"
