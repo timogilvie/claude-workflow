@@ -65,19 +65,24 @@ Load into pandas:
     });
     const partition = partitionEvidence(records, 'training_export');
     const exclusionSummary = formatEvidenceExclusionSummary(partition.reasonCounts);
+    const exportedCount = args['include-held'] ? records.length : partition.eligible.length;
 
     if (args.output) {
       writeFileSync(args.output as string, output, 'utf-8');
-      console.error(`Exported ${records.length} record(s) to ${args.output} (${format})`);
+      console.error(`Exported ${exportedCount} record(s) to ${args.output} (${format})`);
       if (!args['include-held'] && partition.excluded.length > 0) {
         console.error(`Excluded ${partition.excluded.length} held record(s): ${exclusionSummary}`);
+      } else if (args['include-held'] && partition.excluded.length > 0) {
+        console.error(`Included ${partition.excluded.length} operationally held record(s): ${exclusionSummary}`);
       }
     } else {
       process.stdout.write(output);
       if (process.stderr.isTTY) {
-        console.error(`\nExported ${records.length} record(s) as ${format}`);
+        console.error(`\nExported ${exportedCount} record(s) as ${format}`);
         if (!args['include-held'] && partition.excluded.length > 0) {
           console.error(`Excluded ${partition.excluded.length} held record(s): ${exclusionSummary}`);
+        } else if (args['include-held'] && partition.excluded.length > 0) {
+          console.error(`Included ${partition.excluded.length} operationally held record(s): ${exclusionSummary}`);
         }
       }
     }

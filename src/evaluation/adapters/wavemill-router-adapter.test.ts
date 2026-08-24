@@ -87,6 +87,51 @@ test('missing eval or artifact lowers scoreable coverage', async () => {
   }
 });
 
+test('router benchmark excludes held eval evidence before scoring rows are built', async () => {
+  const tmp = makeTempDir();
+  try {
+    const heldEval = JSON.stringify({
+      id: 'held-eval-only',
+      schemaVersion: '1.43.0',
+      originalPrompt: 'held eval only',
+      modelId: 'ox-alpha',
+      modelVersion: 'ox-alpha',
+      score: 1,
+      scoreBand: 'Full Success',
+      timeSeconds: 10,
+      timestamp: '2026-05-01T00:00:00.000Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'held eval only',
+      issueId: 'HOK-HELD',
+      workflowCost: 1,
+      constraints: { maxCostUsd: 2 },
+      modelIdentityAttribution: {
+        observedAt: '2026-08-01T00:00:00.000Z',
+        roles: {},
+        provisionalRoles: ['coder'],
+        candidateOnlyProvisional: [],
+      },
+    });
+    const evalsDir = writeFixtureEvals(join(tmp, 'evals'), [heldEval]);
+    const result = await runWavemillRouterEval({
+      repoDir: process.cwd(),
+      policy: 'replay_exact_match',
+      evalsDir,
+      artifactsDir: join(fixtureRoot, 'artifacts'),
+      persist: false,
+    });
+
+    assert.equal(result.score.wavemill_router_diagnostics.total_records, 4);
+    assert.equal(result.excludedEvidence.count, 1);
+    assert.deepEqual(result.excludedEvidence.reasonCounts, { provisional_model_identity: 1 });
+    assert.equal(result.records.some((record) => record.evalRecordId === 'held-eval-only'), false);
+  } finally {
+    cleanup(tmp);
+  }
+});
+
 test('malformed JSON is loaded leniently and classified as invalid', async () => {
   const tmp = makeTempDir();
   try {

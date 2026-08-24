@@ -3,6 +3,9 @@
  */
 
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { EvalRecord } from './eval-schema.ts';
 import {
   buildCalibration,
@@ -11,6 +14,8 @@ import {
   classifyValidityViolations,
   computeRegret,
   effectiveModelCount,
+  formatHokusaiAuditReport,
+  runHokusaiRouterAudit,
   stratifiedSampleRecords,
   summarizeDeterminism,
   summarizeSensitivity,
@@ -23,6 +28,18 @@ let failed = 0;
 function test(name: string, fn: () => void) {
   try {
     fn();
+    passed += 1;
+    console.log(`  PASS  ${name}`);
+  } catch (err) {
+    failed += 1;
+    console.log(`  FAIL  ${name}`);
+    console.log(`        ${(err as Error).message}`);
+  }
+}
+
+async function testAsync(name: string, fn: () => Promise<void>) {
+  try {
+    await fn();
     passed += 1;
     console.log(`  PASS  ${name}`);
   } catch (err) {
@@ -209,6 +226,51 @@ test('computeRegret reports zero regret for best historical model', () => {
   ], [strong, weak], 2);
   assert.equal(regret.planner.meanRegret, 0);
   assert.equal(regret.coder.meanRegret, 0);
+});
+
+await testAsync('runHokusaiRouterAudit excludes held evidence before dry-run sampling', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'hokusai-router-audit-'));
+  const previousGlobalAggregatedPath = process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+  try {
+    mkdirSync(join(repoDir, '.wavemill', 'evals'), { recursive: true });
+    const verified = makeRecord('verified', 'feature', '2026-06-01T00:00:00Z');
+    const held = {
+      ...makeRecord('held', 'bugfix', '2026-06-02T00:00:00Z'),
+      modelIdentityAttribution: {
+        observedAt: '2026-08-01T00:00:00.000Z',
+        roles: {},
+        provisionalRoles: ['coder'],
+        candidateOnlyProvisional: [],
+      },
+    } satisfies EvalRecord;
+    writeFileSync(
+      join(repoDir, '.wavemill', 'evals', 'evals.jsonl'),
+      [verified, held].map((record) => JSON.stringify(record)).join('\n') + '\n',
+      'utf-8',
+    );
+    writeFileSync(join(repoDir, '.wavemill', 'evals', 'aggregated-evals.backfilled.jsonl'), '', 'utf-8');
+    writeFileSync(join(repoDir, '.wavemill', 'evals', 'aggregated-evals.jsonl'), '', 'utf-8');
+    process.env.WAVEMILL_AGGREGATED_EVALS_PATH = join(repoDir, '.wavemill', 'evals', 'aggregated-evals.jsonl');
+
+    const report = await runHokusaiRouterAudit({
+      repoDir,
+      dryRun: true,
+      output: join(repoDir, 'audit.json'),
+    });
+
+    assert.equal(report.corpusRecords, 1);
+    assert.equal(report.sampledRecords, 1);
+    assert.equal(report.excludedRecords, 1);
+    assert.deepEqual(report.exclusionReasonCounts, { provisional_model_identity: 1 });
+    assert.match(formatHokusaiAuditReport(report), /Excluded held evidence: 1/);
+  } finally {
+    if (previousGlobalAggregatedPath === undefined) {
+      delete process.env.WAVEMILL_AGGREGATED_EVALS_PATH;
+    } else {
+      process.env.WAVEMILL_AGGREGATED_EVALS_PATH = previousGlobalAggregatedPath;
+    }
+    rmSync(repoDir, { recursive: true, force: true });
+  }
 });
 
 if (failed > 0) {

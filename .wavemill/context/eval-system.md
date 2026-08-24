@@ -13,6 +13,8 @@ Historical and aggregated eval datasets now also carry explicit rubric provenanc
 
 Eval records now also carry optional `harnessId` attribution when a resource manifest is available, allowing downstream analysis to group outcomes by the behavior-relevant prompt, memory, runtime, and agent-config resources used by the run.
 
+Provisional model-identity holds are enforced at read time through `shared/lib/model-evidence-policy.ts`. Raw JSONL rows remain in the single append-only stream, but default training export, router benchmark, Hokusai projection, and launch-priority persistence partition records before flattening, scoring, submission, or writes. Each filtered consumer reports stable reason counts such as `provisional_model_identity`, `provisional_candidate_decision`, `registry_provisional_fallback`, and `provisional-observation-only`; operational export can include held rows with the hold reasons preserved.
+
 ## Key Files
 
 | File | Role | Notes |
@@ -141,6 +143,7 @@ Compatibility and aggregation notes:
 
 ## Recent Changes
 
+- 2026-08-23: Added read-time provisional evidence enforcement for HOK-2859. Default training export omits held rows with reason-count telemetry, operational export keeps them observable, and fail-closed consumers use `model-evidence-policy.ts` instead of trusting stale `trainingEligible` booleans.
 - 2026-08-22: Added structured PR diff availability and local diff fallback for HOK-2853. Eval records now fast-fail with `failureReason: pr_diff_unavailable` when a PR diff cannot be read, and challenge comparisons persist inconclusive `diff_unavailable` / `eval_unscored` records instead of sending placeholders to judges.
 - 2026-04-28: Aligned challenge PR comparison judging with the canonical 5-criterion rubric used by per-PR evals (HOK-1450), replacing legacy comparison dimensions and surfacing the same rubric in planning/coding prompts before implementation.
 - 2026-07-13: Added optional `attempted_model` and `model_alias` to eval schema version `1.32.0` plus `attachAttemptedModel()` in `eval-record-builder.ts` (HOK-2234); launch-priority audits can now preserve the model actually attempted before fallback without invalidating older rows.

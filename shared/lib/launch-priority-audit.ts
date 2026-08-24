@@ -20,6 +20,7 @@ import { readJsonlFile } from './jsonl-utils.ts';
 import { getEffectiveRegistry, getModel } from './model-registry.ts';
 import type { QuotaStatus } from './quota-state.ts';
 import { getModelStatus } from './quota-state.ts';
+import { partitionEvidence } from './model-evidence-policy.ts';
 
 export type LaunchPriorityRole = RoleEligibility;
 export type LaunchPriorityStatus = ModelStatus;
@@ -68,6 +69,8 @@ export interface LaunchPriorityAudit {
   schemaVersion: '1';
   coverageTargetPerRole: number;
   models: ModelRoleEvidence[];
+  excludedRecords: number;
+  exclusionReasonCounts: Record<string, number>;
   zeroEvidence: string[];
   belowTarget: string[];
   samplingPlan: SamplingPlanEntry[];
@@ -356,7 +359,8 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
   );
   const attemptCounters = new Map<string, Counter>();
   const exposureCounters = new Map<string, number>();
-  const records = loadEvalRecords(options);
+  const evidencePartition = partitionEvidence(loadEvalRecords(options), 'launch_priority_persistence');
+  const records = evidencePartition.eligible;
   const registry = getEffectiveRegistry(options.repoDir);
   const quotaStatus = options.quotaStatus ?? ((modelId: string) => getModelStatus(modelId, options.repoDir));
   const costOfModel = options.costOfModel ?? defaultCostOfModel;
@@ -559,6 +563,8 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
     schemaVersion: AUDIT_SCHEMA_VERSION,
     coverageTargetPerRole,
     models: modelEvidence,
+    excludedRecords: evidencePartition.excluded.length,
+    exclusionReasonCounts: evidencePartition.reasonCounts,
     zeroEvidence,
     belowTarget,
     samplingPlan: samplingCandidates,
