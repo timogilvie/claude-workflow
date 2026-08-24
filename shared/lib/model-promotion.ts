@@ -22,6 +22,7 @@ import {
   type ModelRegistryCatalog,
 } from './model-registry-loader.ts';
 import { computeNormalizedEvaluationCost, type ModelPricing } from './workflow-cost.ts';
+import { deduplicateByHash } from './eval-aggregator.ts';
 import {
   CERTIFICATION_SCHEMA_VERSION,
   isRevisionAwareArtifact,
@@ -89,6 +90,20 @@ export interface PromotionFileManifest {
   tempPath?: string;
 }
 
+export interface DerivedCorpusManifest {
+  path: string;
+  relativePath: string;
+  sourcePath: string;
+  beforeHash: string;
+  afterHash: string;
+  beforeRecordCount: number;
+  afterRecordCount: number;
+  sourceRawRecordCount: number;
+  duplicatesRemoved: number;
+  backupPath?: string;
+  tempPath?: string;
+}
+
 export interface PromotionManifest {
   schemaVersion: '1';
   manifestId: string;
@@ -124,6 +139,7 @@ export interface PromotionManifest {
     provisionalSuccessor: string;
     finalPredecessor: string;
   };
+  derivedCorpora: DerivedCorpusManifest[];
   diagnostics: string[];
   manifestPath?: string;
 }
@@ -208,6 +224,13 @@ const PROVIDER_ID_KEYS = new Set([
 
 const HOKUSAI_NAME = /hokusai/i;
 
+const DERIVED_CORPUS_BASENAMES = new Set([
+  'aggregated-evals.jsonl',
+  'aggregated-evals.backfilled.jsonl',
+]);
+
+const RAW_EVALS_RELATIVE_PATH = join('.wavemill', 'evals', 'evals.jsonl');
+
 interface ParsedJsonl {
   records: unknown[];
   lineCount: number;
@@ -228,9 +251,15 @@ interface PlannedFile {
   content: string;
 }
 
+interface PlannedDerivedCorpus {
+  manifest: DerivedCorpusManifest;
+  content: string;
+}
+
 interface PromotionPlan {
   manifest: PromotionManifest;
   files: PlannedFile[];
+  derivedCorpora: PlannedDerivedCorpus[];
 }
 
 export function parseModelTransitionSpecFile(path: string): ModelTransitionSpec {
@@ -310,6 +339,29 @@ export function applyModelPromotion(options: ApplyPromotionOptions): PromotionMa
     renameSync(file.manifest.tempPath, file.manifest.path);
   }
 
+  for (const derived of plan.derivedCorpora) {
+    if (derived.manifest.beforeHash === derived.manifest.afterHash) {
+      continue;
+    }
+    const backupPath = derived.manifest.backupPath;
+    const tempPath = derived.manifest.tempPath;
+    if (!backupPath || !tempPath) {
+      throw new Error(`Internal error: missing backup/temp path for derived corpus ${derived.manifest.relativePath}`);
+    }
+    mkdirSync(dirname(backupPath), { recursive: true });
+    mkdirSync(dirname(tempPath), { recursive: true });
+    if (!existsSync(backupPath)) {
+      copyFileSync(derived.manifest.path, backupPath);
+    }
+    writeFileSync(tempPath, derived.content, 'utf-8');
+    const stagedHash = sha256(readFileSync(tempPath, 'utf-8'));
+    if (stagedHash !== derived.manifest.afterHash) {
+      unlinkSync(tempPath);
+      throw new Error(`Internal error: staged hash mismatch for derived corpus ${derived.manifest.relativePath}`);
+    }
+    renameSync(tempPath, derived.manifest.path);
+  }
+
   const appliedManifest: PromotionManifest = {
     ...plan.manifest,
     mode: 'apply',
@@ -322,26 +374,28 @@ export function applyModelPromotion(options: ApplyPromotionOptions): PromotionMa
 
 export function rollbackModelPromotion(manifestPath: string): PromotionManifest {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')) as PromotionManifest;
+  const restorations: Array<{ path: string; backupPath: string; beforeHash: string }> = [];
   for (const file of manifest.files) {
-    if (!file.backupPath) {
-      continue;
+    if (!file.backupPath) continue;
+    restorations.push({ path: file.path, backupPath: file.backupPath, beforeHash: file.beforeHash });
+  }
+  for (const derived of manifest.derivedCorpora ?? []) {
+    if (!derived.backupPath) continue;
+    restorations.push({ path: derived.path, backupPath: derived.backupPath, beforeHash: derived.beforeHash });
+  }
+  for (const restoration of restorations) {
+    if (!existsSync(restoration.backupPath)) {
+      throw new Error(`Missing backup for rollback: ${restoration.backupPath}`);
     }
-    if (!existsSync(file.backupPath)) {
-      throw new Error(`Missing backup for rollback: ${file.backupPath}`);
-    }
-    const backupContent = readFileSync(file.backupPath, 'utf-8');
-    if (sha256(backupContent) !== file.beforeHash) {
-      throw new Error(`Backup hash mismatch for rollback: ${file.backupPath}`);
+    const backupContent = readFileSync(restoration.backupPath, 'utf-8');
+    if (sha256(backupContent) !== restoration.beforeHash) {
+      throw new Error(`Backup hash mismatch for rollback: ${restoration.backupPath}`);
     }
   }
-
-  for (const file of manifest.files) {
-    if (!file.backupPath) {
-      continue;
-    }
-    const tempPath = `${file.path}.rollback-${process.pid}.tmp`;
-    copyFileSync(file.backupPath, tempPath);
-    renameSync(tempPath, file.path);
+  for (const restoration of restorations) {
+    const tempPath = `${restoration.path}.rollback-${process.pid}.tmp`;
+    copyFileSync(restoration.backupPath, tempPath);
+    renameSync(tempPath, restoration.path);
   }
 
   const rolledBack: PromotionManifest = {
@@ -431,11 +485,34 @@ function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
     evalIdsAfter,
   });
 
-  const status: PromotionStatus = oldReferencesBefore === 0 && finalReferencesBefore > 0
+  const rawEvalsPlan = plannedFiles.find(
+    (file) => relative(repoDir, file.manifest.path) === RAW_EVALS_RELATIVE_PATH,
+  );
+  const derivedCorpora = planDerivedCorpora(repoDir, spec, rawEvalsPlan);
+
+  const derivedNeedsRebuild = derivedCorpora.some(
+    (entry) => entry.manifest.beforeHash !== entry.manifest.afterHash,
+  );
+  const status: PromotionStatus = oldReferencesBefore === 0 && finalReferencesBefore > 0 && !derivedNeedsRebuild
     ? 'already_applied'
     : 'planned';
   if (status === 'already_applied') {
     diagnostics.push('promotion already appears applied; no writes planned');
+  }
+  for (const derived of derivedCorpora) {
+    const rebuiltTotal = derived.manifest.afterRecordCount + derived.manifest.duplicatesRemoved;
+    if (rebuiltTotal !== derived.manifest.sourceRawRecordCount) {
+      throw new Error(
+        `Derived corpus ${derived.manifest.relativePath} raw-to-derived record counts do not reconcile: `
+        + `sourceRaw=${derived.manifest.sourceRawRecordCount} after=${derived.manifest.afterRecordCount} `
+        + `duplicatesRemoved=${derived.manifest.duplicatesRemoved}`,
+      );
+    }
+    diagnostics.push(
+      `Derived corpus ${derived.manifest.relativePath} will be rebuilt from re-keyed raw evals`
+      + ` (source ${relative(repoDir, derived.manifest.sourcePath)}, `
+      + `${derived.manifest.sourceRawRecordCount} raw → ${derived.manifest.afterRecordCount} deduped).`,
+    );
   }
 
   const manifest: PromotionManifest = {
@@ -468,11 +545,12 @@ function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
       provisionalSuccessor: spec.final.alias,
       finalPredecessor: spec.provisional.alias,
     },
+    derivedCorpora: derivedCorpora.map((entry) => entry.manifest),
     diagnostics,
     manifestPath: promotionManifestPath(repoDir, spec),
   };
 
-  return { manifest, files: plannedFiles };
+  return { manifest, files: plannedFiles, derivedCorpora };
 }
 
 function rebuildPlanFromManifest(
@@ -610,7 +688,7 @@ function transformCatalogFile(path: string, spec: ModelTransitionSpec, now: stri
       return {
         value: catalog,
         fieldChanges: 0,
-        oldReferencesBefore: beforeRefs,
+        oldReferencesBefore: 0,
         finalReferencesBefore: beforeFinalRefs,
         finalReferencesAfter: beforeFinalRefs,
         normalizedCost: emptyNormalizedCostCounts(),
@@ -858,19 +936,31 @@ function finalizeEvalRecord(
       requireExplicitCache: true,
       pricingRevision: spec.final.pricingRevision ?? spec.promotionId,
     });
-    cloned.normalizedEvaluationCost = {
-      ...normalized,
-      computedAt: now,
-    };
     if (normalized.coverage === 'complete') normalizedCost.complete++;
     if (normalized.coverage === 'missing_token_usage') normalizedCost.missingTokenUsage++;
     if (normalized.coverage === 'missing_cache_usage') normalizedCost.missingCacheUsage++;
     if (normalized.coverage === 'missing_cache_pricing') normalizedCost.missingCachePricing++;
-    changed = true;
+    if (!normalizedCostAlreadyMatches(cloned.normalizedEvaluationCost, normalized)) {
+      cloned.normalizedEvaluationCost = {
+        ...normalized,
+        computedAt: now,
+      };
+      changed = true;
+    }
     break;
   }
 
   return { record: cloned, changed, normalizedCost };
+}
+
+function normalizedCostAlreadyMatches(
+  existing: EvalRecord['normalizedEvaluationCost'] | undefined,
+  computed: ReturnType<typeof computeNormalizedEvaluationCost>,
+): boolean {
+  if (!existing) return false;
+  const existingSansComputedAt = { ...existing } as Record<string, unknown>;
+  delete existingSansComputedAt.computedAt;
+  return JSON.stringify(existingSansComputedAt) === JSON.stringify(computed);
 }
 
 function transformValue(value: unknown, spec: ModelTransitionSpec, parentKey?: string): { value: unknown; changed: number } {
@@ -1001,6 +1091,7 @@ function discoverPromotionFiles(repoDir: string, catalogPath?: string): string[]
       const path = join(dir, entry.name);
       if (path.includes(`${sep}.wavemill${sep}model-promotions${sep}`)) continue;
       if (path.endsWith('.backup') || path.includes('.promotion-tmp-')) continue;
+      if (DERIVED_CORPUS_BASENAMES.has(entry.name)) continue;
       if (path.endsWith('.json') || path.endsWith('.jsonl')) {
         files.push(path);
       }
@@ -1010,6 +1101,61 @@ function discoverPromotionFiles(repoDir: string, catalogPath?: string): string[]
   const normalized = new Set(files.map((file) => resolve(file)));
   if (catalogPath) normalized.add(resolve(catalogPath));
   return [...normalized].sort();
+}
+
+function discoverDerivedCorpusFiles(repoDir: string): string[] {
+  const evalsDir = join(repoDir, '.wavemill', 'evals');
+  if (!existsSync(evalsDir)) return [];
+  const files: string[] = [];
+  for (const entry of readdirSync(evalsDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue;
+    if (DERIVED_CORPUS_BASENAMES.has(entry.name)) {
+      files.push(resolve(join(evalsDir, entry.name)));
+    }
+  }
+  return files.sort();
+}
+
+function planDerivedCorpora(
+  repoDir: string,
+  spec: ModelTransitionSpec,
+  rawEvalsPlan: PlannedFile | undefined,
+): PlannedDerivedCorpus[] {
+  const derived = discoverDerivedCorpusFiles(repoDir);
+  if (derived.length === 0) return [];
+  if (!rawEvalsPlan) {
+    throw new Error(
+      `Derived eval corpora exist at ${derived.map((path) => relative(repoDir, path)).join(', ')}`
+      + ` but ${RAW_EVALS_RELATIVE_PATH} is missing; cannot rebuild without a raw source.`,
+    );
+  }
+  const rawRecords = parseStrictJsonl(rawEvalsPlan.manifest.path, rawEvalsPlan.content).records as EvalRecord[];
+  const deduped = deduplicateByHash(rawRecords);
+  const rebuiltContent = serializeJsonl(deduped.deduplicatedRecords);
+  const rebuiltHash = sha256(rebuiltContent);
+  const planned: PlannedDerivedCorpus[] = [];
+  for (const path of derived) {
+    const beforeContent = readFileSync(path, 'utf-8');
+    const beforeHash = sha256(beforeContent);
+    const beforeParsed = parseStrictJsonl(path, beforeContent);
+    planned.push({
+      manifest: {
+        path,
+        relativePath: relative(repoDir, path),
+        sourcePath: rawEvalsPlan.manifest.path,
+        beforeHash,
+        afterHash: rebuiltHash,
+        beforeRecordCount: beforeParsed.records.length,
+        afterRecordCount: deduped.uniqueRecords,
+        sourceRawRecordCount: deduped.totalRecords,
+        duplicatesRemoved: deduped.duplicatesRemoved,
+        backupPath: backupPathFor(repoDir, spec, path),
+        tempPath: tempPathFor(path, spec),
+      },
+      content: rebuiltContent,
+    });
+  }
+  return planned;
 }
 
 function resolveCatalogPath(repoDir: string, spec: ModelTransitionSpec): string | undefined {

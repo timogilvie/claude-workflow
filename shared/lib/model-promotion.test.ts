@@ -281,4 +281,46 @@ describe('model promotion', () => {
       cleanup(repoDir);
     }
   });
+
+  it('rebuilds derived aggregated corpora from re-keyed raw evals and rolls them back on rollback', () => {
+    const repoDir = makeRepo();
+    try {
+      const aggregatedPath = join(repoDir, '.wavemill', 'evals', 'aggregated-evals.jsonl');
+      const backfilledPath = join(repoDir, '.wavemill', 'evals', 'aggregated-evals.backfilled.jsonl');
+      const staleRecord = JSON.stringify(makeEvalRecord());
+      writeFileSync(aggregatedPath, `${staleRecord}\n`);
+      writeFileSync(backfilledPath, `${staleRecord}\n`);
+      const staleAggregatedBefore = readFileSync(aggregatedPath, 'utf-8');
+      const staleBackfilledBefore = readFileSync(backfilledPath, 'utf-8');
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.derivedCorpora.length, 2);
+      const aggregatedManifest = plan.derivedCorpora.find((entry) => entry.relativePath.endsWith('aggregated-evals.jsonl') && !entry.relativePath.includes('backfilled'));
+      assert.ok(aggregatedManifest);
+      assert.equal(aggregatedManifest.sourceRawRecordCount, 1);
+      assert.equal(aggregatedManifest.afterRecordCount + aggregatedManifest.duplicatesRemoved, 1);
+      assert.notEqual(aggregatedManifest.beforeHash, aggregatedManifest.afterHash);
+      // Dry-run must not touch derived files.
+      assert.equal(readFileSync(aggregatedPath, 'utf-8'), staleAggregatedBefore);
+      assert.equal(readFileSync(backfilledPath, 'utf-8'), staleBackfilledBefore);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(applied.derivedCorpora.length, 2);
+      const [aggregatedRecord] = readFileSync(aggregatedPath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(aggregatedRecord.modelId, 'gpt-9-test');
+      const [backfilledRecord] = readFileSync(backfilledPath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(backfilledRecord.modelId, 'gpt-9-test');
+
+      const second = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
+      assert.equal(second.status, 'already_applied');
+
+      const rolledBack = rollbackModelPromotion(applied.manifestPath!);
+      assert.equal(rolledBack.status, 'rolled_back');
+      assert.equal(readFileSync(aggregatedPath, 'utf-8'), staleAggregatedBefore);
+      assert.equal(readFileSync(backfilledPath, 'utf-8'), staleBackfilledBefore);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
 });
