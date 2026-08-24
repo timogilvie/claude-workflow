@@ -81,18 +81,6 @@ check_skip_result "fractional future nextRetryAt skips" "skip"
 check_equals "UTC Z timestamp parses independent of local TZ" \
   "1787231067" "$(wavemill_iso8601_to_epoch '2026-08-20T13:04:27Z')"
 
-printf '{}\n' > "$STATE_DIR/queue-health.json"
-queue_health_record_failure "timeout" "plan_queue_failed" \
-  "123" "123" "60" "143" "" "queue_plan_timeout" \
-  "" "planner timeout" '{"taskCount":2,"explicitDependencyCount":1}' || fail "record failure before success"
-queue_health_record_success "124" "124" "250" "planner command" || fail "record success after failure"
-
-check_equals "success clears active status" "healthy" "$(jq -r '.status' "$STATE_DIR/queue-health.json")"
-check_equals "success clears active failure count" "0" "$(jq -r '.failureCount' "$STATE_DIR/queue-health.json")"
-check_equals "success preserves cumulative failures" "1" "$(jq -r '.totalFailureCount' "$STATE_DIR/queue-health.json")"
-check_equals "success preserves last failure reason" "timeout" "$(jq -r '.lastFailureEvidence.degradationReason' "$STATE_DIR/queue-health.json")"
-check_equals "success preserves last failure owner" "queue_plan_timeout" "$(jq -r '.lastFailureEvidence.planner.cancellationOwner' "$STATE_DIR/queue-health.json")"
-
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 if (( FAIL > 0 )); then

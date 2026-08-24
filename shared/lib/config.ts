@@ -260,14 +260,6 @@ export interface RouterConfig {
   };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
-  escalation?: RouterEscalationConfig;
-}
-
-export interface RouterEscalationConfig {
-  enabled?: boolean;
-  expectedSuccessFloor?: number;
-  confidenceFloor?: number;
-  minCoderClassRankIncrease?: number;
 }
 
 export interface ChallengeGateConfig {

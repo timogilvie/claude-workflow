@@ -11961,7 +11961,7 @@ run_queue_planner_with_policy() {
   # diagnostics file rather than shell variables; without the real stderr and
   # exit code the reason classifier degrades every planner failure to a
   # generic dependency_planning_failed.
-  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code" "$cancellation_owner"
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
 
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
@@ -11994,7 +11994,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" cancellation_owner="${4:-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -12005,11 +12005,7 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  if [[ -n "$cancellation_owner" ]]; then
-    printf 'step=%s exit=%s cancellationOwner=%s stderr=%s\n' "$step" "$exit_code" "$cancellation_owner" "$bounded" > "$diagnostics_file" 2>/dev/null || true
-  else
-    printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
-  fi
+  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
 }
 
 log_fetch_queue_plan_failure() {
@@ -12024,19 +12020,7 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered exit_code cancellation_owner
-  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
-  cancellation_owner="$(printf '%s' "$details" | sed -n 's/.*cancellationOwner=\([^ ]*\).*/\1/p')"
-
-  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
-    echo "timeout"
-    return 0
-  fi
-  if [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
-    echo "external_cancellation"
-    return 0
-  fi
-
+  local step="$1" details="${2:-}" lowered
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
@@ -12123,11 +12107,7 @@ build_queue_plan_once() {
   # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     timeout_secs=60
-    local now_ms classifier_deadline_ms classifier_grace_secs=8
-    now_ms="$(date +%s%3N 2>/dev/null || true)"
-    [[ "$now_ms" =~ ^[0-9]+$ ]] || now_ms="$(date +%s)000"
-    classifier_deadline_ms=$(( now_ms + ((timeout_secs - classifier_grace_secs) * 1000) ))
-    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache --queue-classifier-deadline-ms \"$classifier_deadline_ms\""
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
   else
     timeout_secs=15
     planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"

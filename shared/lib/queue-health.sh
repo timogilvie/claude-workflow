@@ -63,8 +63,8 @@ queue_health_classify_failure() {
     return 0
   fi
 
-  # External cancellation: SIGTERM/SIGKILL without watchdog
-  if [[ "$exit_code" == "143" || "$exit_code" == "137" || "$signal" == "15" || "$signal" == "9" ]]; then
+  # External cancellation: exit 143 (SIGTERM) without watchdog
+  if [[ "$exit_code" == "143" || "$signal" == "15" ]]; then
     echo "external_cancellation"
     return 0
   fi
@@ -301,16 +301,6 @@ queue_health_record_failure() {
       inputSnapshot: ($input_snapshot_json | try fromjson catch {}),
       stdoutExcerpt: $stdout_excerpt,
       stderrExcerpt: $stderr_excerpt
-    } |
-    .totalFailureCount = ((.totalFailureCount // 0) + 1) |
-    .lastFailureEvidence = {
-      lastFailureAt: $now,
-      episodeStartedAt: .episodeStartedAt,
-      degradationReason: $reason,
-      failureStep: $step,
-      failureCount: $failure_count,
-      planner: .planner,
-      diagnostics: .diagnostics
     }
   '
 
