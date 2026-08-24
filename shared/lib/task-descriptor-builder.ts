@@ -26,6 +26,7 @@ import type {
 } from './eval-schema.ts';
 import type { CapabilityConstraints } from './model-registry.ts';
 import type { RoutingCompleteData } from './eval-context-gatherer.ts';
+import { classifyTaskPacket } from './task-packet-classifier.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Input Types
@@ -214,6 +215,11 @@ function deriveHeuristicSignals(input: TaskDescriptorInput): HeuristicSignals {
     difficultySignals,
   } = input;
 
+  const packetClassification = classifyTaskPacket(originalPrompt);
+  const packetTaskType = packetClassification.taskType === 'unknown'
+    ? 'feature'
+    : packetClassification.taskType;
+
   // Extract languages from repoContext
   const languages = repoContext?.languages
     ? Object.keys(repoContext.languages).map((lang) => lang.toLowerCase())
@@ -225,13 +231,13 @@ function deriveHeuristicSignals(input: TaskDescriptorInput): HeuristicSignals {
     : [];
 
   return {
-    task_type: taskContext?.taskType || 'feature',
+    task_type: taskContext?.taskType || packetTaskType,
     languages,
     framework_tags: frameworkTags,
-    files_touched: difficultySignals?.filesTouched || 0,
+    files_touched: difficultySignals?.filesTouched || packetClassification.evidence.declaredFileCount,
     repo_size_loc: repoContext?.repoSize?.loc || 0,
     description_tokens: estimateTokens(originalPrompt),
-    is_greenfield: taskContext?.changeKind === 'create_new',
+    is_greenfield: taskContext?.changeKind === 'create_new' || packetClassification.riskFlags.includes('greenfield'),
     has_migration: hasMigration(originalPrompt),
     has_ui: hasUI(originalPrompt, languages),
     has_tests: hasTests(originalPrompt, prDiff),
@@ -253,8 +259,9 @@ function mapComplexity(complexity: number | ComplexityBand | undefined): number 
   if (!complexity) return 3; // default to medium
 
   if (typeof complexity === 'number') {
-    // Already numeric (0-1 scale), map to 1-5
-    return Math.max(1, Math.min(5, Math.round(complexity * 5)));
+    // Accept either a 0-1 confidence-like score or an already normalized 1-5 value.
+    const normalized = complexity <= 1 ? complexity * 5 : complexity;
+    return Math.max(1, Math.min(5, Math.round(normalized)));
   }
 
   // Map band to numeric
@@ -419,17 +426,25 @@ function extractRiskFlags(
  */
 function deriveLearnedSignals(input: TaskDescriptorInput): LearnedSignals {
   const { originalPrompt, taskContext, repoContext, difficultySignals } = input;
+  const packetClassification = classifyTaskPacket(originalPrompt);
 
-  const complexity = mapComplexity(taskContext?.complexity);
+  const complexity = taskContext?.complexity === undefined
+    ? packetClassification.complexity
+    : mapComplexity(taskContext.complexity);
   const frameworks = repoContext?.frameworks || [];
   const languages = repoContext?.languages
     ? Object.keys(repoContext.languages).map((lang) => lang.toLowerCase())
     : [];
   const domain = classifyDomain(originalPrompt, frameworks, languages);
-  const riskFlags = extractRiskFlags(
-    originalPrompt,
-    difficultySignals?.filesTouched || 0,
-  );
+  const riskFlags = [
+    ...new Set([
+      ...packetClassification.riskFlags,
+      ...extractRiskFlags(
+        originalPrompt,
+        difficultySignals?.filesTouched || packetClassification.evidence.declaredFileCount,
+      ),
+    ]),
+  ].sort();
 
   return {
     complexity,

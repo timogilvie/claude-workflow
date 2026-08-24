@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { clearConfigCache } from './config.ts';
@@ -2289,6 +2289,30 @@ await test('non-native models are unaffected by native certification filter', ()
       0,
       'non-native models should produce zero native certification rejections',
     );
+  } finally {
+    cleanup();
+  }
+});
+
+await test('routeWorkflow records shared packet signals in route provenance', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const packet = readFileSync(
+      join(process.cwd(), 'tests', 'fixtures', 'router-signal-corpus', 'hok-2845-greenfield.md'),
+      'utf-8',
+    );
+    const decision = routeWorkflow(packet, {
+      repoDir,
+      modelsAvailable: ['claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'],
+      skipDifficultyClassification: true,
+    });
+
+    assert.equal(decision.signals.taskType, 'feature');
+    assert.equal(decision.signals.complexityScore, 5);
+    assert.equal(decision.signals.complexityBand, 'xl');
+    assert.ok(decision.signals.riskFlags?.includes('greenfield'));
+    assert.equal(decision.provenance?.signalVector?.taskType, 'feature');
+    assert.equal(decision.provenance?.signalVector?.complexityScore, 5);
   } finally {
     cleanup();
   }
