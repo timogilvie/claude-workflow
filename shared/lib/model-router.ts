@@ -12,7 +12,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
-import type { EvalRecord } from './eval-schema.ts';
+import type { EvalRecord, ComplexityBand as TaskComplexityBand, TaskType as EvalTaskType } from './eval-schema.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
@@ -31,80 +31,14 @@ import {
   type AgentType,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { analyzeTaskContext, type IssueData, type TaskContextAnalysisInput } from './task-context-analyzer.ts'; // Import the new classifier
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
 // ────────────────────────────────────────────────────────────────
 
-export type TaskType =
-  | 'feature'
-  | 'bugfix'
-  | 'refactor'
-  | 'test'
-  | 'documentation'
-  | 'infrastructure'
-  | 'unknown';
-
-const TASK_TYPE_PATTERNS: { type: TaskType; patterns: RegExp[] }[] = [
-  {
-    type: 'bugfix',
-    patterns: [
-      /\bfix\b/i, /\bbug\b/i, /\bbroken\b/i, /\berror\b/i,
-      /\bcrash\b/i, /\bregression\b/i, /\bfailing\b/i,
-    ],
-  },
-  {
-    type: 'refactor',
-    patterns: [
-      /\brefactor\b/i, /\brestructur/i, /\breorganiz/i,
-      /\bclean\s*up\b/i, /\bsimplif/i, /\bextract\b/i,
-    ],
-  },
-  {
-    type: 'test',
-    patterns: [
-      /\btest\b/i, /\bspec\b/i, /\bcoverage\b/i,
-      /\bassertion\b/i, /\bunit test\b/i, /\be2e\b/i,
-    ],
-  },
-  {
-    type: 'documentation',
-    patterns: [
-      /\bdocument/i, /\breadme\b/i, /\bjsdoc\b/i,
-      /\btsdoc\b/i, /\bcomment\b/i, /\bchangelog\b/i,
-    ],
-  },
-  {
-    type: 'infrastructure',
-    patterns: [
-      /\bci\b/i, /\bcd\b/i, /\bdeploy/i, /\bdocker/i,
-      /\bpipeline\b/i, /\bmigration\b/i, /\bconfig\b/i,
-      /\binfra/i, /\bdevops\b/i,
-    ],
-  },
-  {
-    type: 'feature',
-    patterns: [
-      /\badd\b/i, /\bimplement/i, /\bcreate\b/i, /\bbuild\b/i,
-      /\bnew\b/i, /\bintroduc/i, /\bintegrat/i,
-    ],
-  },
-];
-
-/**
- * Classify a prompt into a task type using keyword matching.
- * Returns the first matching type (ordered by specificity).
- */
-export function classifyTaskType(prompt: string): TaskType {
-  for (const { type, patterns } of TASK_TYPE_PATTERNS) {
-    for (const pattern of patterns) {
-      if (pattern.test(prompt)) {
-        return type;
-      }
-    }
-  }
-  return 'unknown';
-}
+// Re-export TaskType from eval-schema to unify
+export type TaskType = EvalTaskType;
 
 // ────────────────────────────────────────────────────────────────
 // Prompt Characteristics
@@ -114,41 +48,57 @@ export interface PromptCharacteristics {
   length: 'short' | 'medium' | 'long';
   charCount: number;
   complexityScore: number;
-  fileTypes: string[];
   taskType: TaskType;
+  complexityBand: TaskComplexityBand; // Add complexity band
+  // Add more fields from TaskContext as needed for routing decisions
+  // For now, keeping it minimal to avoid breaking changes to existing router logic
 }
 
-const COMPLEXITY_KEYWORDS = [
-  /\bconcurren/i, /\basync\b/i, /\bdistribut/i, /\bsecurity\b/i,
-  /\bperformanc/i, /\boptimiz/i, /\bscal/i, /\bcach/i,
-  /\bencrypt/i, /\bauthenticat/i, /\bauthoriz/i, /\btransaction/i,
-  /\bmulti[- ]?thread/i, /\brace\s+condition/i, /\bdeadlock/i,
-  /\breal[- ]?time/i, /\bwebsocket/i, /\bstream/i,
-];
-
-const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sql|go|rs|rb)\b/gi;
+const COMPLEXITY_BAND_SCORES: Record<TaskComplexityBand, number> = {
+  xs: 1,
+  s: 2,
+  m: 3,
+  l: 4,
+  xl: 5,
+};
 
 /**
  * Extract characteristics from a prompt for routing decisions.
+ * Now uses the task-context-analyzer for unified classification.
  */
-export function analyzePrompt(prompt: string): PromptCharacteristics {
+export function analyzePrompt(prompt: string, options?: { filesTouched?: number; locTouched?: number }): PromptCharacteristics {
   const charCount = prompt.length;
   const length = charCount < 200 ? 'short' : charCount < 1000 ? 'medium' : 'long';
 
-  let complexityScore = 0;
-  for (const kw of COMPLEXITY_KEYWORDS) {
-    if (kw.test(prompt)) complexityScore++;
-  }
+  // Parse the prompt to extract title and description for IssueData
+  const fullTitleMatch = prompt.match(/^#\s*(.*?)(?:\s*-\s*Quick Reference)?\s*$/m);
+  const title = fullTitleMatch ? fullTitleMatch[1].trim() : undefined;
 
-  const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
-  const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
+  const objectiveSectionMatch = prompt.match(/## Objective\n\n(.*?)(?=\n##)/s);
+  const description = objectiveSectionMatch ? objectiveSectionMatch[1].trim() : prompt; // Fallback to full prompt if no objective section
+
+  const issueData: IssueData = {
+    title,
+    description,
+  };
+
+  const analysisInput: TaskContextAnalysisInput = {
+    issue: issueData,
+    prDiff: '', // Router doesn't have PR diff context
+    filesTouched: options?.filesTouched || 0,
+    locTouched: options?.locTouched || 0,
+  };
+
+  const taskContext = analyzeTaskContext(analysisInput);
+
+  const complexityScore = COMPLEXITY_BAND_SCORES[taskContext.complexity];
 
   return {
     length,
     charCount,
     complexityScore,
-    fileTypes,
-    taskType: classifyTaskType(prompt),
+    taskType: taskContext.taskType,
+    complexityBand: taskContext.complexity,
   };
 }
 
@@ -669,9 +619,11 @@ function recommendModelHeuristic(
 export function recommendModel(
   prompt: string,
   options?: RouterOptions,
+  filesTouched?: number,
+  locTouched?: number,
 ): ModelRecommendation {
   const opts = { ...DEFAULT_ROUTER_OPTIONS, ...options };
-  const characteristics = analyzePrompt(prompt);
+  const characteristics = analyzePrompt(prompt, { filesTouched, locTouched });
   const mode = opts.mode || 'auto';
 
   // Ensure aggregated data exists (runs once per repo dir)

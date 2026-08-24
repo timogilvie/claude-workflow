@@ -54,8 +54,8 @@ export interface TaskContextAnalysisInput {
 // ────────────────────────────────────────────────────────────────
 
 const TASK_TYPE_KEYWORDS: Record<TaskType, string[]> = {
-  bugfix: ['fix', 'bug', 'issue', 'broken', 'error', 'crash', 'regression'],
-  feature: ['add', 'feature', 'implement', 'new', 'create', 'support'],
+  bugfix: ['fix', 'bug', 'issue', 'broken', 'error', 'crash', 'regression', 'patch'],
+  feature: ['add', 'feature', 'implement', 'new', 'create', 'support', 'introduce', 'integrate', 'develop', 'enhance', 'improve', 'enable', 'replace', 'sophisticated', 'accurate'],
   refactor: ['refactor', 'cleanup', 'reorganize', 'simplify', 'improve structure'],
   chore: ['chore', 'update', 'upgrade', 'dependency', 'deps', 'maintenance'],
   docs: ['docs', 'documentation', 'readme', 'comment', 'docstring'],
@@ -68,15 +68,13 @@ const TASK_TYPE_KEYWORDS: Record<TaskType, string[]> = {
  *
  * Strategy:
  * 1. Check labels for explicit type markers (e.g., "bug", "feature")
- * 2. Check title for type keywords
+ * 2. Check title for type keywords, giving higher weight to 'feature' related words
  * 3. Check description for type keywords
  * 4. Default to "feature" if ambiguous
  */
 export function inferTaskType(issue?: IssueData): TaskType {
   if (!issue) return 'feature';
 
-  const text = `${issue.title || ''} ${issue.description || ''}`.toLowerCase();
-  // Normalize labels: accept string[] or Linear's { nodes: [{ name }] } shape
   const rawLabels = issue.labels || [];
   const labels: string[] = (Array.isArray(rawLabels)
     ? rawLabels
@@ -90,7 +88,6 @@ export function inferTaskType(issue?: IssueData): TaskType {
     }
   }
 
-  // Check text for keywords (weighted by position in title vs description)
   const scores: Record<TaskType, number> = {
     bugfix: 0,
     feature: 0,
@@ -107,18 +104,25 @@ export function inferTaskType(issue?: IssueData): TaskType {
   for (const [type, keywords] of Object.entries(TASK_TYPE_KEYWORDS)) {
     const taskType = type as TaskType;
     for (const keyword of keywords) {
-      // Title matches weighted higher
       if (titleText.includes(keyword)) {
-        scores[taskType] += 3;
+        // Give higher weight to feature keywords in title
+        if (taskType === 'feature') {
+          scores[taskType] += 5; // Higher weight for feature in title
+        } else {
+          scores[taskType] += 3;
+        }
       }
-      // Description matches weighted lower
       if (descText.includes(keyword)) {
         scores[taskType] += 1;
       }
     }
   }
 
-  // Return highest scoring type, or "feature" if no matches
+  // If feature has a strong score from title, reduce bugfix score from description
+  if (scores.feature >= 5 && scores.bugfix > 0 && descText.includes('fix')) {
+    scores.bugfix = Math.max(0, scores.bugfix - 2); // Reduce bugfix impact from description
+  }
+
   const entries = Object.entries(scores) as Array<[TaskType, number]>;
   const sorted = entries.sort((a, b) => b[1] - a[1]);
   return sorted[0][1] > 0 ? sorted[0][0] : 'feature';
