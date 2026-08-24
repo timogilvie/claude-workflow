@@ -2518,13 +2518,35 @@ describe('canonical supported-model helpers', () => {
 
   it('keeps provisional Ox Alpha pinnable metadata out of automatic stage lists', () => {
     const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'ox-alpha');
+    const rawIdentity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'stealth/ox-alpha');
+    const model = DEFAULT_MODEL_REGISTRY.models['ox-alpha'];
 
     assert.equal(identity.status, 'provisional');
     assert.equal(identity.revision, 1);
     assert.equal(identity.evidencePolicy, 'held');
     assert.equal(identity.family, 'unknown');
     assert.equal(identity.displayName, 'Ox Alpha');
+    assert.deepEqual(rawIdentity, identity);
+    assert.equal(model.vendor, 'unknown');
+    assert.deepEqual(model.qualityScores, makeScores(0));
+    assert.equal(model.contextWindowTokens, 1_048_576);
+    assert.equal(model.pricing?.inputCostPerMTok, 0);
+    assert.equal(model.pricing?.outputCostPerMTok, 0);
+    assert.equal(model.pricing?.cacheReadCostPerMTok, undefined);
+    assert.equal(model.pricing?.cacheWriteCostPerMTok, undefined);
+    assert.equal(model.multimodal.text, true);
+    assert.equal(model.multimodal.image, true);
+    assert.equal(model.multimodal.video, true);
+    assert.equal(model.toolSupport, 'basic');
+    assert.equal(model.supportedModel?.providerNativeId, 'stealth/ox-alpha');
+    assert.equal(resolveProviderNativeModelId('ox-alpha')?.providerNativeId, 'stealth/ox-alpha');
+    assert.equal(resolveProviderNativeModelId('stealth/ox-alpha')?.wavemillAlias, 'ox-alpha');
+    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'planner'), 'workflow');
+    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'coder'), 'patch');
+    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'reviewer'), 'read-only');
+    assert.ok(!JSON.stringify(model).toLowerCase().includes('glm'));
     assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'provisional-identity');
+    assert.equal(explainModelSupportExclusion('stealth/ox-alpha', 'coding'), 'provisional-identity');
     assert.equal(listSupportedModelsForStage('planning').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('coding').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('review').includes('ox-alpha'), false);
