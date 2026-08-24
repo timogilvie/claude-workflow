@@ -1,0 +1,3204 @@
+{
+  "schemaVersion": "1",
+  "models": [
+    {
+      "id": "claude-fable-5",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "frontier",
+        "strengths": [
+          "frontier reasoning",
+          "long-horizon agentic work",
+          "code review",
+          "architecture"
+        ],
+        "weaknesses": [
+          "highest cost",
+          "slower",
+          "minutes-long turns on hard tasks",
+          "OpenRouter dependency"
+        ],
+        "releasedAt": "2026-06-10",
+        "qualityScores": {
+          "routing": 62,
+          "planning": 99,
+          "coding": 95,
+          "review": 98,
+          "classify": 62
+        },
+        "pricing": {
+          "inputCostPerMTok": 10,
+          "outputCostPerMTok": 50,
+          "cacheWriteCostPerMTok": 12.5,
+          "cacheReadCostPerMTok": 1
+        },
+        "contextWindowTokens": 1000000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 10,
+        "costPerMillionOutputTokensUsd": 50,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "claude-opus-4-8",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "frontier",
+        "strengths": [
+          "long-horizon reasoning",
+          "code review",
+          "architecture",
+          "agentic coding"
+        ],
+        "weaknesses": [
+          "higher cost",
+          "slower"
+        ],
+        "releasedAt": "2026-05-20",
+        "qualityScores": {
+          "routing": 62,
+          "planning": 97,
+          "coding": 88,
+          "review": 96,
+          "classify": 62
+        },
+        "pricing": {
+          "inputCostPerMTok": 5,
+          "outputCostPerMTok": 25,
+          "cacheWriteCostPerMTok": 6.25,
+          "cacheReadCostPerMTok": 0.5
+        },
+        "contextWindowTokens": 1000000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 5,
+        "costPerMillionOutputTokensUsd": 25
+      }
+    },
+    {
+      "id": "claude-opus-4-7",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "frontier",
+        "strengths": [
+          "long-horizon reasoning",
+          "code review",
+          "architecture"
+        ],
+        "weaknesses": [
+          "higher cost",
+          "slower"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 95,
+          "coding": 85,
+          "review": 95,
+          "classify": 60
+        },
+        "pricing": {
+          "inputCostPerMTok": 5,
+          "outputCostPerMTok": 25,
+          "cacheWriteCostPerMTok": 6.25,
+          "cacheReadCostPerMTok": 0.5
+        },
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 5,
+        "costPerMillionOutputTokensUsd": 25
+      }
+    },
+    {
+      "id": "claude-opus-4-6",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "frontier",
+        "strengths": [
+          "long-horizon reasoning",
+          "code review",
+          "architecture"
+        ],
+        "weaknesses": [
+          "higher cost",
+          "slower"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 92,
+          "coding": 82,
+          "review": 92,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 5,
+          "outputCostPerMTok": 25,
+          "cacheWriteCostPerMTok": 6.25,
+          "cacheReadCostPerMTok": 0.5
+        },
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 5,
+        "costPerMillionOutputTokensUsd": 25
+      }
+    },
+    {
+      "id": "claude-sonnet-5",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "strong_generalist",
+        "strengths": [
+          "code generation",
+          "balanced quality/cost",
+          "instruction following"
+        ],
+        "weaknesses": [
+          "less deep reasoning"
+        ],
+        "releasedAt": "2026-06-30",
+        "qualityScores": {
+          "routing": 77,
+          "planning": 84,
+          "coding": 92,
+          "review": 84,
+          "classify": 80
+        },
+        "pricing": {
+          "inputCostPerMTok": 2,
+          "outputCostPerMTok": 10,
+          "cacheWriteCostPerMTok": 2.5,
+          "cacheReadCostPerMTok": 0.2
+        },
+        "contextWindowTokens": 1000000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 2,
+        "costPerMillionOutputTokensUsd": 10
+      }
+    },
+    {
+      "id": "claude-sonnet-4-6",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "strong_generalist",
+        "strengths": [
+          "code generation",
+          "balanced quality/cost",
+          "instruction following"
+        ],
+        "weaknesses": [
+          "less deep reasoning"
+        ],
+        "qualityScores": {
+          "routing": 75,
+          "planning": 82,
+          "coding": 90,
+          "review": 82,
+          "classify": 78
+        },
+        "pricing": {
+          "inputCostPerMTok": 3,
+          "outputCostPerMTok": 15,
+          "cacheWriteCostPerMTok": 3.75,
+          "cacheReadCostPerMTok": 0.3
+        },
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 3,
+        "costPerMillionOutputTokensUsd": 15
+      }
+    },
+    {
+      "id": "claude-sonnet-4-5-20250929",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "strong_generalist",
+        "strengths": [
+          "code generation",
+          "balanced quality/cost",
+          "instruction following"
+        ],
+        "weaknesses": [
+          "less deep reasoning"
+        ],
+        "qualityScores": {
+          "routing": 72,
+          "planning": 78,
+          "coding": 86,
+          "review": 78,
+          "classify": 74
+        },
+        "pricing": {
+          "inputCostPerMTok": 3,
+          "outputCostPerMTok": 15,
+          "cacheWriteCostPerMTok": 3.75,
+          "cacheReadCostPerMTok": 0.3
+        },
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 3,
+        "costPerMillionOutputTokensUsd": 15
+      }
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "fast_economy",
+        "strengths": [
+          "speed",
+          "low cost",
+          "classification"
+        ],
+        "weaknesses": [
+          "less depth on complex reasoning"
+        ],
+        "qualityScores": {
+          "routing": 88,
+          "planning": 55,
+          "coding": 60,
+          "review": 55,
+          "classify": 92
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.8,
+          "outputCostPerMTok": 4,
+          "cacheWriteCostPerMTok": 1,
+          "cacheReadCostPerMTok": 0.08
+        },
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "basic",
+        "costPerMillionInputTokensUsd": 0.8,
+        "costPerMillionOutputTokensUsd": 4
+      }
+    },
+    {
+      "id": "claude-haiku-4-5",
+      "capabilities": {
+        "vendor": "anthropic",
+        "class": "fast_economy",
+        "strengths": [
+          "speed",
+          "low cost",
+          "classification"
+        ],
+        "weaknesses": [
+          "less depth on complex reasoning"
+        ],
+        "qualityScores": {
+          "routing": 88,
+          "planning": 55,
+          "coding": 60,
+          "review": 55,
+          "classify": 92
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.8,
+          "outputCostPerMTok": 4,
+          "cacheWriteCostPerMTok": 1,
+          "cacheReadCostPerMTok": 0.08
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 200000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "basic",
+        "costPerMillionInputTokensUsd": 0.8,
+        "costPerMillionOutputTokensUsd": 4,
+        "agent": "claude",
+        "supportedModel": {
+          "wavemillAlias": "claude-haiku-4-5",
+          "providerNativeId": "claude-haiku-4-5-20251001",
+          "stages": [
+            "coding",
+            "review"
+          ],
+          "lifecycle": "supported",
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "gpt-5.5",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "frontier",
+        "strengths": [
+          "frontier reasoning",
+          "code generation",
+          "architecture"
+        ],
+        "weaknesses": [
+          "higher cost"
+        ],
+        "releasedAt": "2026-05-01",
+        "qualityScores": {
+          "routing": 62,
+          "planning": 96,
+          "coding": 92,
+          "review": 94,
+          "classify": 62
+        },
+        "pricing": {
+          "inputCostPerMTok": 5,
+          "outputCostPerMTok": 30
+        },
+        "contextWindowTokens": 400000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 5,
+        "costPerMillionOutputTokensUsd": 30,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": true
+        },
+        "identity": {
+          "status": "verified",
+          "revision": 1,
+          "fingerprint": "b0cfc4cfa3f4e752184fd5c5cae13c4d9bfe4d651969987cdfa607c28517fc03",
+          "displayName": "gpt-5.5",
+          "family": "gpt",
+          "evidencePolicy": "eligible",
+          "lineage": {
+            "predecessors": [
+              "gpt-5",
+              "gpt-5-mini"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "gpt-5.4",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "frontier",
+        "strengths": [
+          "frontier reasoning",
+          "code generation",
+          "architecture"
+        ],
+        "weaknesses": [
+          "superseded for ChatGPT Codex launches by GPT-5.6 Terra"
+        ],
+        "disabled": false,
+        "qualityScores": {
+          "routing": 60,
+          "planning": 94,
+          "coding": 90,
+          "review": 92,
+          "classify": 60
+        },
+        "pricing": {
+          "inputCostPerMTok": 2.5,
+          "outputCostPerMTok": 15,
+          "cacheReadCostPerMTok": 0.25
+        },
+        "contextWindowTokens": 256000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 2.5,
+        "costPerMillionOutputTokensUsd": 15,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "HOK-2549: Codex now uses gpt-5.6-terra in place of gpt-5.4."
+        },
+        "identity": {
+          "status": "verified",
+          "revision": 1,
+          "fingerprint": "c61006d17e31f9ed5711eaf775803ee3cd381fd5d9bd0519bfd9c2f661cb0d5b",
+          "displayName": "gpt-5.4",
+          "family": "gpt",
+          "evidencePolicy": "eligible",
+          "lineage": {
+            "successor": "gpt-5.6-terra",
+            "disclosedAt": "2026-08-23",
+            "disclosureSource": "HOK-2862"
+          }
+        }
+      }
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "frontier",
+        "strengths": [
+          "frontier professional reasoning",
+          "complex coding",
+          "tool use"
+        ],
+        "weaknesses": [
+          "higher cost",
+          "not certified for the ChatGPT Codex launch surface"
+        ],
+        "defaultLadderEligible": false,
+        "qualityScores": {
+          "routing": 0,
+          "planning": 0,
+          "coding": 0,
+          "review": 0,
+          "classify": 0
+        },
+        "pricing": {
+          "inputCostPerMTok": 5,
+          "outputCostPerMTok": 30,
+          "cacheWriteCostPerMTok": 6.25,
+          "cacheReadCostPerMTok": 0.5
+        },
+        "contextWindowTokens": 1050000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 5,
+        "costPerMillionOutputTokensUsd": 30,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "gpt-5.6-sol is not certified for the ChatGPT Codex launch surface."
+        }
+      }
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "strong_generalist",
+        "strengths": [
+          "balanced professional reasoning",
+          "coding",
+          "tool use"
+        ],
+        "weaknesses": [
+          "new routing candidate; evaluation evidence is still accumulating"
+        ],
+        "qualityScores": {
+          "routing": 62,
+          "planning": 94,
+          "coding": 91,
+          "review": 93,
+          "classify": 66
+        },
+        "pricing": {
+          "inputCostPerMTok": 2.5,
+          "outputCostPerMTok": 15,
+          "cacheWriteCostPerMTok": 3.125,
+          "cacheReadCostPerMTok": 0.25
+        },
+        "contextWindowTokens": 1050000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 2.5,
+        "costPerMillionOutputTokensUsd": 15,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": true
+        },
+        "identity": {
+          "status": "verified",
+          "revision": 1,
+          "fingerprint": "0e95bbc0abd07ea24658118725b3434ee564c08ed4cbe4de9e90002a1d5fd9e6",
+          "displayName": "gpt-5.6-terra",
+          "family": "gpt",
+          "evidencePolicy": "eligible",
+          "lineage": {
+            "predecessors": [
+              "gpt-5.4"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "fast_economy",
+        "strengths": [
+          "cost-sensitive high-volume workloads",
+          "tool use"
+        ],
+        "weaknesses": [
+          "not certified for the ChatGPT Codex launch surface"
+        ],
+        "defaultLadderEligible": false,
+        "qualityScores": {
+          "routing": 0,
+          "planning": 0,
+          "coding": 0,
+          "review": 0,
+          "classify": 0
+        },
+        "pricing": {
+          "inputCostPerMTok": 1,
+          "outputCostPerMTok": 6,
+          "cacheWriteCostPerMTok": 1.25,
+          "cacheReadCostPerMTok": 0.1
+        },
+        "contextWindowTokens": 1050000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1,
+        "costPerMillionOutputTokensUsd": 6,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "gpt-5.6-luna is not certified for the ChatGPT Codex launch surface."
+        }
+      }
+    },
+    {
+      "id": "gpt-5.3-codex",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "strong_generalist",
+        "strengths": [
+          "cost-efficient coding",
+          "fast edits"
+        ],
+        "weaknesses": [
+          "ChatGPT Codex account incompatibility",
+          "disabled for active routing"
+        ],
+        "disabled": true,
+        "qualityScores": {
+          "routing": 56,
+          "planning": 68,
+          "coding": 84,
+          "review": 62,
+          "classify": 52
+        },
+        "pricing": {
+          "inputCostPerMTok": 1.75,
+          "outputCostPerMTok": 14,
+          "cacheWriteCostPerMTok": 2.1875,
+          "cacheReadCostPerMTok": 0.44
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 256000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1.75,
+        "costPerMillionOutputTokensUsd": 14,
+        "agent": "codex"
+      }
+    },
+    {
+      "id": "gpt-5",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "strong_generalist",
+        "strengths": [
+          "general reasoning",
+          "coding",
+          "broad tool support"
+        ],
+        "weaknesses": [
+          "premium cost",
+          "not available to the ChatGPT Codex surface"
+        ],
+        "qualityScores": {
+          "routing": 72,
+          "planning": 92,
+          "coding": 90,
+          "review": 90,
+          "classify": 70
+        },
+        "pricing": {
+          "inputCostPerMTok": 3,
+          "outputCostPerMTok": 15
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 400000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 3,
+        "costPerMillionOutputTokensUsd": 15,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "The ChatGPT-authenticated Codex CLI does not support gpt-5."
+        },
+        "identity": {
+          "status": "verified",
+          "revision": 1,
+          "fingerprint": "8595ad3a5b6aeb10df362e0d6933a4a7faebbfa7ed2211b20155fdafd8e58355",
+          "displayName": "gpt-5",
+          "family": "gpt",
+          "evidencePolicy": "eligible",
+          "lineage": {
+            "successor": "gpt-5.5",
+            "disclosedAt": "2026-08-23",
+            "disclosureSource": "HOK-2862"
+          }
+        }
+      }
+    },
+    {
+      "id": "gpt-5-mini",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "fast_economy",
+        "strengths": [
+          "fast responses",
+          "low-cost coding"
+        ],
+        "weaknesses": [
+          "less depth than frontier GPT variants",
+          "not available to the ChatGPT Codex surface"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 75,
+          "coding": 82,
+          "review": 80,
+          "classify": 62
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.6,
+          "outputCostPerMTok": 2.4
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 256000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.6,
+        "costPerMillionOutputTokensUsd": 2.4,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "The ChatGPT-authenticated Codex CLI does not support gpt-5-mini."
+        },
+        "identity": {
+          "status": "verified",
+          "revision": 1,
+          "fingerprint": "794346ad78cc27c9edcb1fc8d63feed62ad9f6cc2f2781181594f3fb6727413a",
+          "displayName": "gpt-5-mini",
+          "family": "gpt",
+          "evidencePolicy": "eligible",
+          "lineage": {
+            "successor": "gpt-5.5",
+            "disclosedAt": "2026-08-23",
+            "disclosureSource": "HOK-2862"
+          }
+        }
+      }
+    },
+    {
+      "id": "gpt-4.1",
+      "capabilities": {
+        "vendor": "openai",
+        "class": "strong_generalist",
+        "strengths": [
+          "coding",
+          "tool use",
+          "low-latency implementation work"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "not available to the ChatGPT Codex surface"
+        ],
+        "qualityScores": {
+          "routing": 52,
+          "planning": 0,
+          "coding": 78,
+          "review": 0,
+          "classify": 50
+        },
+        "pricing": {
+          "inputCostPerMTok": 2,
+          "outputCostPerMTok": 8
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1047576,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 2,
+        "costPerMillionOutputTokensUsd": 8,
+        "agent": "codex",
+        "codexChatgptCapability": {
+          "supported": false,
+          "reason": "gpt-4.1 is not certified for the ChatGPT Codex launch surface."
+        }
+      }
+    },
+    {
+      "id": "gemini-2.5-pro",
+      "capabilities": {
+        "vendor": "google",
+        "class": "frontier",
+        "strengths": [
+          "planning",
+          "long context",
+          "code review"
+        ],
+        "weaknesses": [
+          "opt-in only",
+          "OpenRouter dependency"
+        ],
+        "qualityScores": {
+          "routing": 68,
+          "planning": 90,
+          "coding": 88,
+          "review": 89,
+          "classify": 66
+        },
+        "pricing": {
+          "inputCostPerMTok": 1.25,
+          "outputCostPerMTok": 10,
+          "cacheReadCostPerMTok": 0.125,
+          "cacheWriteCostPerMTok": 0.375
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1048576,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1.25,
+        "costPerMillionOutputTokensUsd": 10,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "gemini-2.5-pro",
+          "providerNativeId": "google/gemini-2.5-pro",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "google",
+            "model": "gemini-2.5-pro",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "capabilities": {
+        "vendor": "google",
+        "class": "fast_economy",
+        "strengths": [
+          "speed",
+          "low cost",
+          "coding"
+        ],
+        "weaknesses": [
+          "shallower planning than pro",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 72,
+          "coding": 78,
+          "review": 77,
+          "classify": 65
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.3,
+          "outputCostPerMTok": 2.5,
+          "cacheReadCostPerMTok": 0.03,
+          "cacheWriteCostPerMTok": 0.0833333333333333
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1048576,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.3,
+        "costPerMillionOutputTokensUsd": 2.5,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "gemini-2.5-flash",
+          "providerNativeId": "google/gemini-2.5-flash",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "google",
+            "model": "gemini-2.5-flash",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "capabilities": {
+        "vendor": "google",
+        "class": "fast_economy",
+        "strengths": [
+          "fast coding assistance",
+          "low latency",
+          "Gemini family coverage"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "older than Gemini 2.5 flash",
+          "OpenRouter dependency",
+          "retired 2026-08-16: not in OpenRouter catalog (HOK-2773)"
+        ],
+        "qualityScores": {
+          "routing": 52,
+          "planning": 0,
+          "coding": 74,
+          "review": 0,
+          "classify": 60
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0,
+        "costPerMillionOutputTokensUsd": 0,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "gemini-2.0-flash",
+          "providerNativeId": "google/gemini-2.0-flash-001",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "google",
+            "model": "gemini-2.0-flash-001",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "blocked",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "llama-4-maverick",
+      "capabilities": {
+        "vendor": "meta",
+        "class": "strong_generalist",
+        "strengths": [
+          "planning",
+          "cost efficiency",
+          "broad availability"
+        ],
+        "weaknesses": [
+          "less reliable than top frontier models",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 56,
+          "planning": 78,
+          "coding": 80,
+          "review": 74,
+          "classify": 54
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.4,
+          "outputCostPerMTok": 1.6
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1048576,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.4,
+        "costPerMillionOutputTokensUsd": 1.6,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "llama-4-maverick",
+          "providerNativeId": "meta-llama/llama-4-maverick",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "meta-llama",
+            "model": "llama-4-maverick",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "llama-3.3-70b",
+      "capabilities": {
+        "vendor": "meta",
+        "class": "fast_economy",
+        "strengths": [
+          "budget-friendly coding",
+          "review coverage"
+        ],
+        "weaknesses": [
+          "lower ceiling than larger frontier models",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 52,
+          "planning": 66,
+          "coding": 74,
+          "review": 72,
+          "classify": 52
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.12,
+          "outputCostPerMTok": 0.3
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 131072,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "basic",
+        "costPerMillionInputTokensUsd": 0.12,
+        "costPerMillionOutputTokensUsd": 0.3,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "llama-3.3-70b",
+          "providerNativeId": "meta-llama/llama-3.3-70b-instruct",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "meta-llama",
+            "model": "llama-3.3-70b-instruct",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "llama-4-scout",
+      "capabilities": {
+        "vendor": "meta",
+        "class": "fast_economy",
+        "strengths": [
+          "coding",
+          "low-cost open model coverage",
+          "long context"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "OpenRouter dependency"
+        ],
+        "qualityScores": {
+          "routing": 48,
+          "planning": 0,
+          "coding": 72,
+          "review": 0,
+          "classify": 46
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.1,
+          "outputCostPerMTok": 0.3
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1310720,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.1,
+        "costPerMillionOutputTokensUsd": 0.3,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "llama-4-scout",
+          "providerNativeId": "meta-llama/llama-4-scout",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "meta-llama",
+            "model": "llama-4-scout",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "mistral-large-2",
+      "capabilities": {
+        "vendor": "mistral",
+        "class": "strong_generalist",
+        "strengths": [
+          "planning",
+          "coding",
+          "long context"
+        ],
+        "weaknesses": [
+          "opt-in only",
+          "less tooling maturity"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 82,
+          "coding": 84,
+          "review": 82,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 2,
+          "outputCostPerMTok": 6,
+          "cacheReadCostPerMTok": 0.2
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 131072,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 2,
+        "costPerMillionOutputTokensUsd": 6,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "mistral-large-2",
+          "providerNativeId": "mistralai/mistral-large-2407",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "mistralai",
+            "model": "mistral-large-2407",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "mistral-medium-3",
+      "capabilities": {
+        "vendor": "mistral",
+        "class": "strong_generalist",
+        "strengths": [
+          "agentic workflows",
+          "coding",
+          "multimodal review"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "higher cost than small Mistral models"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 78,
+          "coding": 82,
+          "review": 80,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 1.5,
+          "outputCostPerMTok": 7.5
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1.5,
+        "costPerMillionOutputTokensUsd": 7.5,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "mistral-medium-3",
+          "providerNativeId": "mistralai/mistral-medium-3-5",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "mistralai",
+            "model": "mistral-medium-3-5",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "devstral-small",
+      "capabilities": {
+        "vendor": "mistral",
+        "class": "fast_economy",
+        "strengths": [
+          "coding",
+          "multimodal understanding",
+          "low cost"
+        ],
+        "weaknesses": [
+          "lower ceiling than larger Mistral models",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 50,
+          "planning": 58,
+          "coding": 76,
+          "review": 66,
+          "classify": 50
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.15,
+          "outputCostPerMTok": 0.6,
+          "cacheReadCostPerMTok": 0.015
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.15,
+        "costPerMillionOutputTokensUsd": 0.6,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "devstral-small",
+          "providerNativeId": "mistralai/mistral-small-2603",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "mistralai",
+            "model": "mistral-small-2603",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "devstral-medium",
+      "capabilities": {
+        "vendor": "mistral",
+        "class": "strong_generalist",
+        "strengths": [
+          "agentic workflows",
+          "coding",
+          "multimodal review"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "higher cost than small Mistral models"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 78,
+          "coding": 82,
+          "review": 80,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 1.5,
+          "outputCostPerMTok": 7.5
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1.5,
+        "costPerMillionOutputTokensUsd": 7.5,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "devstral-medium",
+          "providerNativeId": "mistralai/mistral-medium-3-5",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "mistralai",
+            "model": "mistral-medium-3-5",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "deepseek-r1",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "frontier",
+        "strengths": [
+          "reasoning",
+          "planning",
+          "broad coverage"
+        ],
+        "weaknesses": [
+          "higher latency",
+          "OpenRouter dependency"
+        ],
+        "qualityScores": {
+          "routing": 64,
+          "planning": 91,
+          "coding": 86,
+          "review": 87,
+          "classify": 60
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.7,
+          "outputCostPerMTok": 2.5
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 128000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.7,
+        "costPerMillionOutputTokensUsd": 2.5,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-v3",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "strong_generalist",
+        "strengths": [
+          "coding",
+          "review",
+          "agentic tool use",
+          "budget efficiency"
+        ],
+        "weaknesses": [
+          "reasoning defaults off unless explicitly requested",
+          "OpenRouter dependency"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 74,
+          "coding": 82,
+          "review": 80,
+          "classify": 56
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.25,
+          "outputCostPerMTok": 0.95,
+          "cacheReadCostPerMTok": 0.13
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 163840,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.25,
+        "costPerMillionOutputTokensUsd": 0.95,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-coder-v2",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "fast_economy",
+        "strengths": [
+          "coding",
+          "low-cost implementation",
+          "DeepSeek family coverage"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "OpenRouter dependency",
+          "retired 2026-08-16: resolves to no native OpenRouter wire ID (HOK-2773)"
+        ],
+        "qualityScores": {
+          "routing": 44,
+          "planning": 0,
+          "coding": 74,
+          "review": 0,
+          "classify": 42
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 128000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0,
+        "costPerMillionOutputTokensUsd": 0,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "deepseek-coder-v2",
+          "providerNativeId": "deepseek/deepseek-coder-v2-instruct",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "deepseek",
+            "model": "deepseek-coder-v2-instruct",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "blocked",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "qwen-2.5-coder-32b",
+      "capabilities": {
+        "vendor": "qwen",
+        "class": "fast_economy",
+        "strengths": [
+          "low-cost coding",
+          "challenger coverage"
+        ],
+        "weaknesses": [
+          "narrower reasoning depth",
+          "opt-in only",
+          "retired 2026-08-16: no OpenRouter endpoint supports tool use (HOK-2773)"
+        ],
+        "qualityScores": {
+          "routing": 52,
+          "planning": 60,
+          "coding": 79,
+          "review": 68,
+          "classify": 54
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.2,
+          "outputCostPerMTok": 0.6
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 32768,
+        "toolSupport": "none",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.2,
+        "costPerMillionOutputTokensUsd": 0.6,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "qwen-2.5-coder-32b",
+          "providerNativeId": "qwen/qwen-2.5-coder-32b-instruct",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "qwen",
+            "model": "qwen-2.5-coder-32b-instruct",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "blocked",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "qwen-3-coder",
+      "capabilities": {
+        "vendor": "qwen",
+        "class": "strong_generalist",
+        "strengths": [
+          "planning",
+          "coding",
+          "review",
+          "challenger family coverage"
+        ],
+        "weaknesses": [
+          "opt-in only",
+          "provider routing dependency"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 72,
+          "coding": 84,
+          "review": 78,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.35,
+          "outputCostPerMTok": 1.05
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.35,
+        "costPerMillionOutputTokensUsd": 1.05,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "qwen-3-coder",
+          "providerNativeId": "qwen/qwen3-coder",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "qwen",
+            "model": "qwen3-coder",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "qwen-3-235b",
+      "capabilities": {
+        "vendor": "qwen",
+        "class": "frontier",
+        "strengths": [
+          "planning",
+          "coding",
+          "review breadth"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 86,
+          "coding": 85,
+          "review": 83,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.09,
+          "outputCostPerMTok": 0.55
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "full",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.09,
+        "costPerMillionOutputTokensUsd": 0.55,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "qwen-3-235b",
+          "providerNativeId": "qwen/qwen3-235b-a22b-2507",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "qwen",
+            "model": "qwen3-235b-a22b-2507",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "qwen-2.5-72b",
+      "capabilities": {
+        "vendor": "qwen",
+        "class": "fast_economy",
+        "strengths": [
+          "coding",
+          "low-cost Qwen family coverage"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "OpenRouter dependency",
+          "retired 2026-08-19: 32k context window fails HOK-2783 admission floor"
+        ],
+        "qualityScores": {
+          "routing": 46,
+          "planning": 0,
+          "coding": 72,
+          "review": 0,
+          "classify": 44
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 32768,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0,
+        "costPerMillionOutputTokensUsd": 0,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "qwen-2.5-72b",
+          "providerNativeId": "qwen/qwen-2.5-72b-instruct",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "qwen",
+            "model": "qwen-2.5-72b-instruct",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "blocked",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "kimi-k2",
+      "capabilities": {
+        "vendor": "moonshotai",
+        "class": "strong_generalist",
+        "strengths": [
+          "planning",
+          "coding",
+          "challenger family coverage"
+        ],
+        "weaknesses": [
+          "provider routing dependency",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 84,
+          "coding": 84,
+          "review": 82,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.57,
+          "outputCostPerMTok": 2.3
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 131072,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.57,
+        "costPerMillionOutputTokensUsd": 2.3,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "kimi-k2",
+          "providerNativeId": "moonshotai/kimi-k2",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "moonshotai",
+            "model": "kimi-k2",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "glm-5.2",
+      "capabilities": {
+        "vendor": "z-ai",
+        "class": "strong_generalist",
+        "strengths": [
+          "reasoning",
+          "coding",
+          "long-context analysis"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "provider routing dependency"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 82,
+          "coding": 83,
+          "review": 80,
+          "classify": 56
+        },
+        "pricing": {
+          "inputCostPerMTok": 1.19,
+          "outputCostPerMTok": 3.74,
+          "cacheReadCostPerMTok": 0.221
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1048576,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 1.19,
+        "costPerMillionOutputTokensUsd": 3.74,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "glm-5.2",
+          "providerNativeId": "z-ai/glm-5.2",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "z-ai",
+            "model": "glm-5.2",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "kimi-k2.7-code",
+      "capabilities": {
+        "vendor": "moonshotai",
+        "class": "strong_generalist",
+        "strengths": [
+          "coding",
+          "planning",
+          "agentic execution"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "provider routing dependency"
+        ],
+        "qualityScores": {
+          "routing": 60,
+          "planning": 86,
+          "coding": 87,
+          "review": 82,
+          "classify": 58
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.71,
+          "outputCostPerMTok": 3.5,
+          "cacheReadCostPerMTok": 0.15
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.71,
+        "costPerMillionOutputTokensUsd": 3.5,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "kimi-k2.7-code",
+          "providerNativeId": "moonshotai/kimi-k2.7-code",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "moonshotai",
+            "model": "kimi-k2.7-code",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "kimi-k2-thinking",
+      "capabilities": {
+        "vendor": "moonshotai",
+        "class": "frontier",
+        "strengths": [
+          "reasoning",
+          "planning",
+          "challenger family coverage"
+        ],
+        "weaknesses": [
+          "watchlist maturity",
+          "slower than kimi-k2"
+        ],
+        "qualityScores": {
+          "routing": 58,
+          "planning": 88,
+          "coding": 85,
+          "review": 84,
+          "classify": 56
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.6,
+          "outputCostPerMTok": 2.5,
+          "cacheReadCostPerMTok": 0.15
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 262144,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.6,
+        "costPerMillionOutputTokensUsd": 2.5,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "kimi-k2-thinking",
+          "providerNativeId": "moonshotai/kimi-k2-thinking",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "moonshotai",
+            "model": "kimi-k2-thinking",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "strong_generalist",
+        "strengths": [
+          "long-context reasoning",
+          "code generation",
+          "anthropic-compatible launch"
+        ],
+        "weaknesses": [
+          "opt-in only",
+          "pricing subject to change"
+        ],
+        "qualityScores": {
+          "routing": 64,
+          "planning": 84,
+          "coding": 83,
+          "review": 85,
+          "classify": 62
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.435,
+          "outputCostPerMTok": 0.87,
+          "cacheWriteCostPerMTok": 0.435,
+          "cacheReadCostPerMTok": 0.003625
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.435,
+        "costPerMillionOutputTokensUsd": 0.87,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-v4-pro[1m]",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "strong_generalist",
+        "strengths": [
+          "max-context tasks",
+          "code generation",
+          "anthropic-compatible launch"
+        ],
+        "weaknesses": [
+          "opt-in only",
+          "pricing subject to change"
+        ],
+        "qualityScores": {
+          "routing": 63,
+          "planning": 85,
+          "coding": 82,
+          "review": 84,
+          "classify": 61
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.435,
+          "outputCostPerMTok": 0.87,
+          "cacheWriteCostPerMTok": 0.435,
+          "cacheReadCostPerMTok": 0.003625
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.435,
+        "costPerMillionOutputTokensUsd": 0.87,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "fast_economy",
+        "strengths": [
+          "speed",
+          "low cost",
+          "anthropic-compatible launch"
+        ],
+        "weaknesses": [
+          "less depth than pro",
+          "opt-in only"
+        ],
+        "qualityScores": {
+          "routing": 70,
+          "planning": 68,
+          "coding": 76,
+          "review": 70,
+          "classify": 80
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.14,
+          "outputCostPerMTok": 0.28,
+          "cacheWriteCostPerMTok": 0.14,
+          "cacheReadCostPerMTok": 0.0028
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "basic",
+        "costPerMillionInputTokensUsd": 0.14,
+        "costPerMillionOutputTokensUsd": 0.28,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-chat",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "strong_generalist",
+        "strengths": [
+          "compatibility alias for existing DeepSeek integrations"
+        ],
+        "weaknesses": [
+          "compatibility alias",
+          "future deprecation risk"
+        ],
+        "qualityScores": {
+          "routing": 46,
+          "planning": 70,
+          "coding": 76,
+          "review": 68,
+          "classify": 40
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.435,
+          "outputCostPerMTok": 0.87,
+          "cacheWriteCostPerMTok": 0.435,
+          "cacheReadCostPerMTok": 0.003625
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0.435,
+        "costPerMillionOutputTokensUsd": 0.87,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "deepseek-reasoner",
+      "capabilities": {
+        "vendor": "deepseek",
+        "class": "frontier",
+        "strengths": [
+          "reasoning-oriented compatibility alias"
+        ],
+        "weaknesses": [
+          "compatibility alias",
+          "future deprecation risk"
+        ],
+        "qualityScores": {
+          "routing": 44,
+          "planning": 78,
+          "coding": 74,
+          "review": 70,
+          "classify": 36
+        },
+        "pricing": {
+          "inputCostPerMTok": 0.435,
+          "outputCostPerMTok": 0.87,
+          "cacheWriteCostPerMTok": 0.435,
+          "cacheReadCostPerMTok": 0.003625
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1000000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "slow",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0.435,
+        "costPerMillionOutputTokensUsd": 0.87,
+        "agent": "claude"
+      }
+    },
+    {
+      "id": "ox-alpha",
+      "capabilities": {
+        "vendor": "unknown",
+        "class": "strong_generalist",
+        "strengths": [
+          "verified catalog: long context",
+          "verified catalog: tools",
+          "verified catalog: multimodal"
+        ],
+        "weaknesses": [
+          "provisional stealth identity",
+          "quality priors intentionally held",
+          "pricing pending disclosure"
+        ],
+        "qualityScores": {
+          "routing": 0,
+          "planning": 0,
+          "coding": 0,
+          "review": 0,
+          "classify": 0
+        },
+        "pricing": {
+          "inputCostPerMTok": 0,
+          "outputCostPerMTok": 0
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 1048576,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": true,
+          "video": true
+        },
+        "latencyTier": "standard",
+        "reasoningTier": "advanced",
+        "costPerMillionInputTokensUsd": 0,
+        "costPerMillionOutputTokensUsd": 0,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "ox-alpha",
+          "providerNativeId": "stealth/ox-alpha",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "planning",
+            "coding",
+            "review"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "stealth",
+            "model": "ox-alpha",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "supported",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": false
+        },
+        "identity": {
+          "status": "provisional",
+          "revision": 1,
+          "fingerprint": "4f6f8ce73fbcb352304542daa51b5d459a02061a90e630b48d7944f46e120a82",
+          "displayName": "Ox Alpha",
+          "family": "unknown",
+          "evidencePolicy": "held",
+          "verification": {
+            "source": "https://openrouter.ai/api/v1/models",
+            "observedAt": "2026-08-22T15:22:39.700Z",
+            "catalogHash": "45721528172e6489ce50462c3c5d6ff750c5cbc0dba8f315d23f81b84298579f"
+          }
+        }
+      }
+    },
+    {
+      "id": "grok-code-fast",
+      "capabilities": {
+        "vendor": "x-ai",
+        "class": "fast_economy",
+        "strengths": [
+          "fast coding iteration",
+          "low-latency implementation work",
+          "Grok family coverage"
+        ],
+        "weaknesses": [
+          "coding-only watchlist entry",
+          "OpenRouter dependency",
+          "retired 2026-08-16: not in OpenRouter catalog (HOK-2773)"
+        ],
+        "qualityScores": {
+          "routing": 48,
+          "planning": 0,
+          "coding": 76,
+          "review": 0,
+          "classify": 44
+        },
+        "defaultLadderEligible": false,
+        "contextWindowTokens": 256000,
+        "toolSupport": "basic",
+        "multimodal": {
+          "text": true,
+          "image": false
+        },
+        "latencyTier": "fast",
+        "reasoningTier": "standard",
+        "costPerMillionInputTokensUsd": 0,
+        "costPerMillionOutputTokensUsd": 0,
+        "agent": "native-openrouter",
+        "nativeCapability": {
+          "nativeProvider": "openrouter",
+          "piTransportKind": "openai-completions",
+          "readOnlyNative": "certified",
+          "compatFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-07-15T00:00:00.000Z",
+            "certificationSuiteVersion": "v3"
+          }
+        },
+        "supportedModel": {
+          "wavemillAlias": "grok-code-fast",
+          "providerNativeId": "x-ai/grok-code-fast-1",
+          "provider": "openrouter",
+          "transport": "openai-completions",
+          "stages": [
+            "coding"
+          ],
+          "requiredCertificationPhaseByStage": {
+            "planning": "workflow",
+            "coding": "patch",
+            "review": "read-only"
+          },
+          "certificationSuiteVersion": "v3",
+          "certificationFreshnessDays": 60,
+          "canonicalArtifactIdentity": {
+            "provider": "x-ai",
+            "model": "grok-code-fast-1",
+            "suiteVersion": "v2"
+          },
+          "lifecycle": "blocked",
+          "compatibilityFlags": {
+            "thinkingFormat": "openrouter"
+          },
+          "launchEligible": true,
+          "routingEligible": true
+        }
+      }
+    }
+  ],
+  "ladders": {
+    "routing": [
+      "claude-haiku-4-5-20251001",
+      "deepseek-v4-flash",
+      "claude-sonnet-5",
+      "gpt-5.5",
+      "gpt-5.6-terra",
+      "deepseek-v4-pro",
+      "claude-fable-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7"
+    ],
+    "planning": [
+      "claude-fable-5",
+      "gpt-5.5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "gpt-5.6-terra",
+      "deepseek-reasoner",
+      "deepseek-v4-pro",
+      "claude-sonnet-5",
+      "claude-haiku-4-5-20251001"
+    ],
+    "coding": [
+      "claude-fable-5",
+      "gpt-5.5",
+      "gpt-5.6-terra",
+      "deepseek-v4-pro",
+      "claude-sonnet-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "deepseek-chat",
+      "deepseek-v4-flash",
+      "claude-haiku-4-5-20251001"
+    ],
+    "review": [
+      "gpt-5.5",
+      "claude-fable-5",
+      "claude-opus-4-8",
+      "claude-opus-4-7",
+      "gpt-5.6-terra",
+      "deepseek-v4-pro",
+      "claude-sonnet-5",
+      "deepseek-reasoner",
+      "claude-haiku-4-5-20251001"
+    ],
+    "classify": [
+      "claude-haiku-4-5-20251001",
+      "deepseek-v4-flash",
+      "claude-sonnet-5",
+      "gpt-5.5",
+      "gpt-5.6-terra",
+      "claude-fable-5"
+    ]
+  },
+  "openrouterMappings": [
+    {
+      "wavemillAlias": "claude-opus-4-8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "claude-haiku-4-5",
+      "openrouterId": "anthropic/claude-haiku-4.5",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gpt-5-mini",
+      "openrouterId": "openai/gpt-5-mini",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "o3-mini",
+      "openrouterId": "openai/o3-mini",
+      "family": "gpt",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-v3.2",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "deepseek-coder-v2",
+      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
+      "family": "deepseek",
+      "status": "deprecated",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "qwen-2.5-coder-32b",
+      "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
+      "family": "qwen",
+      "status": "deprecated",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "qwen-3-235b",
+      "openrouterId": "qwen/qwen3-235b-a22b-2507",
+      "family": "qwen",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "qwen-2.5-72b",
+      "openrouterId": "qwen/qwen-2.5-72b-instruct",
+      "family": "qwen",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "kimi-k2-thinking",
+      "openrouterId": "moonshotai/kimi-k2-thinking",
+      "family": "kimi",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "family": "gemini",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "family": "gemini",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gemini-2.0-flash",
+      "openrouterId": "google/gemini-2.0-flash-001",
+      "family": "gemini",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "llama-3.3-70b",
+      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
+      "family": "llama",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "llama-4-maverick",
+      "openrouterId": "meta-llama/llama-4-maverick",
+      "family": "llama",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "planning",
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "llama-4-scout",
+      "openrouterId": "meta-llama/llama-4-scout",
+      "family": "llama",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "mistral-large-2",
+      "openrouterId": "mistralai/mistral-large-2407",
+      "family": "mistral",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "mistral-medium-3",
+      "openrouterId": "mistralai/mistral-medium-3-5",
+      "family": "mistral",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "devstral-small",
+      "openrouterId": "mistralai/mistral-small-2603",
+      "family": "mistral",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "devstral-medium",
+      "openrouterId": "mistralai/mistral-medium-3-5",
+      "family": "mistral",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "status": "provisional",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "grok-code-fast",
+      "openrouterId": "x-ai/grok-code-fast-1",
+      "family": "grok",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": [
+        "coding"
+      ]
+    }
+  ]
+}
