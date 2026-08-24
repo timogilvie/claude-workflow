@@ -4,7 +4,7 @@
 
 import { after as afterAll, before as beforeAll, describe, test as it } from 'node:test';
 import { expect } from './test-assertions.ts';
-import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { writeFileSync, unlinkSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hashString, hashFile, createPromptArtifact } from './prompt-hash.ts';

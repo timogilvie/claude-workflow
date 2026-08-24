@@ -62,9 +62,10 @@ describe('getRecentGitActivity', () => {
   test('respects commit limit', () => {
     const activity = getRecentGitActivity(process.cwd(), 1);
 
-    // With limit=1, should have fewer lines than limit=10
-    const lines = activity.split('\n');
-    expect(lines.length).toBeLessThan(100); // Sanity check
+    const commitLines = activity
+      .split('\n')
+      .filter((line) => /^[0-9a-f]{7,40} /.test(line));
+    expect(commitLines).toHaveLength(1);
   });
 });
 
