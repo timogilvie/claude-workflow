@@ -287,6 +287,7 @@ reset_startup_phase_artifacts() {
     "$feature_dir/.coding-result.json" \
     "$feature_dir/.review-result.json" \
     "$feature_dir/.ready-result.json" \
+    "$feature_dir/.review-infra-retries" \
     "$feature_dir/.resolved-phase" \
     "$feature_dir/.plan-approved" \
     "$feature_dir/.coding-complete" \

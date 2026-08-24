@@ -9240,6 +9240,100 @@ review_result_passes_ready_gate() {
   ' "$review_file" >/dev/null 2>&1
 }
 
+review_result_infra_failure() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (
+      (($review.failureCategory // "") == "native-runtime-unavailable") or
+      (($review.failureCategory // "") == "native-review-prompt-missing") or
+      ((($review.verdict // "") == "error") and ((($review.reviewToolError // "") | tostring | length) > 0))
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_infra_retry_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.review-infra-retries"
+  if [[ -f "$count_file" ]] && [[ "$(cat "$count_file" 2>/dev/null || echo "")" =~ ^[0-9]+$ ]]; then
+    cat "$count_file"
+    return 0
+  fi
+  echo "0"
+}
+
+increment_review_infra_retry_count() {
+  local state_dir="$1"
+  local count
+  count=$(review_infra_retry_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.review-infra-retries"
+  echo "$count"
+}
+
+clear_review_infra_retry_state() {
+  local state_dir="$1"
+  rm -f "$state_dir/.review-infra-retries"
+}
+
+relaunch_review_after_infra_recovery() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6" pr_number="$7" state_dir="$8"
+  local review_file="$state_dir/.review-result.json"
+  local retry_count retry_max reviewer_agent reviewer_model review_mode contract_payload retry_number rc=0
+
+  retry_count=$(review_infra_retry_count "$state_dir")
+  retry_max="${WAVEMILL_REVIEW_INFRA_RETRY_MAX:-2}"
+  [[ "$retry_max" =~ ^[0-9]+$ ]] || retry_max=2
+  if (( retry_count >= retry_max )); then
+    write_ready_attention_file "$state_dir" "Review failed on infrastructure ${retry_count}/${retry_max} times for PR #$pr_number, manual re-review required."
+    log_error "  $issue: review infrastructure retry cap reached for PR #$pr_number (${retry_count}/${retry_max})"
+    return 1
+  fi
+
+  reviewer_agent="$(jq -r '.agent // empty' "$review_file" 2>/dev/null || echo "")"
+  reviewer_model="$(jq -r '.model // empty' "$review_file" 2>/dev/null || echo "")"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$AGENT_CMD"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
+
+  if ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    write_ready_attention_file "$state_dir" "Review infrastructure is still unavailable for PR #$pr_number; waiting for reviewer runtime recovery."
+    log_error "  $issue: waiting for reviewer runtime recovery before re-reviewing PR #$pr_number"
+    return 1
+  fi
+
+  retry_number=$(increment_review_infra_retry_count "$state_dir")
+  review_mode="static"
+  if declare -F read_phase_config >/dev/null 2>&1; then
+    review_mode=$(read_phase_config "$state_dir" "review" "mode")
+    [[ -n "$review_mode" ]] || review_mode="static"
+  fi
+  contract_payload="$(jq -cn --arg agent "$reviewer_agent" --arg model "$reviewer_model" '{stageRole:"review",agent:$agent,model:$model}')"
+
+  if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$state_dir" "$wt_dir" "$reviewer_agent" "$reviewer_model" "$contract_payload" "review"; then
+    write_ready_attention_file "$state_dir" "Could not prepare infrastructure re-review for PR #$pr_number."
+    return 1
+  fi
+
+  launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" \
+    "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$state_dir/.needs-attention"
+    log "status" "♻ $issue → review relaunched after infrastructure recovery (attempt ${retry_number}/${retry_max})"
+    return 6
+  fi
+  if [[ "$rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    return 2
+  fi
+  write_ready_attention_file "$state_dir" "Could not relaunch infrastructure re-review for PR #$pr_number (rc=$rc)."
+  return 1
+}
+
 review_result_summary() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
@@ -9464,12 +9558,17 @@ launch_ready_phase() {
   if ! review_result_passes_ready_gate "$state_dir"; then
     local review_summary
     review_summary="$(review_result_summary "$state_dir")"
+    if review_result_infra_failure "$state_dir"; then
+      relaunch_review_after_infra_recovery "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" "$state_dir"
+      return $?
+    fi
     strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
     write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
     log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
     return 1
   fi
 
+  clear_review_infra_retry_state "$state_dir"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -14260,7 +14359,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -15048,7 +15147,7 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
-            if [[ "$launch_rc" -eq 4 ]]; then
+            if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
@@ -15143,7 +15242,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              if [[ "$launch_rc" -eq 4 ]]; then
+              if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -15431,7 +15530,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15520,7 +15619,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15614,7 +15713,7 @@ monitor_issue_state() {
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15671,7 +15770,7 @@ monitor_issue_state() {
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
-      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -15720,7 +15819,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
