@@ -568,7 +568,16 @@ interface MarkerIgnoredConfig {
   markerName: '.coding-complete' | '.plan-approved';
   idPrefix: 'coding-marker-ignored' | 'plan-marker-ignored';
   titlePhase: string;
+  /** Used when the mill has not written state since the marker appeared. */
   staleRecommendation: string;
+  /**
+   * Used when workflow-state.json is newer than the marker. The mill is
+   * demonstrably alive but has not advanced this task, so the finding still
+   * fires — a newer state file must not suppress it. In a multi-task mill,
+   * state is rewritten constantly for other tasks, so suppressing here would
+   * hide a genuinely wedged task indefinitely.
+   */
+  stateAliveRecommendation: string;
 }
 
 function statMarker(path: string, now: number): { mtimeMs: number; ageMs: number; mtimeIso: string } | undefined {
@@ -604,7 +613,6 @@ function buildMarkerIgnoredFinding(
 
   const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
   const stateNewerThanMarker = Number.isFinite(stateMtimeMs) && stateMtimeMs > marker.mtimeMs;
-  if (stateNewerThanMarker) return null;
 
   const markerAgeSeconds = Math.floor(marker.ageMs / 1000);
   const markerAgeTitleMinutes = Math.round(markerAgeMinutes);
@@ -624,9 +632,10 @@ function buildMarkerIgnoredFinding(
       `markerMtime=${marker.mtimeIso}`,
       `markerAgeSeconds=${markerAgeSeconds}`,
       `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+      `stateNewerThanMarker=${stateNewerThanMarker}`,
       `worktree=${task.worktree}`,
     ],
-    recommendation: config.staleRecommendation,
+    recommendation: stateNewerThanMarker ? config.stateAliveRecommendation : config.staleRecommendation,
   };
 }
 
@@ -786,6 +795,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           idPrefix: 'coding-marker-ignored',
           titlePhase: 'coding',
           staleRecommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
+          stateAliveRecommendation: 'The monitor should advance this to review. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
         }),
         buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
           phase: 'planning',
@@ -793,6 +803,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           idPrefix: 'plan-marker-ignored',
           titlePhase: 'planning',
           staleRecommendation: 'The monitor should launch coding. Check for a hung monitor child process or blocking external command before restarting the session.',
+          stateAliveRecommendation: 'The monitor should launch coding. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
         }),
       ];
       for (const finding of markerFindings) {

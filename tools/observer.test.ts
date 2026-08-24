@@ -125,7 +125,7 @@ test('old coding marker produces urgent marker-ignored finding with age evidence
   }
 });
 
-test('old coding marker is ignored when workflow state is newer', () => {
+test('newer workflow state modulates the coding marker finding but does not suppress it', () => {
   const markerMtime = new Date(Date.now() - 30 * 60_000);
   const stateMtime = new Date(markerMtime.getTime() + 60_000).toISOString();
   const fixture = createMarkerFixture('.coding-complete', markerMtime);
@@ -138,7 +138,36 @@ test('old coding marker is ignored when workflow state is newer', () => {
       stateMtime,
     }), defaultObserverOptions());
 
-    assert.equal(findings.some((finding) => finding.id === 'coding-marker-ignored-HOK-2848'), false);
+    // A newer workflow-state.json must NOT hide a genuinely wedged task: in a
+    // multi-task mill, state is rewritten constantly for other tasks.
+    const finding = findings.find((entry) => entry.id === 'coding-marker-ignored-HOK-2848');
+    assert.ok(finding, 'expected the marker-ignored finding to still be produced');
+    assert.equal(finding.severity, 'urgent');
+    assert.equal(finding.confidence, 'high');
+    assert.ok(finding.evidence.includes('stateNewerThanMarker=true'));
+    assert.match(finding.recommendation, /still writing workflow state but has not advanced this task/);
+  } finally {
+    rmSync(fixture.repoDir, { recursive: true, force: true });
+  }
+});
+
+test('older workflow state keeps the hung-monitor recommendation', () => {
+  const markerMtime = new Date(Date.now() - 30 * 60_000);
+  const stateMtime = new Date(markerMtime.getTime() - 60_000).toISOString();
+  const fixture = createMarkerFixture('.coding-complete', markerMtime);
+
+  try {
+    const findings = buildFindings(markerSnapshot({
+      repoDir: fixture.repoDir,
+      slug: fixture.slug,
+      phase: 'coding',
+      stateMtime,
+    }), defaultObserverOptions());
+
+    const finding = findings.find((entry) => entry.id === 'coding-marker-ignored-HOK-2848');
+    assert.ok(finding, 'expected the marker-ignored finding to be produced');
+    assert.ok(finding.evidence.includes('stateNewerThanMarker=false'));
+    assert.match(finding.recommendation, /hung monitor child process/);
   } finally {
     rmSync(fixture.repoDir, { recursive: true, force: true });
   }
