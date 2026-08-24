@@ -31,7 +31,7 @@ runTool({
       throw new Error(`Unsupported --reason value: ${reason}. Supported values: ${UNRESOLVABLE_REASONS.join(', ')}`);
     }
 
-    const result = resolveUnresolvablePair({
+    const result = await resolveUnresolvablePair({
       pairId,
       repoDir,
       reason,

@@ -143,18 +143,25 @@ export async function repairChallengePairing(
   return { pairId, challengerKey, taskRepaired, recordsRelabeled };
 }
 
-export function repairChallengePairingSync(
+export async function repairChallengePairingSync(
   opts: RepairChallengePairingOptions,
-): RepairChallengePairingResult {
+): Promise<RepairChallengePairingResult> {
   const { pairId } = opts;
   const challengerKey = `${pairId}_c`;
   const statePath = resolveStatePath(opts);
   let taskRepaired = false;
   if (existsSync(statePath)) {
-    const state = JSON.parse(readFileSync(statePath, 'utf-8'));
-    taskRepaired = repairTaskStateObject(state, pairId);
-    if (taskRepaired) {
-      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
+    try {
+      await mutateJsonState<Record<string, unknown>>(
+        statePath,
+        (state) => {
+          taskRepaired = repairTaskStateObject(state as Record<string, unknown>, pairId);
+          return state;
+        },
+        { timeoutMs: 5000 },
+      );
+    } catch {
+      // If mutation fails (e.g., lock timeout), continue with repair attempt
     }
   }
   const recordsRelabeled = relabelEvalRecords(resolveEvalsFilePath(opts), pairId);

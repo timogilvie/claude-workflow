@@ -52,7 +52,7 @@ export type ResolveOutcome =
   }
   | { status: 'skipped'; reason: string };
 
-export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOutcome {
+export async function resolveUnresolvablePair(input: UnresolvablePairInput): Promise<ResolveOutcome> {
   const evalsDir = join(input.repoDir, '.wavemill', 'evals');
   const existing = readDecisiveChallengeComparisons(evalsDir).find((comparison) => comparison.challengePairId === input.pairId);
   if (existing) {
@@ -60,7 +60,7 @@ export function resolveUnresolvablePair(input: UnresolvablePairInput): ResolveOu
   }
 
   try {
-    repairChallengePairingSync({ pairId: input.pairId, repoDir: input.repoDir });
+    await repairChallengePairingSync({ pairId: input.pairId, repoDir: input.repoDir });
   } catch (error) {
     console.warn(`[challenge-pair-resolver] Failed to repair pairing metadata for ${input.pairId}: ${error instanceof Error ? error.message : String(error)}`);
   }
