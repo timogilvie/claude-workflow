@@ -496,6 +496,16 @@ function recommendModelHeuristic(
 ): ModelRecommendation {
   const taskType = characteristics.taskType;
 
+  // Safeguard: If complexity is very low for a large prompt, escalate
+  if (characteristics.complexityScore <= 1 && characteristics.charCount > 200) {
+    console.error(
+      `WARN: Suspiciously low complexity score (${characteristics.complexityScore}) for a large prompt ` +
+        `(${characteristics.charCount} chars). Overriding complexity to 's' (score 2) to prevent under-routing.`
+    );
+    characteristics.complexityScore = 2;
+    characteristics.complexityBand = 's';
+  }
+
   // Load eval records (per-repo + aggregated cross-repo data)
   const loadedRecords = loadMergedEvalRecords(opts);
   const evidencePartition = partitionEvidence(loadedRecords, 'router_history');
