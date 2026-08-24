@@ -1761,9 +1761,41 @@ trap cleanup_on_exit INT TERM
 init_state_ledger
 
 
+cleanup_terminal_missing_worktree_entries() {
+  local terminal_issues
+  terminal_issues=$(jq -r '
+    (.tasks // {})
+    | to_entries[]
+    | select((.value.worktree // "") != "")
+    | select(.value.status as $status
+        | ["aborted","merged","completed-external","complete","completed","closed","done"] | index($status))
+    | select((.value.worktree | type) == "string")
+    | "\(.key)|\(.value.worktree)|\(.value.status)"
+  ' "$STATE_FILE" 2>/dev/null || true)
+  [[ -n "$terminal_issues" ]] || return 0
+
+  local issue worktree status dropped=0
+  while IFS='|' read -r issue worktree status; do
+    [[ -n "$issue" && -n "$worktree" ]] || continue
+    if [[ ! -e "$worktree" ]]; then
+      remove_task_state "$issue"
+      dropped=$((dropped + 1))
+      log "debug" "  Dropped terminal task state for $issue ($status, missing worktree: $worktree)"
+    fi
+  done <<<"$terminal_issues"
+
+  if (( dropped > 0 )); then
+    local entry_label="entries"
+    (( dropped == 1 )) && entry_label="entry"
+    log "debug" "  Dropped $dropped terminal task state $entry_label with missing worktrees"
+  fi
+}
+
 # Prune stale tasks from previous runs
 # Check each task: if PR merged or branch deleted, clean up worktree + state
 cleanup_stale_tasks() {
+  cleanup_terminal_missing_worktree_entries
+
   local stale_issues
   stale_issues=$(jq -r '.tasks | to_entries[] | .key' "$STATE_FILE" 2>/dev/null)
   [[ -z "$stale_issues" ]] && return 0
@@ -3231,7 +3263,6 @@ handle_agent_error_recovery() {
 
   now="$(date +%s)"
   staleness=$(( now - hook_ts ))
-  (( staleness < 300 )) || return 0
 
   if [[ "$hook_state" != "error" ]]; then
     if [[ -f "$retry_file" ]] && [[ "$hook_state" == "working" || "$hook_state" == "waiting" || "$hook_state" == "idle" ]]; then
@@ -3250,11 +3281,22 @@ handle_agent_error_recovery() {
 
   retry_count="$(get_retry_count "$SESSION" "$issue")"
   max_retries=4
-  if (( retry_count >= max_retries )); then
+  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( staleness >= 300 )); then
+    if (( retry_count > 0 )); then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry process stopped updating after a transient error"
+    fi
     return 0
   fi
 
-  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( retry_count >= max_retries )); then
+    time_since_last_retry=$(( now - last_retry_ts ))
+    if (( hook_ts >= last_retry_ts )) || [[ "$time_since_last_retry" -ge 300 ]]; then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "transient retries exhausted"
+    fi
+    return 0
+  fi
+
   backoff_delay="$(get_backoff_delay $((retry_count + 1)))"
   time_since_last_retry=$(( now - last_retry_ts ))
 
@@ -3273,7 +3315,63 @@ handle_agent_error_recovery() {
     log "debug" "  Resume command sent to $issue"
   else
     log_error "  Failed to resume $issue after transient error"
+    terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry resume command failed"
   fi
+}
+
+terminalize_transient_retry_failure() {
+  local issue="$1" agent_cmd="${2:-}" error_detail="${3:-}" terminal_reason="${4:-transient retry failed}"
+  local slug wt_dir phase result_stage feature_dir is_challenge pr model notes artifacts_json win next_action
+
+  [[ -n "$issue" ]] || return 1
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+  phase=$(read_state_value "coding" --arg i "$issue" '.tasks[$i].phase // "coding"')
+  case "$phase" in
+    planning|coding|review|ready) result_stage="$phase" ;;
+    *) result_stage="coding" ;;
+  esac
+  [[ -n "$wt_dir" && -n "$slug" ]] && feature_dir="${wt_dir}/features/${slug}"
+
+  next_action="transient upstream failure persisted, retire the challenge arm and relaunch if needed"
+  notes="Native ${result_stage} failed after retry recovery (${terminal_reason}): ${error_detail}. Next: ${next_action}"
+  artifacts_json="$(jq -cn \
+    --arg failureKind "provider-transient-error" \
+    --arg detail "$error_detail" \
+    --arg terminalReason "$terminal_reason" \
+    --arg nextAction "$next_action" \
+    '{type:"transientRetryFailure", failureKind:$failureKind, detail:$detail, terminalReason:$terminalReason, nextAction:$nextAction}' \
+    2>/dev/null || printf '{}')"
+
+  if [[ -n "$feature_dir" ]]; then
+    model="$(stage_result_field "$feature_dir" "$result_stage" "model" 2>/dev/null || true)"
+    write_stage_result "$feature_dir" "$result_stage" "failed" "$agent_cmd" "$model" "$notes" "$artifacts_json"
+  fi
+
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].status = "error"
+      | .tasks[$issue].retryFailure = $reason
+      | .tasks[$issue].retryFailureDetail = $detail
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$terminal_reason" --arg detail "$error_detail" >/dev/null 2>&1 || true
+
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  if [[ "$is_challenge" == "true" && -z "$pr" && -n "$feature_dir" ]]; then
+    win="${issue}-${slug}"
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$result_stage" "$model" \
+      "retry_exhausted:provider-transient-error" "$notes" "$next_action" || true
+    cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$result_stage" "$terminal_reason" || true
+    log_warn "$issue → challenge arm failed after transient retry recovery. Pair quarantined. $next_action"
+  else
+    log_warn "$issue → transient retry recovery reached terminal state: $terminal_reason"
+  fi
+  return 0
 }
 
 transient_error_recovery_pending() {
@@ -7014,6 +7112,12 @@ emit_native_terminal_failure_attention() {
   if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
     wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
   fi
+  if [[ "$is_challenge" == "true" ]]; then
+    if cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "native terminal failure" 2>/dev/null; then
+      log_warn "$issue → Native ${stage} failed (${failure_kind}). Pair quarantined. ${next_action}"
+      return 0
+    fi
+  fi
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} failed (${failure_kind}). ${next_action}"
   active_count=$((active_count + 1))
@@ -7054,6 +7158,7 @@ emit_challenge_stage_failure_quarantine() {
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
 
   log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
+  cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "terminal stage failure:${failure_kind}" || true
   return 0
 }
 
@@ -10759,6 +10864,26 @@ mark_task_aborted_for_cleanup() {
   return 0
 }
 
+cleanup_quarantined_no_pr_challenge_arm() {
+  local issue="$1" feature_dir="${2:-}" stage="${3:-challenge}" reason="${4:-challenge quarantined}"
+  local is_challenge pr slug
+
+  [[ -n "$issue" ]] || return 1
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  [[ -z "$pr" ]] || return 1
+
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  if [[ -z "$slug" && -n "$feature_dir" ]]; then
+    slug="$(basename "$feature_dir")"
+  fi
+  [[ -n "$slug" ]] || return 1
+
+  cleanup_aborted_challenge_arm "$issue" "$slug" "quarantined ${stage}: ${reason}"
+}
+
 cleanup_aborted_challenge_arm() {
   local issue="$1" slug="${2:-}" reason="${3:-challenge aborted}"
   local win target target_gone wt_dir task_branch state_branch pr
@@ -10833,6 +10958,7 @@ cleanup_aborted_challenge_arm() {
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  remove_task_state "$issue"
   CLEANED["$issue"]=1
   log "$issue: Complete (aborted challenge cleanup)"
 }
