@@ -36,6 +36,13 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
 Canonical global registry entries must provide the complete metadata above.
 
+The authoritative registry data lives in
+`shared/fixtures/model-registry.v1.json` and is projected by
+`shared/lib/model-registry-loader.ts` into `DEFAULT_MODEL_REGISTRY`. Keep model
+entries, ladders, OpenRouter launch mappings, identity metadata, and lineage in
+the catalog; do not update the generated/effective TypeScript projection by
+text replacement.
+
 ## Admission Criteria
 
 A model may only claim stages it can run. For each claimed
@@ -67,6 +74,13 @@ Retire models by keeping their registry entry and setting
 `supportedModel.lifecycle: "blocked"`. Do not delete the alias, provider-native
 ID, pricing, or certification identity, because historical eval records use
 those mappings for attribution.
+
+When a retired model has a future launch replacement, declare
+`identity.lineage.successor` on the retired entry and
+`identity.lineage.predecessors` on the replacement. The successor must exist and
+must not be provisional. Lineage resolution is only for future route intent at
+external-router and cache-restoration boundaries; it must not rewrite raw eval
+or historical performance records.
 
 For native OpenRouter models, also set the launch-priority fixture row to
 `status: "deprecated"` and remove retired aliases from smoke watchlists. A model

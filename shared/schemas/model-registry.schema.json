@@ -1,0 +1,154 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wavemill.dev/schemas/model-registry.schema.json",
+  "title": "Wavemill model registry catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "models", "ladders"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "capabilities"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:[.-][a-z0-9]+)*(?:\\[[a-z0-9]+\\])?$"
+          },
+          "capabilities": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "vendor",
+              "class",
+              "strengths",
+              "weaknesses",
+              "qualityScores",
+              "contextWindowTokens",
+              "toolSupport",
+              "multimodal",
+              "latencyTier",
+              "reasoningTier",
+              "costPerMillionInputTokensUsd",
+              "costPerMillionOutputTokensUsd"
+            ],
+            "properties": {
+              "vendor": { "type": "string", "minLength": 1 },
+              "class": { "enum": ["frontier", "strong_generalist", "fast_economy"] },
+              "strengths": { "type": "array", "items": { "type": "string" } },
+              "weaknesses": { "type": "array", "items": { "type": "string" } },
+              "qualityScores": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["routing", "planning", "coding", "review", "classify"],
+                "properties": {
+                  "routing": { "type": "number" },
+                  "planning": { "type": "number" },
+                  "coding": { "type": "number" },
+                  "review": { "type": "number" },
+                  "classify": { "type": "number" }
+                }
+              },
+              "pricing": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["inputCostPerMTok", "outputCostPerMTok"],
+                "properties": {
+                  "inputCostPerMTok": { "type": "number" },
+                  "outputCostPerMTok": { "type": "number" },
+                  "cacheWriteCostPerMTok": { "type": "number" },
+                  "cacheReadCostPerMTok": { "type": "number" }
+                }
+              },
+              "contextWindowTokens": { "type": "integer", "minimum": 1 },
+              "toolSupport": { "enum": ["none", "basic", "full"] },
+              "multimodal": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["text", "image"],
+                "properties": {
+                  "text": { "type": "boolean" },
+                  "image": { "type": "boolean" },
+                  "audio": { "type": "boolean" },
+                  "video": { "type": "boolean" }
+                }
+              },
+              "latencyTier": { "enum": ["fast", "standard", "slow"] },
+              "reasoningTier": { "enum": ["basic", "standard", "advanced"] },
+              "costPerMillionInputTokensUsd": { "type": "number" },
+              "costPerMillionOutputTokensUsd": { "type": "number" },
+              "supportedModel": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "wavemillAlias": { "type": "string", "minLength": 1 },
+                  "providerNativeId": { "type": "string", "minLength": 1 },
+                  "lifecycle": { "enum": ["supported", "deprecated", "blocked"] }
+                }
+              },
+              "identity": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["status", "revision", "fingerprint", "displayName", "family", "evidencePolicy"],
+                "properties": {
+                  "status": { "enum": ["provisional", "verified"] },
+                  "revision": { "type": "integer", "minimum": 1 },
+                  "fingerprint": { "type": "string", "minLength": 1 },
+                  "displayName": { "type": "string", "minLength": 1 },
+                  "family": { "type": "string", "minLength": 1 },
+                  "evidencePolicy": { "enum": ["held", "eligible"] },
+                  "lineage": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "predecessors": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                      "successor": { "type": "string", "minLength": 1 },
+                      "formerIds": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+                      "disclosedAt": { "type": "string", "minLength": 1 },
+                      "disclosureSource": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "openrouterMappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["wavemillAlias", "openrouterId", "family", "status", "priorityTier", "roleEligibility"],
+        "properties": {
+          "wavemillAlias": { "type": "string", "minLength": 1 },
+          "openrouterId": { "type": "string", "minLength": 1 },
+          "family": {
+            "enum": ["claude", "gpt", "deepseek", "glm", "qwen", "kimi", "gemini", "llama", "mistral", "grok", "unknown"]
+          },
+          "status": { "enum": ["active", "watchlist", "deprecated", "provisional"] },
+          "priorityTier": { "type": "integer", "minimum": 1 },
+          "roleEligibility": {
+            "type": "array",
+            "items": { "enum": ["planning", "coding", "review"] }
+          }
+        }
+      }
+    },
+    "ladders": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "routing": { "type": "array", "items": { "type": "string" } },
+        "planning": { "type": "array", "items": { "type": "string" } },
+        "coding": { "type": "array", "items": { "type": "string" } },
+        "review": { "type": "array", "items": { "type": "string" } },
+        "classify": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
