@@ -12,6 +12,7 @@ import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
 import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
 import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
+import { countRejectedEvalRecords, listRejectedEvalRecords } from '../shared/lib/eval-rejected-store.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -653,6 +654,25 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
   for (const repo of snapshot.repos) {
+    const rejectedEvalCount = countRejectedEvalRecords(repo.repoDir);
+    if (rejectedEvalCount > 0) {
+      const [newestRejectedEval] = listRejectedEvalRecords(repo.repoDir, { limit: 1 });
+      findings.push({
+        id: `eval-rejected-records-${repo.session}-${hashText(repo.repoDir)}`,
+        severity: 'medium',
+        category: 'warning',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `${rejectedEvalCount} eval record${rejectedEvalCount === 1 ? '' : 's'} rejected during write-time validation`,
+        evidence: [
+          `count=${rejectedEvalCount}`,
+          `newest=${newestRejectedEval ? basename(newestRejectedEval) : 'unknown'}`,
+        ],
+        recommendation: 'Inspect .wavemill/evals/rejected/ and fix the path producing write-time validation failures.',
+      });
+    }
+
     const observerPanes = snapshot.panes.filter((pane) => pane.session === repo.session && pane.title === observerPaneTitle);
     const observerPanePids = new Set(observerPanes.map((pane) => pane.pid).filter((pid) => pid > 0));
     const observerLoopRows = snapshot.processes.filter((row) => {

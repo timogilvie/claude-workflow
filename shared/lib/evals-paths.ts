@@ -42,6 +42,17 @@ export function resolveEvalsDir(
   };
 }
 
+export function resolveRejectedEvalsDir(
+  dir?: string,
+  repoDir?: string,
+): ResolvedEvalsDir {
+  const resolved = resolveEvalsDir(dir, repoDir);
+  return {
+    dir: join(resolved.dir, 'rejected'),
+    fromConfig: resolved.fromConfig,
+  };
+}
+
 export function resolveRouteArtifactArchiveDir(
   issueId: string | undefined,
   repoDir?: string,

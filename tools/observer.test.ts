@@ -393,6 +393,61 @@ test('healthy queue health keeps generic queue analysis warning', () => {
   }
 });
 
+test('rejected eval quarantine files produce operator-visible finding', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-rejected-evals-'));
+  const rejectedDir = join(repoDir, '.wavemill', 'evals', 'rejected');
+  mkdirSync(rejectedDir, { recursive: true });
+  writeFileSync(join(rejectedDir, '2026-08-22T00-00-00-000Z-HOK-1-primary.json'), '{}\n');
+  writeFileSync(join(rejectedDir, '2026-08-23T00-00-00-000Z-HOK-2-challenger.json'), '{}\n');
+  writeFileSync(join(rejectedDir, 'ignored.txt'), 'not json');
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-23T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    const finding = findings.find((candidate) => candidate.id.startsWith('eval-rejected-records-'));
+    assert.ok(finding);
+    assert.equal(finding.severity, 'medium');
+    assert.equal(finding.category, 'warning');
+    assert.equal(finding.confidence, 'high');
+    assert.match(finding.title, /2 eval records rejected/);
+    assert.ok(finding.evidence.includes('count=2'));
+    assert.ok(finding.evidence.some((line) => line.includes('newest=2026-08-23T00-00-00-000Z-HOK-2-challenger.json')));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('missing rejected eval quarantine directory produces no finding', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-no-rejected-evals-'));
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-23T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    assert.equal(findings.some((candidate) => candidate.id.startsWith('eval-rejected-records-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('service mode rejects Linear filing', () => {
   const previous = process.env.WAVEMILL_OBSERVER_SERVICE;
   process.env.WAVEMILL_OBSERVER_SERVICE = '1';
