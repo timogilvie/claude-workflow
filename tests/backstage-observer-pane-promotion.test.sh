@@ -1,44 +1,90 @@
 #!/usr/bin/env bash
 # Verifies that the observer pane gets the larger half of the backstage window,
 # and that promotion is idempotent across repeated startup/reconcile passes.
+#
+# Functions are extracted from wavemill-common.sh rather than sourced, matching
+# the sibling backstage tests: sourcing the whole library drags in unrelated
+# startup state that is not guaranteed to exist in CI.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# shellcheck source=/dev/null
-source "$REPO_DIR/shared/lib/wavemill-common.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
+extract_function() {
+  local source_file="$1" function_name="$2"
+  awk -v name="$function_name" '
+    function brace_delta(line, stripped, opens, closes) {
+      stripped = line
+      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
+      gsub(/\047([^\047\\]|\\.)*\047/, "\047\047", stripped)
+      opens = gsub(/\{/, "{", stripped)
+      closes = gsub(/\}/, "}", stripped)
+      return opens - closes
+    }
+    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" { capture = 1; depth = 0 }
+    capture {
+      print
+      depth += brace_delta($0)
+      if (depth == 0) { exit }
+    }
+  ' "$source_file"
+}
+
+echo "=== Observer Pane Promotion ==="
+
+FUNCS="$(mktemp)"
+trap 'rm -f "$FUNCS"' EXIT
+{
+  extract_function "$COMMON_SCRIPT" "wavemill_pane_area"
+  echo
+  extract_function "$COMMON_SCRIPT" "wavemill_promote_observer_pane"
+} > "$FUNCS"
+
+# The functions must actually have been found; an empty extraction would make
+# every later assertion vacuously "pass" a no-op.
+if grep -q "wavemill_pane_area()" "$FUNCS" && grep -q "wavemill_promote_observer_pane()" "$FUNCS"; then
+  pass "extracted both helpers from wavemill-common.sh"
+else
+  fail "extracted both helpers from wavemill-common.sh"
+  echo "Passed: $PASS"; echo "Failed: $FAIL"; exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$FUNCS"
+
 if ! command -v tmux >/dev/null 2>&1; then
-  echo "tmux not available; skipping backstage pane promotion test"
+  echo "  SKIP  tmux not available; geometry assertions skipped"
+  echo
+  echo "Passed: $PASS"
+  echo "Failed: $FAIL"
+  [[ "$FAIL" -eq 0 ]]
   exit 0
 fi
 
 SESSION="wavemill-pane-promo-test-$$"
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-tmux new-session -d -s "$SESSION" -x 200 -y 60 'sleep 300' 2>/dev/null || {
-  echo "could not start tmux session; skipping"
+if ! tmux new-session -d -s "$SESSION" -x 200 -y 60 'sleep 300' 2>/dev/null; then
+  echo "  SKIP  could not start a tmux session; geometry assertions skipped"
+  echo
+  echo "Passed: $PASS"
+  echo "Failed: $FAIL"
+  [[ "$FAIL" -eq 0 ]]
   exit 0
-}
-trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true' EXIT
+fi
+trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true; rm -f "$FUNCS"' EXIT
 
-big_pane="$(tmux display-message -p -t "$SESSION:0.0" '#{pane_id}')"
-# Small pane on the right, mimicking the observer's original corner.
 tmux split-window -t "$SESSION:0.0" -h -p 25 'sleep 300' >/dev/null 2>&1
-small_pane="$(tmux display-message -p -t "$SESSION:0" '#{pane_id}' 2>/dev/null)"
 small_pane="$(tmux list-panes -t "$SESSION:0" -F '#{pane_id} #{pane_width}' | sort -k2 -n | head -1 | cut -d' ' -f1)"
+big_pane="$(tmux list-panes -t "$SESSION:0" -F '#{pane_id} #{pane_width}' | sort -k2 -nr | head -1 | cut -d' ' -f1)"
 
-echo "=== Observer Pane Promotion ==="
-
-area_of() { wavemill_pane_area "$1"; }
-
-observer_area_before="$(area_of "$small_pane")"
-tend_area_before="$(area_of "$big_pane")"
+observer_area_before="$(wavemill_pane_area "$small_pane" || true)"
+tend_area_before="$(wavemill_pane_area "$big_pane" || true)"
 
 if [[ "$observer_area_before" =~ ^[0-9]+$ && "$tend_area_before" =~ ^[0-9]+$ ]]; then
   pass "wavemill_pane_area reports numeric areas"
@@ -52,11 +98,10 @@ else
   fail "observer starts in the smaller pane"
 fi
 
-# Promote: the observer's content should end up in the larger pane.
 wavemill_promote_observer_pane "$small_pane" "$big_pane"
+observer_area_after="$(wavemill_pane_area "$small_pane" || true)"
 
-observer_area_after="$(area_of "$small_pane")"
-if (( observer_area_after > observer_area_before )); then
+if [[ "$observer_area_after" =~ ^[0-9]+$ ]] && (( observer_area_after > observer_area_before )); then
   pass "observer pane grew after promotion"
 else
   fail "observer pane grew after promotion ($observer_area_before -> $observer_area_after)"
@@ -64,7 +109,7 @@ fi
 
 # Idempotence: a second pass must not swap back.
 wavemill_promote_observer_pane "$small_pane" "$big_pane"
-observer_area_twice="$(area_of "$small_pane")"
+observer_area_twice="$(wavemill_pane_area "$small_pane" || true)"
 if [[ "$observer_area_twice" == "$observer_area_after" ]]; then
   pass "promotion is idempotent across repeated passes"
 else
@@ -72,7 +117,8 @@ else
 fi
 
 # Degenerate inputs must be no-ops rather than errors.
-if wavemill_promote_observer_pane "" "$big_pane" && wavemill_promote_observer_pane "$small_pane" "" \
+if wavemill_promote_observer_pane "" "$big_pane" \
+  && wavemill_promote_observer_pane "$small_pane" "" \
   && wavemill_promote_observer_pane "$small_pane" "$small_pane"; then
   pass "missing or identical pane ids are a safe no-op"
 else
