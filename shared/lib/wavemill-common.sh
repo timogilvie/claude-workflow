@@ -2514,6 +2514,33 @@ issue_payload_is_complete() {
 }
 
 # ============================================================================
+# PARENT ISSUE FILTERING (HOK-2867)
+# ============================================================================
+
+# Filter parent issues from the backlog JSON.
+# Parents are identified by having children.nodes with at least one entry.
+# Args: $1 = backlog_json, $2 = optional log_dest (file descriptor for skip warnings)
+# Output: Filtered JSON (parents removed), one warning per skipped parent to stderr/log
+filter_parent_issues() {
+  local backlog_json="$1"
+  local log_dest="${2:-/dev/stderr}"
+
+  # Emit warnings for skipped parents first, then output filtered JSON
+  {
+    printf '%s\n' "$backlog_json" | jq -r '
+      .[]
+      | select((.children.nodes // []) | length > 0)
+      | "\(.identifier)|\(([.children.nodes[].identifier] | join(",")))"
+    '
+  } 2>/dev/null | while IFS='|' read -r parent_id child_ids; do
+    printf 'WARN: Skipping parent issue %s (has Linear children: %s)\n' "$parent_id" "$child_ids" >&"$log_dest"
+  done
+
+  # Output filtered JSON (remove parents)
+  printf '%s\n' "$backlog_json" | jq '[ .[] | select((.children.nodes // []) | length == 0) ]'
+}
+
+# ============================================================================
 # ISSUE EXPANSION
 # ============================================================================
 
