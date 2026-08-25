@@ -2542,8 +2542,8 @@ describe('canonical supported-model helpers', () => {
     assert.equal(resolveProviderNativeModelId('ox-alpha')?.providerNativeId, 'stealth/ox-alpha');
     assert.equal(resolveProviderNativeModelId('stealth/ox-alpha')?.wavemillAlias, 'ox-alpha');
     assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'planner'), 'workflow');
-    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'coder'), 'patch');
-    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'reviewer'), 'read-only');
+    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'coder'), 'workflow');
+    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'reviewer'), 'workflow');
     assert.ok(!JSON.stringify(model).toLowerCase().includes('glm'));
     assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'provisional-identity');
     assert.equal(explainModelSupportExclusion('stealth/ox-alpha', 'coding'), 'provisional-identity');
