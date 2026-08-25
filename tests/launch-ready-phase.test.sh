@@ -68,6 +68,8 @@ extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LA
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "_write_cross_pr_diagnostic" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "write_cross_pr_guard_ready_result" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_cross_pr_guard_ready_evidence" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "cross_pr_revert_gate_allows_merge" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
@@ -305,7 +307,7 @@ EOF
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
-    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" ]]; then
+    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" && "$TEST_CASE" != "cross_pr_revert_blocked" && "$TEST_CASE" != "cross_pr_revert_error" ]]; then
       cross_pr_revert_gate_allows_merge() {
         case "$TEST_CASE" in
           cross_pr_revert_blocked)
@@ -337,6 +339,7 @@ EOF
             return 1
             ;;
           cross_pr_revert_error)
+            printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[],\"toolError\":{\"commandClass\":\"git-merge-base\",\"command\":\"git merge-base auto/integration HEAD\",\"ref\":\"auto/integration\",\"stderr\":\"fatal: Not a valid object name '\''auto/integration'\''\"}}"
             return 2
             ;;
           cross_pr_revert_tool_error_direct)
@@ -354,7 +357,7 @@ EOF
         printf "%s\n" "$(( $(cat "$READY_LABEL_COUNT_FILE") + 1 ))" > "$READY_LABEL_COUNT_FILE"
         case "$TEST_CASE" in
           ready_label_failure) return 1 ;;
-          *) printf "Restored ready labels for PR #%s\n" "${3:-304}"; return 0 ;;
+          *) printf "Canonicalized ready labels for PR #%s\n" "${3:-304}"; return 0 ;;
         esac
       fi
 
@@ -658,26 +661,30 @@ output="$(run_launch_case cross_pr_revert_blocked)"
 check_contains "cross-pr revert block returns failure" "$output" "rc=1"
 check_contains "cross-pr revert block writes attention" "$output" "PR #304 removes files from #437 without explicit acknowledgement."
 check_contains "cross-pr revert block includes file list" "$output" "Affected files: strategy.txt."
-check_contains "cross-pr revert block skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert block records failed ready verdict" "$output" "\"verdict\":\"fail\""
+check_contains "cross-pr revert block records guard evidence" "$output" "\"source\":\"cross-pr-revert-guard\""
+check_contains "cross-pr revert block records checked head" "$output" "\"checkedHeadSha\":\"abc123\""
 check_contains "cross-pr revert block logs status" "$output" "Cross-PR revert guard blocked ready phase for PR #304"
-check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"verdict\":"
+check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case cross_pr_revert_error)"
 check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
 check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
-check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert tool error records failed ready verdict" "$output" "\"verdict\":\"fail\""
+check_contains "cross-pr revert tool error records guard evidence" "$output" "\"status\":\"tool-error\""
 check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
-check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
+check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case cross_pr_revert_tool_error_direct)"
 check_contains "direct cross-pr tool error returns failure" "$output" "rc=1"
 check_contains "direct cross-pr tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
 check_contains "direct cross-pr tool error includes diagnostic" "$output" "Diagnostic: fatal: Not a valid object name 'auto/integration'"
 check_contains "direct cross-pr tool error writes ready diagnostic" "$output" "\"crossPrDiagnostic\""
+check_contains "direct cross-pr tool error records checked head" "$output" "\"checkedHeadSha\":\"abc123\""
 check_contains "direct cross-pr tool error records command class" "$output" "\"commandClass\":\"git-merge-base\""
 check_contains "direct cross-pr tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
-check_contains "direct cross-pr tool error skips ready result writes" "$output" "stage_calls="
-check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"verdict\":"
+check_contains "direct cross-pr tool error skips stage helper writes" "$output" "stage_calls="
+check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"
@@ -783,16 +790,16 @@ check_contains "persistent conflict logs one terse error" "$output" "Merge confl
 output="$(run_launch_case pass_after_remediation)"
 check_contains "pass after remediation returns success" "$output" "rc=0"
 check_contains "pass after remediation writes completed stage" "$output" "|ready|completed|"
-check_contains "pass after remediation restores ready labels once" "$output" "ready_label_calls=1"
+check_contains "pass after remediation canonicalizes ready labels once" "$output" "ready_label_calls=1"
 check_contains "pass after remediation records ready label update" "$output" "\"readyLabelsUpdated\":true"
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
 check_contains "pass after remediation clears conflict marker" "$output" "conflict_detected=absent"
 check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
 check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
 check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
-check_contains "pass after remediation demotes restored labels to debug" "$output" "debug   HOK-1300: Restored ready labels for PR #304"
+check_contains "pass after remediation demotes label canonicalization to debug" "$output" "debug   HOK-1300: Canonicalized ready labels for PR #304"
 check_contains "pass after remediation demotes ready completion to debug" "$output" "debug   HOK-1300: Ready checks completed (verdict: pass)"
-check_not_contains "pass after remediation no longer emits restored labels at status" "$output" "status   HOK-1300: Restored ready labels for PR #304"
+check_not_contains "pass after remediation no longer emits label canonicalization at status" "$output" "status   HOK-1300: Canonicalized ready labels for PR #304"
 
 output="$(run_launch_case review_tool_error_gate)"
 check_contains "review tool error gate retries review" "$output" "rc=6"

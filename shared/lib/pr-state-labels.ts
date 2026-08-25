@@ -143,12 +143,12 @@ function transitionPullRequestLabels(
 
   let currentPr = pr;
 
-  if (labelsToAdd.length > 0) {
-    currentPr = prStateLabelDeps.addLabelsToPullRequest(pr.number, labelsToAdd, options);
-  }
-
   for (const label of labelsToRemove) {
     currentPr = prStateLabelDeps.removeLabelFromPullRequest(pr.number, label, options);
+  }
+
+  if (labelsToAdd.length > 0) {
+    currentPr = prStateLabelDeps.addLabelsToPullRequest(pr.number, labelsToAdd, options);
   }
 
   return currentPr;

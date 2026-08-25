@@ -9048,7 +9048,7 @@ _write_cross_pr_diagnostic() {
   tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
 
   if [[ -f "$result_file" ]]; then
-    jq --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
+    jq -c --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$result_file"
   else
     printf '{"crossPrDiagnostic":%s}\n' "$diag_json" > "$tmp" \
@@ -9057,12 +9057,79 @@ _write_cross_pr_diagnostic() {
   rm -f "$tmp"
 }
 
+write_cross_pr_guard_ready_result() {
+  local state_dir="$1" pr_number="$2" checked_head_sha="$3" status="$4" reason="$5" raw_result="${6:-}"
+  local result_file="$state_dir/.ready-result.json"
+  local now tmp
+
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  mkdir -p "$state_dir"
+  tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
+
+  jq -cn \
+    --arg now "$now" \
+    --argjson pr_number "$pr_number" \
+    --arg checked_head_sha "$checked_head_sha" \
+    --arg status "$status" \
+    --arg reason "$reason" \
+    --arg raw_result "$raw_result" '
+      ($raw_result | fromjson? // {}) as $parsed
+      | {
+          stage: "ready",
+          status: "failed",
+          startedAt: $now,
+          finishedAt: $now,
+          agent: "",
+          model: "",
+          notes: $reason,
+          failureReason: $reason,
+          artifacts: {
+            type: "ready",
+            verdict: "fail",
+            prNumber: $pr_number,
+            readyHeadSha: $checked_head_sha,
+            crossPrGuard: {
+              source: "cross-pr-revert-guard",
+              status: $status,
+              checkedHeadSha: $checked_head_sha,
+              reason: $reason,
+              result: $parsed,
+              toolError: ($parsed.toolError // null)
+            }
+          }
+        }
+      | .artifacts.crossPrGuard |= with_entries(select(.value != null))
+    ' > "$tmp" 2>/dev/null && mv "$tmp" "$result_file"
+  rm -f "$tmp"
+}
+
+clear_cross_pr_guard_ready_evidence() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  local tmp
+
+  if [[ -f "$result_file" ]] && jq -e '.artifacts.crossPrGuard or .crossPrDiagnostic' "$result_file" >/dev/null 2>&1; then
+    tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || tmp=""
+    if [[ -n "$tmp" ]]; then
+      jq 'del(.artifacts.crossPrGuard, .crossPrDiagnostic)' "$result_file" > "$tmp" 2>/dev/null && mv "$tmp" "$result_file"
+      rm -f "$tmp"
+    fi
+  fi
+
+  if [[ -f "$state_dir/.needs-attention" ]] \
+    && { grep -Fq 'Cross-PR revert guard' "$state_dir/.needs-attention" \
+      || grep -Fq 'without explicit acknowledgement' "$state_dir/.needs-attention"; }; then
+    rm -f "$state_dir/.needs-attention"
+  fi
+}
+
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
-  local result rc prs files message stderr_file raw_error classification
+  local result rc prs files message stderr_file raw_error classification checked_head_sha
   local tool_stderr=""
   local extra_args=()
   raw_error=""
+  checked_head_sha=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
   [[ -n "$base_branch" ]] && extra_args+=(--base-ref "$base_branch" --integration-ref "$base_branch")
   stderr_file=$(mktemp 2>/dev/null) || stderr_file=""
@@ -9082,6 +9149,7 @@ cross_pr_revert_gate_allows_merge() {
   fi
 
   if [[ "$rc" -eq 0 ]]; then
+    clear_cross_pr_guard_ready_evidence "$state_dir"
     return 0
   fi
   tool_stderr="$raw_error"
@@ -9094,6 +9162,7 @@ cross_pr_revert_gate_allows_merge() {
     if [[ -n "$files" ]]; then
       message="$message Affected files: $files."
     fi
+    write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "blocked" "$message" "$result"
     write_ready_attention_file "$state_dir" "$message"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
       --state-dir "$state_dir" \
@@ -9122,6 +9191,7 @@ cross_pr_revert_gate_allows_merge() {
       message="$message Diagnostic: $diag_stderr"
     fi
 
+    write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "tool-error" "$message" "$result"
     write_ready_attention_file "$state_dir" "$message"
     _write_cross_pr_diagnostic "$state_dir" "$ref_name" "$cmd_class" "$diag_stderr"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
@@ -9141,13 +9211,15 @@ cross_pr_revert_gate_allows_merge() {
     classification="ref-missing"
   fi
 
-  write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
+  message="Cross-PR revert guard failed for PR #$pr_number."
+  write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "tool-error" "$message" "$result"
+  write_ready_attention_file "$state_dir" "$message"
   npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
     --state-dir "$state_dir" \
     --stage "cross-pr-guard" \
     --tool "check-cross-pr-reverts" \
     --classification "$classification" \
-    --reason "Cross-PR revert guard failed for PR #$pr_number." \
+    --reason "$message" \
     --raw-error "$raw_error" \
     --exit-code "$rc" >/dev/null 2>&1 || true
   log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number)"
@@ -9869,7 +9941,7 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
-    log "debug" "  $issue: Restored ready labels for PR #$pr_number"
+    log "debug" "  $issue: Canonicalized ready labels for PR #$pr_number"
     log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi

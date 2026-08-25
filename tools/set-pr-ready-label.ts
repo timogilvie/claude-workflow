@@ -15,14 +15,14 @@ export function setPrReadyLabel(prNumber: string, repo?: string): void {
   }
 
   const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, { repo });
-  setPrReadyLabelDeps.log(`Restored ready labels for PR #${pr.number}`);
+  setPrReadyLabelDeps.log(`Canonicalized ready labels for PR #${pr.number}`);
 }
 
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 
 const config = {
   name: 'set-pr-ready-label',
-  description: 'Restore the canonical Wavemill ready labels on a GitHub pull request',
+  description: 'Canonicalize the Wavemill ready labels on a GitHub pull request',
   options: {
     repo: {
       type: 'string',
