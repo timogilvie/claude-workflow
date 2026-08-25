@@ -198,19 +198,11 @@ function collectReviewScopeGuardFindings(input: {
   featureDir?: string;
   sinceCommit?: string;
 }): ReviewFinding[] {
-  // Neither input available means scope cannot be evaluated. Report it, but as
-  // a warning rather than a blocker: a missing input is not evidence of a scope
-  // violation, and blocking here makes every review of a task without these
-  // inputs fail closed. Same fail-open rule as runPrePrSafetyGuard.
-  if (!input.sinceCommit && !input.featureDir) {
-    return [{
-      severity: 'warning',
-      location: 'review-runner',
-      category: 'requirements',
-      description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',
-    }];
-  }
-
+  // The guard always evaluates: without sinceCommit/featureDir it derives
+  // scope from git (merge base against the integration branch), so there is
+  // no "cannot evaluate" skip path any more (HOK-2887). Verified on this
+  // branch: validateReviewScope with neither input returns ok with
+  // baselineSource "git merge-base auto/integration".
   const result = reviewRunnerDeps.validateReviewScope({
     repoDir: input.repoDir,
     featureDir: input.featureDir,
@@ -278,9 +270,21 @@ function filterRevertsAlreadyOnIntegration(
   return reverts
     .map((revert) => ({
       ...revert,
-      files: revert.files.filter((file) =>
-        getBlobIdAtRef(repoDir, integrationRef, file.path)
-        !== getBlobIdAtRef(repoDir, 'HEAD', file.path)),
+      files: revert.files.filter((file) => {
+        const integrationBlob = getBlobIdAtRef(repoDir, integrationRef, file.path);
+        const headBlob = getBlobIdAtRef(repoDir, 'HEAD', file.path);
+
+        // Only drop on positive evidence that both refs resolve and agree.
+        // getBlobIdAtRef returns null when `git rev-parse` fails, and comparing
+        // two nulls with `!==` yields false -- which would silently discard the
+        // finding whenever the lookup could not run at all. A revert guard must
+        // fail closed: an unreadable ref is not proof the path is unchanged.
+        if (integrationBlob === null || headBlob === null) {
+          return true;
+        }
+
+        return integrationBlob !== headBlob;
+      }),
     }))
     .filter((revert) => revert.files.length > 0);
 }
