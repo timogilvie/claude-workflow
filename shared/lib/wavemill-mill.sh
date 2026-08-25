@@ -10937,6 +10937,82 @@ maybe_resolve_unresolvable_challenge_pair() {
   esac
 }
 
+resolve_pair_on_primary_merge() {
+  local issue="$1"
+  local pr="$2"
+  local role pair_id resolve_output resolve_status resolve_reason
+
+  role=$(get_task_meta "$issue" "challengeRole")
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ "$role" == "primary" && -n "$pair_id" && -n "$pr" ]] || return 0
+
+  resolve_output=$(npx tsx "$TOOLS_DIR/resolve-primary-merged-pair.ts" \
+    --pair-id "$pair_id" \
+    --primary-pr "$pr" \
+    --repo-dir "$REPO_DIR" 2>/dev/null || true)
+  resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+
+  case "$resolve_status" in
+    resolved)
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      ;;
+    already-resolved)
+      mark_challenge_compared "$pair_id" "record" >/dev/null || true
+      log "status" "challenge pair $pair_id already resolved, primary merge cleanup continuing"
+      ;;
+    skipped|"")
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      log_warn "challenge pair $pair_id primary-merge resolver skipped: $resolve_reason"
+      ;;
+  esac
+}
+
+cleanup_merged_primary_challenge_task() {
+  local issue="$1" slug="$2" completion_reason="${3:-}"
+  local pr="${4:-}" role pair_id preserved
+
+  role=$(get_task_meta "$issue" "challengeRole")
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  if [[ "$role" != "primary" || -z "$pair_id" ]]; then
+    cleanup_completed_task "$issue" "$slug" "$completion_reason"
+    return $?
+  fi
+
+  preserved=$(jq -c \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg pr "$pr" \
+    --arg pair_id "$pair_id" \
+    '
+    (.tasks[$issue] // {}) as $task
+    | ($pr | tonumber? // $task.pr // $task.prNumber // null) as $merged_pr
+    | {
+        pr: $merged_pr,
+        prNumber: ($task.prNumber // $merged_pr),
+        branch: $task.branch,
+        slug: ($task.slug // $slug),
+        challengePairId: ($task.challengePairId // $pair_id),
+        challengeRole: ($task.challengeRole // "primary"),
+        challengeModel: $task.challengeModel,
+        evalCompleted: ($task.evalCompleted // true),
+        status: "merged",
+        phase: "merged"
+      }
+    | with_entries(select(.value != null))
+    ' "$STATE_FILE" 2>/dev/null || printf '{}')
+
+  cleanup_completed_task "$issue" "$slug" "$completion_reason" || return $?
+
+  if ! state_mutate "$STATE_FILE" \
+    '.tasks[$issue] = ($preserved + {updated: (now | todate)}) | .updated = (now | todate)' \
+    --arg issue "$issue" \
+    --argjson preserved "$preserved"; then
+    log_warn "cleanup_merged_primary_challenge_task: failed to preserve $issue challenge metadata"
+  fi
+}
+
 # Archive stage artifacts from worktree before cleanup.
 # Copies plan.md, task-packet.md, and routing decision to a durable location
 # so post-merge eval can still access them after the worktree is removed.
@@ -14456,7 +14532,8 @@ monitor_issue_state() {
 
     set_window_attention_state "$WIN" "clear"
     if [[ "$task_status" == "merged" && "$merged_before_ready" == "true" ]]; then
-      cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
       return 0
     fi
@@ -14469,7 +14546,12 @@ monitor_issue_state() {
       return 0
     fi
 
-    cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+    if [[ "$task_status" == "merged" ]]; then
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
+    else
+      cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+    fi
 
     # Prune worktrees after cleanup
     execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
@@ -15624,7 +15706,8 @@ monitor_issue_state() {
     elif should_update_linear_state "$ISSUE"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
-    cleanup_completed_task "$ISSUE" "$SLUG"
+    resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+    cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "" "$PR"
     if [[ "$_eval_needed" == "true" ]]; then
       log_task "info" "$ISSUE" "📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"

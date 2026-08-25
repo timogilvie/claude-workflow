@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { loadWavemillConfig } from './config.ts';
+import { mutateJsonState } from './state-mutex.ts';
 import {
   appendChallengeComparison,
   buildDoubleForfeitComparison,
@@ -30,6 +31,9 @@ const ORPHAN_PAIR_GRACE_MS = 60_000;
 const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
 const UNKNOWN_PR_NUMBER = 0;
 const UNKNOWN_MODEL = 'unknown';
+const PRIMARY_MERGED_REASON = 'Primary already merged as PR';
+
+type PrimaryMergedReason = 'primary_merged';
 
 export interface UnresolvablePairInput {
   pairId: string;
@@ -41,13 +45,21 @@ export interface UnresolvablePairInput {
   listRemoteBranches?: (repoDir: string) => string[];
 }
 
+export interface PrimaryMergedInput {
+  pairId: string;
+  primaryPr: number;
+  repoDir: string;
+  dryRun?: boolean;
+  now?: () => Date;
+}
+
 export type ResolveOutcome =
   | { status: 'already-resolved'; recordExists: true }
   | {
     status: 'resolved';
     record: ChallengeComparison;
     outcome: 'forfeit' | 'double-forfeit';
-    reason: UnresolvableReason;
+    reason: UnresolvableReason | PrimaryMergedReason;
     dryRun: boolean;
   }
   | { status: 'skipped'; reason: string };
@@ -120,6 +132,58 @@ export async function resolveUnresolvablePair(input: UnresolvablePairInput): Pro
     record: resolution.record,
     outcome: resolution.outcome,
     reason: resolvedReason,
+    dryRun: input.dryRun === true,
+  };
+}
+
+export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promise<ResolveOutcome> {
+  const evalsDir = join(input.repoDir, '.wavemill', 'evals');
+  const workflow = loadWorkflowStateChallengeData(input.repoDir);
+  const pairState = workflow.taskStateByPair.get(input.pairId);
+  const existing = readDecisiveChallengeComparisons(evalsDir).find((comparison) => comparison.challengePairId === input.pairId);
+
+  if (existing) {
+    if (pairState?.challenger && !input.dryRun) {
+      await markChallengerSupersededForPrimaryMerge(input.repoDir, pairState.challenger, input.primaryPr, input.now);
+    }
+    return { status: 'already-resolved', recordExists: true };
+  }
+
+  if (!pairState) {
+    return { status: 'skipped', reason: `Pair ${input.pairId} is not present in workflow state.` };
+  }
+
+  const primary = pairState.primary;
+  const challenger = pairState.challenger;
+  const primaryPr = normalizePrNumber(input.primaryPr) ?? primary?.prNumber ?? UNKNOWN_PR_NUMBER;
+  const timestamp = (input.now ?? (() => new Date()))().toISOString();
+  const record = buildForfeitComparison({
+    challengePairId: input.pairId,
+    primaryModel: getTaskModel(primary),
+    challengerModel: getTaskModel(challenger),
+    primaryPrUrl: getPrUrl(primaryPr),
+    challengerPrUrl: getTaskPrUrl(challenger),
+    winner: 'primary',
+    primaryCompleted: true,
+    challengerCompleted: challenger?.evalCompleted === true,
+    rationale: `Primary PR #${primaryPr} merged before challenge comparison completed. Challenger arm superseded.`,
+    terminalReason: 'primary_merged',
+    noComparisonReason: 'primary_merged',
+    timestamp,
+  });
+
+  if (!input.dryRun) {
+    appendChallengeComparison(record, evalsDir);
+    if (challenger) {
+      await markChallengerSupersededForPrimaryMerge(input.repoDir, challenger, primaryPr, input.now);
+    }
+  }
+
+  return {
+    status: 'resolved',
+    record,
+    outcome: 'forfeit',
+    reason: 'primary_merged',
     dryRun: input.dryRun === true,
   };
 }
@@ -446,7 +510,48 @@ function getTaskModel(task: TaskEvalState | undefined): string {
 
 function getTaskPrUrl(task: TaskEvalState | undefined): string {
   const prNumber = task?.prNumber ?? UNKNOWN_PR_NUMBER;
-  return `https://github.com/unknown/unknown/pull/${prNumber}`;
+  return getPrUrl(prNumber);
+}
+
+function getPrUrl(prNumber: number | null | undefined): string {
+  return `https://github.com/unknown/unknown/pull/${prNumber ?? UNKNOWN_PR_NUMBER}`;
+}
+
+function normalizePrNumber(value: number): number | null {
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+interface WorkflowStateFile {
+  tasks?: Record<string, Record<string, unknown>>;
+  [key: string]: unknown;
+}
+
+async function markChallengerSupersededForPrimaryMerge(
+  repoDir: string,
+  challenger: TaskEvalState,
+  primaryPr: number,
+  now?: () => Date,
+): Promise<void> {
+  const statePath = join(repoDir, '.wavemill', 'workflow-state.json');
+  const timestamp = (now ?? (() => new Date()))().toISOString();
+  const reason = `${PRIMARY_MERGED_REASON} #${primaryPr}`;
+
+  await mutateJsonState<WorkflowStateFile>(statePath, (current) => {
+    const task = current.tasks?.[challenger.issueId];
+    if (!task) {
+      return current;
+    }
+    if (task.phase === 'superseded' && task.status === 'superseded') {
+      return current;
+    }
+    task.phase = 'superseded';
+    task.status = 'superseded';
+    task.supersededReason = reason;
+    task.supersededAt = timestamp;
+    task.challengeAborted = reason;
+    task.updated = timestamp;
+    return current;
+  });
 }
 
 function getHardFailureRetryMax(repoDir: string): number {

@@ -118,6 +118,7 @@ for f in \
   "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
+  "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
   "$REPO_DIR"/tests/startup-terminal-prune.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
@@ -1230,7 +1231,7 @@ else
 fi
 
 if awk '
-  /cleanup_completed_task/ { saw_cleanup=1 }
+  /cleanup_completed_task|cleanup_merged_primary_challenge_task/ { saw_cleanup=1 }
   saw_cleanup && /launch_background_post_merge_eval/ { found=1; exit }
   END { exit !found }
 ' <<< "$MERGED_BLOCK"; then
