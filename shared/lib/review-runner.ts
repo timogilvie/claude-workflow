@@ -271,37 +271,71 @@ function filterRevertsAlreadyOnIntegration(
     .map((revert) => ({
       ...revert,
       files: revert.files.filter((file) => {
-        const integrationBlob = getBlobIdAtRef(repoDir, integrationRef, file.path);
-        const headBlob = getBlobIdAtRef(repoDir, 'HEAD', file.path);
+        const integrationBlob = lookupBlobAtRef(repoDir, integrationRef, file.path);
+        const headBlob = lookupBlobAtRef(repoDir, 'HEAD', file.path);
 
-        // Only drop on positive evidence that both refs resolve and agree.
-        // getBlobIdAtRef returns null when `git rev-parse` fails, and comparing
-        // two nulls with `!==` yields false -- which would silently discard the
-        // finding whenever the lookup could not run at all. A revert guard must
-        // fail closed: an unreadable ref is not proof the path is unchanged.
-        if (integrationBlob === null || headBlob === null) {
+        // An unreadable ref is not proof a path is unchanged, so a lookup
+        // failure keeps the finding: this guard must fail closed.
+        if (integrationBlob.kind === 'error' || headBlob.kind === 'error') {
           return true;
         }
 
-        return integrationBlob !== headBlob;
+        // A path that does not exist on integration cannot be reverted by this
+        // branch -- there is no integration content to regress. Distinguishing
+        // this from a failed lookup matters: `git rev-parse` reports both as an
+        // empty result, so treating them alike either fails open on real errors
+        // or fabricates blockers for files integration never had.
+        if (integrationBlob.kind === 'absent') {
+          return false;
+        }
+
+        // Present on integration but gone at HEAD is a deletion -- exactly the
+        // case this guard exists to catch.
+        if (headBlob.kind === 'absent') {
+          return true;
+        }
+
+        return integrationBlob.id !== headBlob.id;
       }),
     }))
     .filter((revert) => revert.files.length > 0);
 }
 
-function getBlobIdAtRef(
+type BlobLookup =
+  | { kind: 'blob'; id: string }
+  | { kind: 'absent' }
+  | { kind: 'error' };
+
+/**
+ * Resolve a path's blob at a ref, distinguishing "the ref is unreadable" from
+ * "the ref is fine but does not contain this path".
+ *
+ * `git rev-parse --verify --quiet <ref>:<path>` reports both as an empty
+ * result, which is why the ref itself is verified first.
+ */
+function lookupBlobAtRef(
   repoDir: string,
   ref: string,
   path: string,
-): string | null {
+): BlobLookup {
+  try {
+    reviewRunnerDeps.execShellCommand(
+      `git rev-parse --verify --quiet ${escapeShellArg(`${ref}^{commit}`)}`,
+      { cwd: repoDir, encoding: 'utf-8' },
+    );
+  } catch {
+    return { kind: 'error' };
+  }
+
   try {
     const blob = String(reviewRunnerDeps.execShellCommand(
       `git rev-parse --verify --quiet ${escapeShellArg(`${ref}:${path}`)}`,
       { cwd: repoDir, encoding: 'utf-8' },
     )).trim();
-    return blob || null;
+    return blob ? { kind: 'blob', id: blob } : { kind: 'absent' };
   } catch {
-    return null;
+    // The ref resolved above, so a failure here means the path is not present.
+    return { kind: 'absent' };
   }
 }
 
