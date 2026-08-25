@@ -75,7 +75,7 @@ test('resolver is idempotent for orphaned pairs', async () => {
   }
 });
 
-test('primary-merged resolver writes forfeit and aborts challenger', async () => {
+test('primary-merged resolver writes forfeit and supersedes challenger', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -116,16 +116,17 @@ test('primary-merged resolver writes forfeit and aborts challenger', async () =>
     assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
 
     const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
-    assert.equal(state.tasks.HOK_1_c.phase, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.status, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.abortedReason, 'Primary already merged as PR #1230');
-    assert.equal(state.tasks.HOK_1_c.abortedAt, '2026-08-24T17:02:49.000Z');
+    assert.equal(state.tasks.HOK_1_c.phase, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.status, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.supersededReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.supersededAt, '2026-08-24T17:02:49.000Z');
+    assert.equal(state.tasks.HOK_1_c.challengeAborted, 'Primary already merged as PR #1230');
   } finally {
     cleanup();
   }
 });
 
-test('primary-merged resolver is idempotent when challenger is already aborted', async () => {
+test('primary-merged resolver is idempotent when challenger is already superseded', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -142,10 +143,11 @@ test('primary-merged resolver is idempotent when challenger is already aborted',
         challengePairId: 'pair-idempotent',
         challengeRole: 'challenger',
         challengeModel: 'claude-sonnet-4',
-        phase: 'aborted',
-        status: 'aborted',
-        abortedReason: 'Primary already merged as PR #1227',
-        abortedAt: '2026-08-24T15:25:37.000Z',
+        phase: 'superseded',
+        status: 'superseded',
+        supersededReason: 'Primary already merged as PR #1227',
+        supersededAt: '2026-08-24T15:25:37.000Z',
+        challengeAborted: 'Primary already merged as PR #1227',
       },
     });
 
@@ -166,7 +168,7 @@ test('primary-merged resolver is idempotent when challenger is already aborted',
     assert.equal(second.status, 'already-resolved');
     assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
     const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
-    assert.equal(state.tasks.HOK_1_c.abortedAt, '2026-08-24T15:25:37.000Z');
+    assert.equal(state.tasks.HOK_1_c.supersededAt, '2026-08-24T15:25:37.000Z');
   } finally {
     cleanup();
   }
@@ -244,7 +246,7 @@ test('primary-merged resolver dry run does not append or mutate state', async ()
   }
 });
 
-test('primary-merged resolver aborts active challenger when record already exists', async () => {
+test('primary-merged resolver supersedes active challenger when record already exists', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {
     writeWorkflowState(repoDir, {
@@ -288,9 +290,10 @@ test('primary-merged resolver aborts active challenger when record already exist
 
     assert.equal(second.status, 'already-resolved');
     const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
-    assert.equal(state.tasks.HOK_1_c.phase, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.status, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.abortedReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.phase, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.status, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.supersededReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.challengeAborted, 'Primary already merged as PR #1230');
   } finally {
     cleanup();
   }

@@ -44,7 +44,7 @@ after(() => {
 });
 
 describe('resolve-primary-merged-pair CLI', () => {
-  it('emits a JSON envelope and aborts the challenger', async () => {
+  it('emits a JSON envelope and supersedes the challenger', async () => {
     const repoDir = makeTempRepo();
     const { stdout } = await execFileAsync('npx', [
       'tsx',
@@ -63,9 +63,10 @@ describe('resolve-primary-merged-pair CLI', () => {
     assert.equal(parsed.record?.winner, 'primary');
 
     const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
-    assert.equal(state.tasks.HOK_1_c.phase, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.status, 'aborted');
-    assert.equal(state.tasks.HOK_1_c.abortedReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.phase, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.status, 'superseded');
+    assert.equal(state.tasks.HOK_1_c.supersededReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.challengeAborted, 'Primary already merged as PR #1230');
   });
 
   it('rejects invalid primary PR values', async () => {

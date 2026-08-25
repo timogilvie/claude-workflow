@@ -144,7 +144,7 @@ export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promi
 
   if (existing) {
     if (pairState?.challenger && !input.dryRun) {
-      await markChallengerAbortedForPrimaryMerge(input.repoDir, pairState.challenger, input.primaryPr, input.now);
+      await markChallengerSupersededForPrimaryMerge(input.repoDir, pairState.challenger, input.primaryPr, input.now);
     }
     return { status: 'already-resolved', recordExists: true };
   }
@@ -175,7 +175,7 @@ export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promi
   if (!input.dryRun) {
     appendChallengeComparison(record, evalsDir);
     if (challenger) {
-      await markChallengerAbortedForPrimaryMerge(input.repoDir, challenger, primaryPr, input.now);
+      await markChallengerSupersededForPrimaryMerge(input.repoDir, challenger, primaryPr, input.now);
     }
   }
 
@@ -526,7 +526,7 @@ interface WorkflowStateFile {
   [key: string]: unknown;
 }
 
-async function markChallengerAbortedForPrimaryMerge(
+async function markChallengerSupersededForPrimaryMerge(
   repoDir: string,
   challenger: TaskEvalState,
   primaryPr: number,
@@ -541,13 +541,14 @@ async function markChallengerAbortedForPrimaryMerge(
     if (!task) {
       return current;
     }
-    if (task.phase === 'aborted' && task.status === 'aborted') {
+    if (task.phase === 'superseded' && task.status === 'superseded') {
       return current;
     }
-    task.phase = 'aborted';
-    task.status = 'aborted';
-    task.abortedReason = reason;
-    task.abortedAt = timestamp;
+    task.phase = 'superseded';
+    task.status = 'superseded';
+    task.supersededReason = reason;
+    task.supersededAt = timestamp;
+    task.challengeAborted = reason;
     task.updated = timestamp;
     return current;
   });
