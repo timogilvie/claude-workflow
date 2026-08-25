@@ -198,10 +198,13 @@ function collectReviewScopeGuardFindings(input: {
   featureDir?: string;
   sinceCommit?: string;
 }): ReviewFinding[] {
-  // Both inputs missing is an error condition - we can't validate scope
+  // Neither input available means scope cannot be evaluated. Report it, but as
+  // a warning rather than a blocker: a missing input is not evidence of a scope
+  // violation, and blocking here makes every review of a task without these
+  // inputs fail closed. Same fail-open rule as runPrePrSafetyGuard.
   if (!input.sinceCommit && !input.featureDir) {
     return [{
-      severity: 'blocker',
+      severity: 'warning',
       location: 'review-runner',
       category: 'requirements',
       description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',

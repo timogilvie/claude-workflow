@@ -112,6 +112,10 @@ export function checkPrePrVerificationGate(
     baseSha: latestBaseSha,
     headSha: currentHeadSha,
   });
+  if (safetyGuard.skipped) {
+    // Surface a bypassed check rather than letting it read as a pass.
+    console.warn(`⚠ ${safetyGuard.reason}`);
+  }
   if (!safetyGuard.passed) {
     return {
       passed: false,

@@ -378,6 +378,55 @@ test('runPrePrSafetyGuard: blocks unsafe branch diff after refreshed base', () =
   }
 });
 
+test('runPrePrSafetyGuard: fails open when no feature directory can be resolved', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    // No featureDir supplied and none resolvable: the guard cannot determine
+    // which files the task owns. Before this fix it blocked here, which made
+    // checkPrePrVerificationGate reject every caller in every repo.
+    writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
+
+    assert.equal(result.passed, true);
+    assert.equal(result.skipped, true);
+    assert.match(result.reason ?? '', /scope guard skipped/i);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: a resolvable scope still blocks an out-of-scope change', () => {
+  // Guards the fail-open above: it must not swallow a real violation.
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+    writeFileSync(join(featureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['feature.txt'],
+    }));
+    writeAndCommit(repoDir, 'unrelated.txt', 'bad\n', 'out of scope');
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, false);
+    assert.notEqual(result.skipped, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // Results
 // ────────────────────────────────────────────────────────────────
