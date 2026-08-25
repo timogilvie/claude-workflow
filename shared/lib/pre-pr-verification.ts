@@ -315,20 +315,16 @@ export function runVerificationRecipe(
 /**
  * Run the review scope guard as a pre-PR safety check.
  *
- * The guard needs a resolvable feature directory to know which files a task
- * owns. When it cannot resolve one it reports `featureDir: null` and blocks on
- * "review scope cannot be proven" -- which, for a caller that never supplies a
- * featureDir, means blocking unconditionally.
+ * The guard always evaluates: when no feature directory or baseline resolves,
+ * scope is derived from git (merge base against the integration branch), so a
+ * missing featureDir is no longer a reason to skip (HOK-2887, obviating the
+ * HOK-2884 threading gap).
  *
- * So an indeterminate scope fails **open**: the guard reports what it could not
- * evaluate rather than rejecting every caller. It does not fail open on a
- * concrete violation. Cross-PR reverts and deletion-budget findings are derived
- * from baseRef, not from the feature directory, so they remain enforced even
- * when scope itself is unknowable -- and those are the findings that actually
- * protect merged work.
- *
- * `skipped` is set when the guard failed open, so callers can log a real check
- * having been bypassed instead of mistaking it for a pass.
+ * `skipped` now means the guard *tooling* failed (a git/tool error left scope
+ * unverified) — which should be genuinely rare, not the normal case. The gate
+ * does not hard-fail PRs on transient tooling errors, but callers log the
+ * bypass (⚠) instead of mistaking it for a pass. Concrete policy violations
+ * (`status: 'fail'`) always fail the gate.
  */
 export function runPrePrSafetyGuard(options: {
   stateDir: string;
@@ -345,27 +341,21 @@ export function runPrePrSafetyGuard(options: {
     writeBaseline: false,
   });
 
-  if (result.ok) {
-    return { passed: true };
-  }
-
-  // Without a feature directory no scope evaluation happened at all: declared
-  // scope and the baseline both derive from it, so every 'review-scope' finding
-  // is a consequence of that, not evidence of a violation.
-  const scopeIndeterminate = result.featureDir === null;
-  const concreteViolations = result.findings.filter(
-    (finding) => finding.severity === 'blocker' && finding.category !== 'review-scope',
-  );
-
-  if (scopeIndeterminate && concreteViolations.length === 0 && result.crossPrReverts.length === 0) {
+  if (result.status === 'error') {
+    const toolDetail = result.toolError
+      ? ` (${result.toolError.commandClass}: ${result.toolError.stderr})`
+      : '';
     return {
       passed: true,
       skipped: true,
       reason:
-        'Review scope guard skipped: no task feature directory could be resolved, ' +
-        'so in-scope files could not be determined. Cross-PR revert and deletion ' +
-        'checks still ran and found nothing.',
+        'Review scope guard could not verify scope — treat as unverified, ' +
+        `not as a pass${toolDetail}.`,
     };
+  }
+
+  if (result.ok) {
+    return { passed: true };
   }
 
   return {
