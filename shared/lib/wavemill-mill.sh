@@ -2111,6 +2111,10 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     exit 0
   fi
 
+  # Filter out parent issues (epics) - HOK-2867
+  # Warnings go to stderr, filtered JSON goes to stdout
+  BACKLOG="$(filter_parent_issues "$BACKLOG")"
+
   CANDIDATES="$(pick_candidates "$BACKLOG")"
   if [[ -z "$CANDIDATES" ]]; then
     log "status" "No backlog candidates found."
@@ -11818,6 +11822,10 @@ refresh_backlog_cache() {
     LAST_BACKLOG_FETCH=$now
     return 0
   fi
+
+  # Filter out parent issues (epics) - HOK-2867
+  # Warnings go to stderr, filtered JSON goes to stdout
+  backlog_json="$(filter_parent_issues "$backlog_json")"
 
   BACKLOG_JSON_CACHE="$backlog_json"
   QUEUE_PLAN_CACHE=""
