@@ -22,6 +22,7 @@ import {
   type LaunchPriorityModel,
   type OpenRouterModel,
 } from './openrouter-catalog.ts';
+import { getFamilyCapabilities } from './openrouter-capabilities.ts';
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'openrouter-catalog-test-'));
@@ -81,7 +82,7 @@ describe('loadLaunchPriorityFixture', () => {
     const list = loadLaunchPriorityList();
     assert.ok(list.length >= 25, `expected at least 25 launch-priority models, got ${list.length}`);
     const aliases = new Set(list.map((m) => m.wavemillAlias));
-    for (const required of ['gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code']) {
+    for (const required of ['gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code', 'ox-alpha']) {
       assert.ok(aliases.has(required), `expected fixture to include ${required}`);
     }
   });
@@ -144,6 +145,8 @@ describe('OpenRouter alias mapping', () => {
     assert.equal(resolveOpenRouterIdFromWavemillAlias('qwen-3-coder'), 'qwen/qwen3-coder');
     assert.equal(resolveOpenRouterIdFromWavemillAlias('glm-5.2'), 'z-ai/glm-5.2');
     assert.equal(resolveOpenRouterIdFromWavemillAlias('kimi-k2.7-code'), 'moonshotai/kimi-k2.7-code');
+    assert.equal(resolveOpenRouterIdFromWavemillAlias('ox-alpha'), 'stealth/ox-alpha');
+    assert.equal(resolveWavemillAliasFromOpenRouterId('stealth/ox-alpha'), 'ox-alpha');
   });
 
   it('returns null instead of throwing for unknown aliases', () => {
@@ -157,11 +160,12 @@ describe('OpenRouter alias mapping', () => {
     }
   });
 
-  it('resolves Kimi/Qwen/GLM aliases and ids through one native OpenRouter identity', () => {
+  it('resolves Kimi/Qwen/GLM/Ox aliases and ids through one native OpenRouter identity', () => {
     const cases = [
       ['qwen-3-coder', 'qwen/qwen3-coder'],
       ['glm-5.2', 'z-ai/glm-5.2'],
       ['kimi-k2.7-code', 'moonshotai/kimi-k2.7-code'],
+      ['ox-alpha', 'stealth/ox-alpha'],
     ] as const;
 
     for (const [alias, openrouterId] of cases) {
@@ -292,6 +296,64 @@ describe('normalizeCatalog', () => {
     assert.equal(entries[0]?.family, 'kimi');
     assert.equal(entries[0]?.openrouterId, 'moonshotai/kimi-k2');
     assert.equal(entries[0]?.contextTokens, 200000);
+  });
+
+  it('Ox Alpha: normalizes verified provisional metadata without cache fallback', () => {
+    const list = [
+      lp({
+        wavemillAlias: 'ox-alpha',
+        openrouterId: 'stealth/ox-alpha',
+        family: 'unknown',
+        status: 'provisional',
+        priorityTier: 3,
+        roleEligibility: ['planning', 'coding', 'review'],
+      }),
+    ];
+    const map = buildOpenRouterMap([
+      {
+        id: 'stealth/ox-alpha',
+        name: 'Ox Alpha',
+        context_length: 1_048_576,
+        top_provider: {
+          context_length: 1_048_576,
+        },
+        supported_parameters: [
+          'include_reasoning',
+          'max_tokens',
+          'reasoning',
+          'reasoning_effort',
+          'response_format',
+          'temperature',
+          'tool_choice',
+          'tools',
+          'top_k',
+          'top_p',
+        ],
+        pricing: { prompt: '0', completion: '0' },
+      },
+    ]);
+
+    const { entries, blockers } = normalizeCatalog(list, map, { resolvedAt: FIXED_RESOLVED_AT });
+
+    assert.equal(blockers.length, 0);
+    assert.equal(entries.length, 1);
+    assert.deepEqual(entries[0], {
+      wavemillAlias: 'ox-alpha',
+      openrouterId: 'stealth/ox-alpha',
+      family: 'unknown',
+      contextTokens: 1_048_576,
+      pricing: {
+        inputPerMTok: 0,
+        outputPerMTok: 0,
+        cacheReadPerMTok: null,
+        cacheWritePerMTok: null,
+      },
+      capabilities: getFamilyCapabilities('unknown'),
+      roleEligibility: ['planning', 'coding', 'review'],
+      status: 'provisional',
+      priorityTier: 3,
+      resolvedAt: FIXED_RESOLVED_AT,
+    });
   });
 
   it('GPT and Kimi aliases both resolve via their OpenRouter ids', () => {
