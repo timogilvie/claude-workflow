@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readEvalRecords } from './eval-persistence.ts';
 import type { EvalRecord } from './eval-schema.ts';
+import { readArmReliabilityRecords, type ArmReliabilityRecord } from './arm-reliability.ts';
 import { isEvalSuccess } from './eval-success-policy.ts';
 import { readJsonlFile } from './jsonl-utils.ts';
 import { recommendModelLLM } from './llm-router.ts';
@@ -22,7 +23,7 @@ import { resolveFromMainRepo } from './git-utils.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveEvalsDir, resolveGlobalAggregatedEvalsPath } from './evals-paths.ts';
 import { resolveModelAgent, type AgentResolution, type AgentResolutionPhase } from './model-agent-resolution.ts';
-import { isProvisionalModelId, partitionEvidence } from './model-evidence-policy.ts';
+import { formatEvidenceExclusionSummary, isProvisionalModelId, partitionEvidence } from './model-evidence-policy.ts';
 import {
   configuredDeepSeekModelIds,
   DEFAULT_MODEL_REGISTRY,
@@ -31,6 +32,7 @@ import {
   type AgentType,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { classifyTaskPacket } from './task-packet-classifier.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -96,14 +98,7 @@ const TASK_TYPE_PATTERNS: { type: TaskType; patterns: RegExp[] }[] = [
  * Returns the first matching type (ordered by specificity).
  */
 export function classifyTaskType(prompt: string): TaskType {
-  for (const { type, patterns } of TASK_TYPE_PATTERNS) {
-    for (const pattern of patterns) {
-      if (pattern.test(prompt)) {
-        return type;
-      }
-    }
-  }
-  return 'unknown';
+  return classifyTaskPacket(prompt).taskType;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -114,6 +109,8 @@ export interface PromptCharacteristics {
   length: 'short' | 'medium' | 'long';
   charCount: number;
   complexityScore: number;
+  complexityBand?: 'xs' | 's' | 'm' | 'l' | 'xl';
+  riskFlags?: string[];
   fileTypes: string[];
   taskType: TaskType;
 }
@@ -132,13 +129,9 @@ const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sq
  * Extract characteristics from a prompt for routing decisions.
  */
 export function analyzePrompt(prompt: string): PromptCharacteristics {
-  const charCount = prompt.length;
-  const length = charCount < 200 ? 'short' : charCount < 1000 ? 'medium' : 'long';
-
-  let complexityScore = 0;
-  for (const kw of COMPLEXITY_KEYWORDS) {
-    if (kw.test(prompt)) complexityScore++;
-  }
+  const classification = classifyTaskPacket(prompt);
+  const charCount = classification.evidence.charCount;
+  const length = classification.evidence.promptLength;
 
   const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
   const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
@@ -146,9 +139,11 @@ export function analyzePrompt(prompt: string): PromptCharacteristics {
   return {
     length,
     charCount,
-    complexityScore,
-    fileTypes,
-    taskType: classifyTaskType(prompt),
+    complexityScore: classification.complexityScore,
+    complexityBand: classification.complexityBand,
+    riskFlags: classification.riskFlags,
+    fileTypes: fileTypes.length > 0 ? fileTypes : classification.evidence.fileTypes,
+    taskType: classification.taskType,
   };
 }
 
@@ -174,13 +169,37 @@ export interface ModelStats {
 export function aggregateEvalHistory(
   records: EvalRecord[],
   taskType: TaskType,
+  options: { terminalFailures?: ArmReliabilityRecord[] } = {},
 ): ModelStats[] {
   const eligibleRecords = partitionEvidence(records, 'router_history').eligible;
+
+  // Terminal arm failures never produce an eval record, so without this they are
+  // absent from the denominator entirely and successRate is computed only over
+  // survivors -- a model that stalls more is sampled more selectively and scores
+  // higher. Count them as attempts. They deliberately do NOT feed avgScore: a
+  // provider stall says nothing about output quality, which is why these records
+  // carry qualitySignalEligible: false.
+  const failuresByModel = new Map<string, number>();
+  for (const failure of options.terminalFailures ?? []) {
+    if (failure.completed) continue;
+    failuresByModel.set(failure.model, (failuresByModel.get(failure.model) ?? 0) + 1);
+  }
   const byModel = new Map<string, EvalRecord[]>();
   for (const r of eligibleRecords) {
     const list = byModel.get(r.modelId) || [];
     list.push(r);
     byModel.set(r.modelId, list);
+  }
+
+  // A model whose every attempt died terminally has no eval records at all, so
+  // without this it is absent from the stats entirely and the router falls back
+  // to its registry prior -- scoring it on an optimistic default precisely
+  // because it has never once succeeded. Seed it with an empty record set so it
+  // is ranked on the evidence that exists.
+  for (const model of failuresByModel.keys()) {
+    if (!byModel.has(model)) {
+      byModel.set(model, []);
+    }
   }
 
   const stats: ModelStats[] = [];
@@ -189,7 +208,17 @@ export function aggregateEvalHistory(
       (r) => classifyTaskType(r.originalPrompt) === taskType,
     );
 
-    const avg = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
+    // Non-finite entries would make the whole average NaN, and every NaN
+    // comparison is false, so the downstream sort would degrade silently.
+    const avg = (arr: Array<number | null | undefined>) => {
+      const finite = arr.filter((value): value is number => Number.isFinite(value));
+      return finite.length > 0
+        ? finite.reduce((a, b) => a + b, 0) / finite.length
+        : 0;
+    };
+
+    const terminalFailures = failuresByModel.get(modelId) ?? 0;
+    const attempts = modelRecords.length + terminalFailures;
 
     stats.push({
       modelId,
@@ -200,8 +229,11 @@ export function aggregateEvalHistory(
         taskTypeRecords.length > 0
           ? avg(taskTypeRecords.map((r) => r.score))
           : null,
+      // Successes over attempts, not over completions.
       successRate:
-        modelRecords.filter((r) => isEvalSuccess(r)).length / modelRecords.length,
+        attempts > 0
+          ? modelRecords.filter((r) => isEvalSuccess(r)).length / attempts
+          : 0,
       avgTimeSeconds: avg(modelRecords.map((r) => r.timeSeconds)),
       avgInterventionCount: avg(modelRecords.map((r) => r.interventionCount)),
     });
@@ -547,15 +579,21 @@ function recommendModelHeuristic(
   const taskType = characteristics.taskType;
 
   // Load eval records (per-repo + aggregated cross-repo data)
-  const records = loadMergedEvalRecords(opts);
+  const loadedRecords = loadMergedEvalRecords(opts);
+  const evidencePartition = partitionEvidence(loadedRecords, 'router_history');
+  const records = evidencePartition.eligible;
 
   // Count distinct models
   const distinctModels = new Set(records.map((r) => r.modelId));
+  const exclusionSummary = formatEvidenceExclusionSummary(evidencePartition.reasonCounts);
 
   // Log data sufficiency check details
   console.error(
     `Router data check: ${records.length} records (need ${opts.minRecords}), ` +
-    `${distinctModels.size} model(s) (need ${opts.minModels})`
+    `${distinctModels.size} model(s) (need ${opts.minModels})` +
+    (evidencePartition.excluded.length > 0
+      ? `; excluded ${evidencePartition.excluded.length} held record(s): ${exclusionSummary}`
+      : '')
   );
 
   // Check data sufficiency
@@ -567,7 +605,10 @@ function recommendModelHeuristic(
       reasoning:
         `Insufficient eval data for routing (${records.length} records, ` +
         `${distinctModels.size} model(s)). Need at least ${opts.minRecords} records ` +
-        `across ${opts.minModels}+ models. Using default model.`,
+        `across ${opts.minModels}+ models. Using default model.` +
+        (evidencePartition.excluded.length > 0
+          ? ` Excluded held evidence: ${exclusionSummary}.`
+          : ''),
       taskType,
       promptCharacteristics: characteristics,
       candidates: [],
@@ -577,7 +618,10 @@ function recommendModelHeuristic(
   }
 
   // Aggregate history
-  let modelStats = aggregateEvalHistory(records, taskType);
+  let modelStats = aggregateEvalHistory(records, taskType, {
+    // opts.repoDir defaults to '', which would resolve against the ambient cwd.
+    terminalFailures: readArmReliabilityRecords(opts.repoDir || undefined),
+  });
 
   // Filter to candidate models if configured
   if (opts.models && opts.models.length > 0) {

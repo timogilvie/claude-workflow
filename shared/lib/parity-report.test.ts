@@ -40,6 +40,9 @@ describe('buildGlobalModelParityReport', () => {
       }));
 
       assert.equal(report.globalCatalogVersion, 'v3');
+      assert.equal(report.requiredSuiteVersion, 'v3');
+      assert.ok(report.publishedArtifactCountForRequiredSuite >= 3);
+      assert.equal(report.certificationSuiteCoverageStatus, 'ok');
       assert.ok(report.certifiedModelCountByStage.coding >= 3);
       assert.ok(report.runtimeReadyCountByStage.coding >= 3);
       assert.equal(report.challengePairAvailability.coding, true);

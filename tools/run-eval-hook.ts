@@ -12,6 +12,7 @@ import { writeJobResultFile } from '../shared/lib/job-tracker.ts';
 import type { PostCompletionContext } from '../shared/lib/post-completion-hook.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { runPostCompletionEval } from '../shared/lib/post-completion-hook.ts';
+import { EvalValidationError } from '../shared/lib/eval-persistence.ts';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -128,6 +129,7 @@ runTool({
     let persisted = false;
     let exitCode = 0;
     let failureMessage = '';
+    let quarantinePath: string | undefined;
     const writeResultFile = (code: number) => {
       if (!resultFile) {
         return;
@@ -138,6 +140,7 @@ runTool({
         exitCode: code,
         reason: persisted ? undefined : 'eval_not_persisted',
         error: failureMessage || undefined,
+        quarantinePath,
       });
     };
     const handleSigterm = () => {
@@ -175,6 +178,9 @@ runTool({
       console.warn(`Post-completion eval hook: unexpected error — ${message}`);
       exitCode = 1;
       failureMessage = message;
+      if (err instanceof EvalValidationError && err.quarantinePath) {
+        quarantinePath = err.quarantinePath;
+      }
     } finally {
       process.removeListener('SIGTERM', handleSigterm);
       writeResultFile(exitCode);

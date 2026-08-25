@@ -111,6 +111,11 @@ Available in `~/.claude/commands/`:
 - `/implement-plan` - Execute plan with phase gates
 - `/validate-plan` - Validate implementation against plan
 
+### Native Certification CLI
+`wavemill native-agent certifications` subcommands: `list`, `inspect`, `verify`, `report`, `certify`, `re-certify`, `reidentify`, `invalidate`, `migrate`.
+
+Use `wavemill native-agent certify --provider <provider> --model <model> --phase <phase>` for one model, or `wavemill native-agent certify --all --phase workflow` to publish the full current-suite matrix. The mill startup preflight fails when the registry requires a suite version but the global store contains only older-suite artifacts; set `WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1` only for a targeted operator override.
+
 ## Test Registration
 
 Tests only run if they are registered. Adding a test file is not enough — register it in the right place:

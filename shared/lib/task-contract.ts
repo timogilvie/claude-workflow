@@ -464,6 +464,14 @@ function extractRiskLevelAndReasons(sources: SourceText[]): {
 
 function extractAllowedPaths(sources: SourceText[]): TaskContractField<string[]> {
   for (const { path, text } of sources) {
+    const filesToModifyText = extractSection(text, /^#{2,4}\s+(?:\d+\.\s+)?Files\s+to\s+Modify\s*$/im);
+    if (filesToModifyText) {
+      const items = extractListItems(filesToModifyText);
+      if (items.length > 0) return present(items, `${path}#Files to Modify`);
+    }
+  }
+
+  for (const { path, text } of sources) {
     const sectionText = extractSection(text, /^#{2,4}\s+Scope\s+In\s*$/im);
     if (sectionText) {
       const items = extractListItems(sectionText);

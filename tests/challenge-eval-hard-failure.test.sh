@@ -75,6 +75,8 @@ for fn in \
   challenge_pair_records_file:1 \
   challenge_pr_url_from_number:1 \
   challenge_pair_record_exists:1 \
+  challenge_pr_number_from_url:1 \
+  cleanup_forfeit_loser_from_resolution:1 \
   mark_challenge_compared:1 \
   resolve_challenge_pair_hard_failure:1 \
   sanitize_job_token:1 \

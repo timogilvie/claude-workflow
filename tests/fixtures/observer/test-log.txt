@@ -1,0 +1,11 @@
+11:39:51 [error] Monitor command failed pid=3481 tmp=/tmp/wavemill-plan-a stderr=Error: EAGAIN
+11:39:52 [error] Monitor command failed pid=9917 tmp=/private/tmp/wavemill-plan-b stderr=Error: EAGAIN
+11:40:05 [status] error detection in the wrapper, and a dedicated produced state file.
+11:40:06 [debug] fetch_queue_plan failed stderr=Error: EAGAIN while describing TS-side error handling
+11:40:07 [status]   │ error detection in the wrapper, and a dedicated           │
+11:40:08 [error]   │ rendered plan text mentioning error handling should skip    │
+11:41:01 [warn] ready watchdog: HOK-1892 stuck (auto-recovered) - Local ready state has been idle for 15m while PR #437 is clean and green.
+11:41:02 [warn] ready watchdog: HOK-1892 stuck (auto-recovered) - Local ready state has been idle for 16m while PR #437 is clean and green.
+11:41:03 [warn] ready watchdog: HOK-1892 stuck (auto-recovered) - Local ready state has been idle for 17m while PR #437 is clean and green.
+11:42:01 [warn] queue analysis unavailable; using flat fallback
+11:42:02 [warn] task handoff timed out

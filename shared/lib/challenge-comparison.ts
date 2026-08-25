@@ -60,6 +60,7 @@ export type ChallengeTerminalReason =
   | 'challenger_challenge_aborted'
   | 'both_challenge_aborted'
   | 'orphan_pair'
+  | 'primary_merged'
   | 'provenance_validation_failed';
 export type ChallengeStageRole = 'planner' | 'coder' | 'reviewer';
 export type ChallengeProvenanceSource =
@@ -126,6 +127,7 @@ export type NoComparisonReason =
   | 'challenger_challenge_aborted'
   | 'both_challenge_aborted'
   | 'orphan_pair'
+  | 'primary_merged'
   // mitigation reasons
   | 'challenger_never_launched'
   | 'challenger_eval_not_persisted'
@@ -152,6 +154,7 @@ export const NO_COMPARISON_REASONS = [
   'challenger_challenge_aborted',
   'both_challenge_aborted',
   'orphan_pair',
+  'primary_merged',
   'challenger_never_launched',
   'challenger_eval_not_persisted',
   'diff_unavailable',

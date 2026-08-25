@@ -34,6 +34,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 cleanup_file="$tmp/aborted-cleanup.sh"
 {
+  extract_function "$MILL_SCRIPT" "remove_task_state"
+  printf '\n'
   extract_function "$MILL_SCRIPT" "mark_task_aborted_for_cleanup"
   printf '\n'
   extract_function "$MILL_SCRIPT" "cleanup_aborted_challenge_arm"
@@ -130,6 +132,7 @@ EOF
 
     cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "test abort" || true
     printf "order=%s\n" "$ORDER"
+    printf "present=%s\n" "$(jq -r "has(\"tasks\") and (.tasks | has(\"$ISSUE\"))" "$STATE_FILE")"
     printf "status=%s\n" "$(jq -r ".tasks[\"$ISSUE\"].status" "$STATE_FILE")"
     printf "phase=%s\n" "$(jq -r ".tasks[\"$ISSUE\"].phase" "$STATE_FILE")"
     printf "cleaned=%s\n" "${CLEANED[$ISSUE]:-}"
@@ -142,15 +145,16 @@ EOF
 }
 
 output="$(run_cleanup_case success)"
-[[ "$output" == *"order=archive;state;tmux;git-worktree;git-branch;"* ]] || { echo "$output"; echo "cleanup order wrong" >&2; exit 1; }
-[[ "$output" == *"status=aborted"* ]] || { echo "$output"; echo "task not aborted" >&2; exit 1; }
-[[ "$output" == *"phase=aborted"* ]] || { echo "$output"; echo "phase not aborted" >&2; exit 1; }
+[[ "$output" == *"order=archive;state;tmux;git-worktree;git-branch;state;"* ]] || { echo "$output"; echo "cleanup order wrong" >&2; exit 1; }
+[[ "$output" == *"present=false"* ]] || { echo "$output"; echo "task state was not removed" >&2; exit 1; }
 [[ "$output" == *"cleaned=1"* ]] || { echo "$output"; echo "task not marked cleaned" >&2; exit 1; }
 [[ "$output" == *"skip_eval=yes"* ]] || { echo "$output"; echo "eval guard did not skip" >&2; exit 1; }
 [[ "$output" == *"archived_abort=yes"* && "$output" == *"archived_handoff=yes"* ]] || { echo "$output"; echo "failure artifacts missing" >&2; exit 1; }
 
 output="$(run_cleanup_case persistent-window)"
+[[ "$output" == *"present=true"* ]] || { echo "$output"; echo "persistent window should keep task state" >&2; exit 1; }
 [[ "$output" == *"status=aborted"* ]] || { echo "$output"; echo "persistent window did not terminalize" >&2; exit 1; }
+[[ "$output" == *"phase=aborted"* ]] || { echo "$output"; echo "persistent window phase not terminal" >&2; exit 1; }
 [[ "$output" == *"attention=needs-user"* ]] || { echo "$output"; echo "persistent window did not request attention" >&2; exit 1; }
 [[ "$output" != *"git-worktree"* ]] || { echo "$output"; echo "persistent window should not remove worktree" >&2; exit 1; }
 

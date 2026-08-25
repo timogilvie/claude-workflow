@@ -68,6 +68,8 @@ extract_function "$MILL_SCRIPT" "increment_transient_mergeability_count" >> "$LA
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "_write_cross_pr_diagnostic" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "write_cross_pr_guard_ready_result" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_cross_pr_guard_ready_evidence" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "cross_pr_revert_gate_allows_merge" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_transient_ready_attention_file" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "log_ready_failure_result" >> "$LAUNCH_FUNC_FILE"
@@ -75,6 +77,11 @@ extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$LAUNCH_FUNC_
 extract_function "$MILL_SCRIPT" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_result_passes_ready_gate" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_result_infra_failure" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "increment_review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_review_infra_retry_state" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "relaunch_review_after_infra_recovery" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_result_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
@@ -100,9 +107,10 @@ run_launch_case() {
 
     SESSION="ready-phase-test-$TEST_CASE"
     TOOLS_DIR="$CASE_DIR/tools"
+    REPO_DIR="$CASE_DIR/repo"
     AGENT_CMD="codex"
     READY_TRANSIENT_MAX_ATTEMPTS=6
-    mkdir -p "$TOOLS_DIR"
+    mkdir -p "$TOOLS_DIR" "$REPO_DIR"
 
     STATE_DIR="$CASE_DIR/feature/ready"
     WT_DIR="$CASE_DIR/worktree"
@@ -136,6 +144,27 @@ EOF
 {"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":2,"blockerCount":0,"warningCount":0,"reviewToolError":"provider failed"}}
 EOF
         ;;
+      infra_retry_healthy)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_unhealthy)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_capped)
+        printf "%s\n" "2" > "$STATE_DIR/.review-infra-retries"
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"failureCategory":"native-runtime-unavailable"}}
+EOF
+        ;;
+      infra_retry_error_tool)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":1,"blockerCount":0,"warningCount":0,"reviewToolError":"spawnSync /bin/bash ETIMEDOUT"}}
+EOF
+        ;;
     esac
 
     WRITE_STAGE_CALLS=""
@@ -144,6 +173,9 @@ EOF
     LOG_ERROR_OUTPUT=""
     LOG_WARN_OUTPUT=""
     LAUNCH_AGENT_CALLS=0
+    REVIEW_LAUNCH_CALLS=0
+    PREPARE_RECOVERY_CALLS=0
+    AGENT_VALIDATE_CALLS=0
     READY_PROMPT_CALLS=0
     READY_PROMPT_SUMMARY=""
     READY_LABEL_COUNT_FILE="$CASE_DIR/ready-label-calls"
@@ -152,8 +184,34 @@ EOF
     _ensure_window_exists() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
     read_state_value() {
-      if [[ "${4:-}" == *".tasks["*".model"* ]]; then
-        printf "%s\n" "gpt-5.4"
+      local filter="${5:-}${4:-}"
+      if [[ "$filter" == *".tasks["*".model"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "%s\n" "gpt-5.4" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".coderModel"* ]]; then
+        case "$TEST_CASE" in
+          native_route_coder_model) printf "%s\n" "kimi-k2-thinking" ;;
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".reviewerModel"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".plannerModel"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
         return 0
       fi
       printf "\n"
@@ -176,6 +234,8 @@ EOF
         second_remediation_launch) printf "%s\n" "1" ;;
         remediation_exhausted) printf "%s\n" "3" ;;
         pass_after_remediation) printf "%s\n" "2" ;;
+        sequential_failing_launch_2) printf "%s\n" "1" ;;
+        sequential_failing_launch_3) printf "%s\n" "2" ;;
         *) printf "%s\n" "0" ;;
       esac
     }
@@ -202,10 +262,28 @@ EOF
       READY_PROMPT_SUMMARY="${8-}"
       printf "prompt\n"
     }
+    LAUNCH_AGENT_PHASE=""
     _launch_agent_in_pane() {
       LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
+      LAUNCH_AGENT_PHASE="${7:-}"
       case "$TEST_CASE" in
         remediation_launch_failure) return 1 ;;
+        sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3) return 1 ;;
+        *) return 0 ;;
+      esac
+    }
+    _prepare_recovery_phase_launch() {
+      PREPARE_RECOVERY_CALLS=$((PREPARE_RECOVERY_CALLS + 1))
+      return 0
+    }
+    launch_review_phase() {
+      REVIEW_LAUNCH_CALLS=$((REVIEW_LAUNCH_CALLS + 1))
+      return 0
+    }
+    agent_validate_phase_launch() {
+      AGENT_VALIDATE_CALLS=$((AGENT_VALIDATE_CALLS + 1))
+      case "$TEST_CASE" in
+        infra_retry_unhealthy) return 1 ;;
         *) return 0 ;;
       esac
     }
@@ -229,7 +307,7 @@ EOF
       mkdir -p "$1"
       printf "%s\n" "$2" > "$1/.needs-attention"
     }
-    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" ]]; then
+    if [[ "$TEST_CASE" != "cross_pr_revert_tool_error_direct" && "$TEST_CASE" != "cross_pr_revert_blocked" && "$TEST_CASE" != "cross_pr_revert_error" ]]; then
       cross_pr_revert_gate_allows_merge() {
         case "$TEST_CASE" in
           cross_pr_revert_blocked)
@@ -261,6 +339,7 @@ EOF
             return 1
             ;;
           cross_pr_revert_error)
+            printf "%s\n" "{\"blocked\":false,\"reverts\":[],\"acknowledged\":[],\"unacknowledged\":[],\"toolError\":{\"commandClass\":\"git-merge-base\",\"command\":\"git merge-base auto/integration HEAD\",\"ref\":\"auto/integration\",\"stderr\":\"fatal: Not a valid object name '\''auto/integration'\''\"}}"
             return 2
             ;;
           cross_pr_revert_tool_error_direct)
@@ -278,7 +357,7 @@ EOF
         printf "%s\n" "$(( $(cat "$READY_LABEL_COUNT_FILE") + 1 ))" > "$READY_LABEL_COUNT_FILE"
         case "$TEST_CASE" in
           ready_label_failure) return 1 ;;
-          *) printf "Restored ready labels for PR #%s\n" "${3:-304}"; return 0 ;;
+          *) printf "Canonicalized ready labels for PR #%s\n" "${3:-304}"; return 0 ;;
         esac
       fi
 
@@ -316,7 +395,7 @@ EOF
           printf "%s\n" "TypeError: ready crashed" >&2
           return 1
           ;;
-        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head)
+        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
@@ -369,6 +448,7 @@ EOF
     transient_attention="absent"
     [[ -f "$STATE_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$STATE_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
+    infra_retry_count="$(cat "$STATE_DIR/.review-infra-retries" 2>/dev/null || echo "")"
     ready_label_calls="$(cat "$READY_LABEL_COUNT_FILE" 2>/dev/null || echo "0")"
     ready_result_payload=""
     [[ -f "$STATE_DIR/.ready-result.json" ]] && ready_result_payload=$(cat "$STATE_DIR/.ready-result.json")
@@ -378,10 +458,11 @@ EOF
     debug_payload=""
     [[ -f "$DEBUG_FILE" ]] && debug_payload=$(cat "$DEBUG_FILE")
 
-    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nready_result_payload=%s\n" \
-      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$ready_result_payload"
+    printf "rc=%s\nstage_calls=%s\nattention_calls=%s\nattention_count=%s\nlaunch_calls=%s\nreview_launch_calls=%s\nprepare_recovery_calls=%s\nagent_validate_calls=%s\nprompt_calls=%s\nerror_count=%s\nlogs=%s\nwarn_logs=%s\nerror_payload=%s\ndebug_file=%s\ndebug_lines=%s\ndebug_payload=%s\nconflict_attention_head=%s\nconflict_attention_reported=%s\nconflict_detected=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\ninfra_retry_count=%s\nready_result_payload=%s\n" \
+      "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$REVIEW_LAUNCH_CALLS" "$PREPARE_RECOVERY_CALLS" "$AGENT_VALIDATE_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$infra_retry_count" "$ready_result_payload"
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
+    printf "phase_used=%s\n" "$LAUNCH_AGENT_PHASE"
   ' 2>&1
 }
 
@@ -411,10 +492,13 @@ run_watchdog_launch_case() {
     persist_task_window_id() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
     read_state_value() {
-      if [[ "${4:-}" == *".agent"* ]]; then
+      local filter="${5:-}${4:-}"
+      if [[ "$filter" == *".agent"* ]]; then
         printf "%s\n" "codex"
-      elif [[ "${4:-}" == *".model"* ]]; then
+      elif [[ "$filter" == *".model"* ]]; then
         printf "%s\n" "gpt-5.5"
+      elif [[ "$filter" == *".coderModel"* ]]; then
+        printf "%s\n" "kimi-k2-thinking"
       else
         printf "\n"
       fi
@@ -577,26 +661,30 @@ output="$(run_launch_case cross_pr_revert_blocked)"
 check_contains "cross-pr revert block returns failure" "$output" "rc=1"
 check_contains "cross-pr revert block writes attention" "$output" "PR #304 removes files from #437 without explicit acknowledgement."
 check_contains "cross-pr revert block includes file list" "$output" "Affected files: strategy.txt."
-check_contains "cross-pr revert block skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert block records failed ready verdict" "$output" "\"verdict\":\"fail\""
+check_contains "cross-pr revert block records guard evidence" "$output" "\"source\":\"cross-pr-revert-guard\""
+check_contains "cross-pr revert block records checked head" "$output" "\"checkedHeadSha\":\"abc123\""
 check_contains "cross-pr revert block logs status" "$output" "Cross-PR revert guard blocked ready phase for PR #304"
-check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"verdict\":"
+check_not_contains "cross-pr revert block does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case cross_pr_revert_error)"
 check_contains "cross-pr revert tool error returns failure" "$output" "rc=1"
 check_contains "cross-pr revert tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
-check_contains "cross-pr revert tool error skips ready result writes" "$output" "stage_calls="
+check_contains "cross-pr revert tool error records failed ready verdict" "$output" "\"verdict\":\"fail\""
+check_contains "cross-pr revert tool error records guard evidence" "$output" "\"status\":\"tool-error\""
 check_contains "cross-pr revert tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
-check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"verdict\":"
+check_not_contains "cross-pr revert error does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case cross_pr_revert_tool_error_direct)"
 check_contains "direct cross-pr tool error returns failure" "$output" "rc=1"
 check_contains "direct cross-pr tool error writes attention" "$output" "Cross-PR revert guard tool failure for PR #304: git-merge-base failed on ref 'auto/integration'"
 check_contains "direct cross-pr tool error includes diagnostic" "$output" "Diagnostic: fatal: Not a valid object name 'auto/integration'"
 check_contains "direct cross-pr tool error writes ready diagnostic" "$output" "\"crossPrDiagnostic\""
+check_contains "direct cross-pr tool error records checked head" "$output" "\"checkedHeadSha\":\"abc123\""
 check_contains "direct cross-pr tool error records command class" "$output" "\"commandClass\":\"git-merge-base\""
 check_contains "direct cross-pr tool error logs failure" "$output" "Cross-PR revert guard tool failure for HOK-1300 (PR #304): git-merge-base on 'auto/integration'"
-check_contains "direct cross-pr tool error skips ready result writes" "$output" "stage_calls="
-check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"verdict\":"
+check_contains "direct cross-pr tool error skips stage helper writes" "$output" "stage_calls="
+check_not_contains "direct cross-pr tool error does not run ready tool" "$output" "\"checksRun\":3"
 
 output="$(run_launch_case unknown_first)"
 check_contains "unknown first poll returns retry code" "$output" "rc=4"
@@ -684,7 +772,7 @@ output="$(run_launch_case remediation_launch_failure)"
 check_contains "launch failure returns failure" "$output" "rc=1"
 check_contains "launch failure records failed stage" "$output" "|ready|failed|"
 check_contains "launch failure writes operator message" "$output" "Could not launch remediation agent for PR #304."
-check_contains "launch failure does not pollute attempts" "$output" "\"remediationAttempts\":0"
+check_contains "launch failure records attempt 1" "$output" "\"remediationAttempts\":1"
 
 output="$(run_launch_case already_inflight_same_head)"
 check_contains "inflight same head returns rc 5" "$output" "rc=5"
@@ -702,22 +790,46 @@ check_contains "persistent conflict logs one terse error" "$output" "Merge confl
 output="$(run_launch_case pass_after_remediation)"
 check_contains "pass after remediation returns success" "$output" "rc=0"
 check_contains "pass after remediation writes completed stage" "$output" "|ready|completed|"
-check_contains "pass after remediation restores ready labels once" "$output" "ready_label_calls=1"
+check_contains "pass after remediation canonicalizes ready labels once" "$output" "ready_label_calls=1"
 check_contains "pass after remediation records ready label update" "$output" "\"readyLabelsUpdated\":true"
 check_not_contains "pass after remediation clears remediation artifacts" "$output" "\"remediationAttempts\":"
 check_contains "pass after remediation clears conflict marker" "$output" "conflict_detected=absent"
 check_contains "pass after remediation clears attention head" "$output" "conflict_attention_head="
 check_contains "pass after remediation clears reported marker" "$output" "conflict_attention_reported=absent"
 check_contains "pass after remediation clears needs attention" "$output" "needs_attention=absent"
-check_contains "pass after remediation demotes restored labels to debug" "$output" "debug   HOK-1300: Restored ready labels for PR #304"
+check_contains "pass after remediation demotes label canonicalization to debug" "$output" "debug   HOK-1300: Canonicalized ready labels for PR #304"
 check_contains "pass after remediation demotes ready completion to debug" "$output" "debug   HOK-1300: Ready checks completed (verdict: pass)"
-check_not_contains "pass after remediation no longer emits restored labels at status" "$output" "status   HOK-1300: Restored ready labels for PR #304"
+check_not_contains "pass after remediation no longer emits label canonicalization at status" "$output" "status   HOK-1300: Canonicalized ready labels for PR #304"
 
 output="$(run_launch_case review_tool_error_gate)"
-check_contains "review tool error gate returns failure" "$output" "rc=1"
-check_contains "review tool error gate does not run ready tool" "$output" "ready_label_calls=0"
-check_contains "review tool error gate writes attention" "$output" "Review verdict does not pass readiness gate for PR #304"
-check_contains "review tool error gate surfaces exit code" "$output" "exitCode=2"
+check_contains "review tool error gate retries review" "$output" "rc=6"
+check_contains "review tool error gate probes runtime" "$output" "agent_validate_calls=1"
+check_contains "review tool error gate relaunches review" "$output" "review_launch_calls=1"
+check_contains "review tool error gate increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_healthy)"
+check_contains "infra retry healthy returns relaunch rc" "$output" "rc=6"
+check_contains "infra retry healthy probes runtime" "$output" "agent_validate_calls=1"
+check_contains "infra retry healthy prepares recovery" "$output" "prepare_recovery_calls=1"
+check_contains "infra retry healthy launches review" "$output" "review_launch_calls=1"
+check_contains "infra retry healthy increments counter" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_unhealthy)"
+check_contains "infra retry unhealthy refuses ready" "$output" "rc=1"
+check_contains "infra retry unhealthy probes runtime" "$output" "agent_validate_calls=1"
+check_contains "infra retry unhealthy does not launch review" "$output" "review_launch_calls=0"
+check_contains "infra retry unhealthy does not increment counter" "$output" "infra_retry_count="
+check_contains "infra retry unhealthy writes waiting attention" "$output" "waiting for reviewer runtime recovery"
+
+output="$(run_launch_case infra_retry_capped)"
+check_contains "infra retry capped refuses ready" "$output" "rc=1"
+check_contains "infra retry capped does not probe" "$output" "agent_validate_calls=0"
+check_contains "infra retry capped keeps counter" "$output" "infra_retry_count=2"
+check_contains "infra retry capped writes manual attention" "$output" "manual re-review required"
+
+output="$(run_launch_case infra_retry_error_tool)"
+check_contains "infra retry tool timeout retries review" "$output" "rc=6"
+check_contains "infra retry tool timeout launches review" "$output" "review_launch_calls=1"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"
@@ -759,6 +871,43 @@ output="$(run_watchdog_launch_case inflight_same_head)"
 check_contains "watchdog inflight skips launch" "$output" '"status":"skipped-in-flight"'
 check_contains "watchdog inflight does not relaunch agent" "$output" "launch_calls=0"
 check_contains "watchdog inflight does not rewrite stage" "$output" "stage_calls="
+
+echo "=== Sequential Failing Launch Scenario ==="
+
+output="$(run_launch_case sequential_failing_launch_1)"
+check_contains "sequential attempt 1 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 1 records attempt 1" "$output" "\"remediationAttempts\":1"
+check_contains "sequential attempt 1 invokes agent once" "$output" "launch_calls=1"
+
+output="$(run_launch_case sequential_failing_launch_2)"
+check_contains "sequential attempt 2 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 2 records attempt 2" "$output" "\"remediationAttempts\":2"
+check_contains "sequential attempt 2 invokes agent once" "$output" "launch_calls=1"
+
+output="$(run_launch_case sequential_failing_launch_3)"
+check_contains "sequential attempt 3 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 3 records attempt 3" "$output" "\"remediationAttempts\":3"
+check_contains "sequential attempt 3 invokes agent once" "$output" "launch_calls=1"
+
+echo "=== Native Route Scenario ==="
+
+output="$(run_launch_case native_route_coder_model)"
+check_contains "native route uses coder model" "$output" "launch_calls=1"
+check_contains "native route passes model to launch" "$output" "rc=5"
+check_contains "native route records attempt 1" "$output" "\"remediationAttempts\":1"
+
+echo "=== No Model Scenario ==="
+
+output="$(run_launch_case no_model_available)"
+check_contains "no model scenario fails" "$output" "rc=1"
+check_contains "no model scenario records attempt 1" "$output" "\"remediationAttempts\":1"
+check_contains "no model scenario does not invoke agent" "$output" "launch_calls=0"
+check_contains "no model scenario writes clear reason" "$output" "No model configured for ready remediation"
+
+echo "=== Launch Phase Propagation ==="
+
+output="$(run_launch_case remediation_launch)"
+check_contains "remediation passes explicit phase" "$output" "phase_used=coding"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

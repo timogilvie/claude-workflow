@@ -21,6 +21,14 @@ const catalog: LaunchPriorityModel[] = [
     priorityTier: 1,
     roleEligibility: ['planning'],
   },
+  {
+    wavemillAlias: 'ox-alpha',
+    openrouterId: 'stealth/ox-alpha',
+    family: 'gpt',
+    status: 'watchlist',
+    priorityTier: 9,
+    roleEligibility: ['coding'],
+  },
 ];
 
 function makeAudit(): LaunchPriorityAudit {
@@ -28,6 +36,8 @@ function makeAudit(): LaunchPriorityAudit {
     generatedAt: '2026-07-16T00:00:00.000Z',
     schemaVersion: '1',
     coverageTargetPerRole: 3,
+    excludedRecords: 0,
+    exclusionReasonCounts: {},
     zeroEvidence: ['qwen-3-coder'],
     belowTarget: ['gemini-2.5-pro'],
     samplingPlan: [],
@@ -114,5 +124,37 @@ describe('plan-launch-priority-certifications', () => {
 
     assert.equal(plan.totals.aliases, 2);
     assert.equal(plan.groups.some((group) => group.issue === 'HOK-2528'), true);
+  });
+
+  it('omits persist from provisional certification commands and surfaces the blocker', () => {
+    const audit = makeAudit();
+    audit.zeroEvidence = ['ox-alpha'];
+    audit.belowTarget = [];
+    audit.models = [{
+      wavemillAlias: 'ox-alpha',
+      openrouterId: 'stealth/ox-alpha',
+      family: 'gpt',
+      launchPriorityStatus: 'watchlist',
+      priorityTier: 9,
+      role: 'coding',
+      directEvidenceCount: 0,
+      availablePoolExposureCount: 0,
+      evalAttempts: 0,
+      evalSuccesses: 0,
+      blockers: [],
+      status: 'zero-evidence',
+    }];
+
+    const plan = buildCertificationPlan({
+      audit,
+      catalog,
+      target: 3,
+    });
+    const alias = plan.groups[0]?.aliases[0];
+
+    assert.equal(alias?.wavemillAlias, 'ox-alpha');
+    assert.match(alias?.commands.certify ?? '', /certify-launch-priority-model/);
+    assert.doesNotMatch(alias?.commands.certify ?? '', /--persist/);
+    assert.deepEqual(alias?.preflightBlockers, ['provisional-observation-only']);
   });
 });

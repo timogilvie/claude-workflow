@@ -260,6 +260,16 @@ async function markStateAborted(stateFile: string, candidate: ReapCandidate, rea
   });
 }
 
+async function removeStateTask(stateFile: string, candidate: ReapCandidate): Promise<void> {
+  if (!candidate.issue || !existsSync(stateFile)) return;
+  await mutateJsonState<WorkflowState>(stateFile, (state) => {
+    if (state.tasks) {
+      delete state.tasks[candidate.issue!];
+    }
+    return state;
+  });
+}
+
 export async function reapStaleChallengers(
   repoDir: string,
   stateFile: string,
@@ -298,6 +308,7 @@ export async function reapStaleChallengers(
     if (candidate.branch) {
       deps.git(['branch', '-D', candidate.branch], repoDir);
     }
+    await removeStateTask(stateFile, candidate);
     decisions.push({ candidate, action: 'removed', reasons: [] });
   }
 

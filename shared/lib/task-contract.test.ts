@@ -243,6 +243,30 @@ describe('task-contract — full packet [REQ-F1]', () => {
     assert.ok(allowed.value!.some(p => p.includes('shared/lib/')));
   });
 
+  it('prioritizes Files to Modify over legacy Scope In entries', () => {
+    const scopedDir = makeTempDir();
+    writeFile(scopedDir, 'task-packet.md', `# Task
+
+## Files to Modify
+
+- \`shared/lib/review-scope-guard.ts\`
+- \`tools/check-review-scope.ts\`
+
+## Scope In
+
+- Broad workflow safety work
+`);
+    const { contract } = buildTaskContract({ featureDir: scopedDir });
+    const allowed = contract.fields.allowedPaths;
+    assert.equal(allowed.present, true);
+    assert.equal(allowed.source, 'task-packet.md#Files to Modify');
+    assert.deepEqual(allowed.value, [
+      '`shared/lib/review-scope-guard.ts`',
+      '`tools/check-review-scope.ts`',
+    ]);
+    rmSync(scopedDir, { recursive: true, force: true });
+  });
+
   it('extracts out-of-scope notes', () => {
     const { contract } = buildTaskContract({ featureDir: dir });
     const oos = contract.fields.outOfScope;

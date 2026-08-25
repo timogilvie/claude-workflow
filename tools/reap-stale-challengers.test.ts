@@ -72,7 +72,7 @@ test('dry-run reports stale challenger without removing resources', async () => 
   assert.ok(calls.every((call) => !call.includes('worktree remove')));
 });
 
-test('force archives artifacts, marks state aborted, and removes clean resources', async () => {
+test('force archives artifacts, removes clean resources, and deletes state entry', async () => {
   const fx = fixture();
   const { deps, calls } = depsFor(fx);
 
@@ -80,8 +80,7 @@ test('force archives artifacts, marks state aborted, and removes clean resources
 
   assert.equal(decisions[0].action, 'removed');
   const state = JSON.parse(readFileSync(fx.stateFile, 'utf-8'));
-  assert.equal(state.tasks['HOK-2839_c'].status, 'aborted');
-  assert.equal(state.tasks['HOK-2839_c'].phase, 'aborted');
+  assert.equal(Object.hasOwn(state.tasks, 'HOK-2839_c'), false);
   assert.equal(readFileSync(join(fx.repo, '.wavemill', 'evals', 'artifacts', 'HOK-2839_c', '.challenge-aborted.json'), 'utf-8'), '{"reason":"failed"}\n');
   assert.ok(calls.includes(`git worktree remove --force ${fx.worktree}`));
   assert.ok(calls.includes('git branch -D task/demo-challenger'));

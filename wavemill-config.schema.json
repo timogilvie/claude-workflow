@@ -572,6 +572,12 @@
                     "default": ".wavemill/evals",
                     "description": "Directory for persisting eval result JSONL files. Relative paths resolve against the repo root."
                 },
+                "rejectedRetention": {
+                    "type": "integer",
+                    "default": 200,
+                    "minimum": 1,
+                    "description": "Maximum number of rejected eval quarantine JSON files to retain under the evals rejected directory."
+                },
                 "judge": {
                     "type": "object",
                     "description": "LLM judge configuration for eval scoring.",
@@ -1905,6 +1911,38 @@
                             "minimum": 1,
                             "default": 50,
                             "description": "Number of most recent eval records used for stage-share and routing-mode breakdowns."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "escalation": {
+                    "type": "object",
+                    "description": "Escalate risky or low-confidence routes to stronger coder candidates when budget allows.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Enable post-selection escalation for low expected success or low routing confidence."
+                        },
+                        "expectedSuccessFloor": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.5,
+                            "description": "Escalate when expectedSuccess is below this floor. Equal values do not trigger."
+                        },
+                        "confidenceFloor": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                            "default": 0.4,
+                            "description": "Escalate when routing confidence is below this floor. Equal values do not trigger."
+                        },
+                        "minCoderClassRankIncrease": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 1,
+                            "description": "Minimum model-class rank increase preferred for coder escalation. Same-class higher ladder positions remain eligible."
                         }
                     },
                     "additionalProperties": false

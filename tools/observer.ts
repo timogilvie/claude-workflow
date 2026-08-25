@@ -12,6 +12,8 @@ import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
 import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
 import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
+import { countRejectedEvalRecords, listRejectedEvalRecords } from '../shared/lib/eval-rejected-store.ts';
+import { renderObserverStatus } from '../shared/lib/observer-status-renderer.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -22,6 +24,7 @@ interface ObserverOptions {
   loop: boolean;
   once: boolean;
   json: boolean;
+  compact: boolean;
   intervalSeconds: number;
   staleMinutes: number;
   hungMinutes: number;
@@ -86,6 +89,7 @@ interface Finding {
   evidence: string[];
   recommendation: string;
   linearIssueUrl?: string;
+  occurrenceCount?: number;
 }
 
 interface ReadyWatchdogLogEntry {
@@ -94,6 +98,21 @@ interface ReadyWatchdogLogEntry {
   label: string;
   action: string;
   detail: string;
+}
+
+type MillLogLevel = 'error' | 'warn' | 'status' | 'debug' | 'info' | string;
+
+interface MillLogLine {
+  raw: string;
+  timestamp: string;
+  level: MillLogLevel;
+  message: string;
+}
+
+interface AggregatedMillLogFinding {
+  level: 'error' | 'warn';
+  normalizedMessage: string;
+  lines: string[];
 }
 
 interface RepoSnapshot {
@@ -149,6 +168,7 @@ Options:
   --loop                 Watch continuously
   --interval <seconds>   Loop interval (default: ${DEFAULT_INTERVAL_SECONDS})
   --json                 Emit JSON snapshots
+  --compact              One line per actionable finding; rolls up log-scrape noise
   --file-linear          Create Linear issues for high-confidence findings
   --file-incidents       Create/update Linear issues for confirmed deduplicated incidents
   --incidents-dry-run    Preview incident Linear actions without writes
@@ -160,7 +180,7 @@ Options:
   --linear-project <id>  Optional Linear project id/name for filed issues
   --linear-label <name>  Optional Linear label name to attach
   --dry-run              Do not create Linear issues
-  --stale-minutes <n>    State/log stale threshold (default: ${DEFAULT_STALE_MINUTES})
+  --stale-minutes <n>    State/log/marker stale threshold (default: ${DEFAULT_STALE_MINUTES})
   --hung-minutes <n>     Child process hung threshold (default: ${DEFAULT_HUNG_MINUTES})
   --max-log-lines <n>    Recent mill log lines to inspect (default: 240)
   --repo-dir <path>      Limit service observation to one repository
@@ -178,6 +198,7 @@ export function parseArgs(argv: string[]): ObserverOptions {
     loop: false,
     once: true,
     json: false,
+    compact: false,
     intervalSeconds: DEFAULT_INTERVAL_SECONDS,
     staleMinutes: DEFAULT_STALE_MINUTES,
     hungMinutes: DEFAULT_HUNG_MINUTES,
@@ -213,6 +234,8 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.once = false;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--compact') {
+      options.compact = true;
     } else if (arg === '--file-linear') {
       options.fileLinear = true;
     } else if (arg === '--file-incidents') {
@@ -563,6 +586,82 @@ function tailLines(path: string, count: number): string[] {
   }
 }
 
+interface MarkerIgnoredConfig {
+  phase: 'coding' | 'planning';
+  markerName: '.coding-complete' | '.plan-approved';
+  idPrefix: 'coding-marker-ignored' | 'plan-marker-ignored';
+  titlePhase: string;
+  /** Used when the mill has not written state since the marker appeared. */
+  staleRecommendation: string;
+  /**
+   * Used when workflow-state.json is newer than the marker. The mill is
+   * demonstrably alive but has not advanced this task, so the finding still
+   * fires — a newer state file must not suppress it. In a multi-task mill,
+   * state is rewritten constantly for other tasks, so suppressing here would
+   * hide a genuinely wedged task indefinitely.
+   */
+  stateAliveRecommendation: string;
+}
+
+function statMarker(path: string, now: number): { mtimeMs: number; ageMs: number; mtimeIso: string } | undefined {
+  try {
+    const stat = statSync(path);
+    return {
+      mtimeMs: stat.mtimeMs,
+      ageMs: Math.max(0, now - stat.mtimeMs),
+      mtimeIso: stat.mtime.toISOString(),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildMarkerIgnoredFinding(
+  repo: RepoSnapshot,
+  task: TaskState,
+  featureDir: string,
+  now: number,
+  options: ObserverOptions,
+  config: MarkerIgnoredConfig,
+): Finding | null {
+  if (task.phase !== config.phase) return null;
+  const markerPath = join(featureDir, config.markerName);
+  if (!existsSync(markerPath)) return null;
+
+  const marker = statMarker(markerPath, now);
+  if (!marker) return null;
+
+  const markerAgeMinutes = marker.ageMs / 60000;
+  if (markerAgeMinutes <= options.staleMinutes) return null;
+
+  const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  const stateNewerThanMarker = Number.isFinite(stateMtimeMs) && stateMtimeMs > marker.mtimeMs;
+
+  const markerAgeSeconds = Math.floor(marker.ageMs / 1000);
+  const markerAgeTitleMinutes = Math.round(markerAgeMinutes);
+
+  return {
+    id: `${config.idPrefix}-${task.issue}`,
+    severity: 'urgent',
+    category: 'stuck',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    issue: task.issue,
+    title: `${task.issue} is still in ${config.titlePhase} ${markerAgeTitleMinutes} minutes after ${config.markerName} appeared`,
+    evidence: [
+      `statePhase=${task.phase}`,
+      `marker=${markerPath}`,
+      `markerMtime=${marker.mtimeIso}`,
+      `markerAgeSeconds=${markerAgeSeconds}`,
+      `stateMtime=${repo.stateMtime ?? 'unknown'}`,
+      `stateNewerThanMarker=${stateNewerThanMarker}`,
+      `worktree=${task.worktree}`,
+    ],
+    recommendation: stateNewerThanMarker ? config.stateAliveRecommendation : config.staleRecommendation,
+  };
+}
+
 export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, options: ObserverOptions): Finding[] {
   const findings: Finding[] = [];
   const now = Date.now();
@@ -577,6 +676,25 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
   for (const repo of snapshot.repos) {
+    const rejectedEvalCount = countRejectedEvalRecords(repo.repoDir);
+    if (rejectedEvalCount > 0) {
+      const [newestRejectedEval] = listRejectedEvalRecords(repo.repoDir, { limit: 1 });
+      findings.push({
+        id: `eval-rejected-records-${repo.session}-${hashText(repo.repoDir)}`,
+        severity: 'medium',
+        category: 'warning',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `${rejectedEvalCount} eval record${rejectedEvalCount === 1 ? '' : 's'} rejected during write-time validation`,
+        evidence: [
+          `count=${rejectedEvalCount}`,
+          `newest=${newestRejectedEval ? basename(newestRejectedEval) : 'unknown'}`,
+        ],
+        recommendation: 'Inspect .wavemill/evals/rejected/ and fix the path producing write-time validation failures.',
+      });
+    }
+
     const observerPanes = snapshot.panes.filter((pane) => pane.session === repo.session && pane.title === observerPaneTitle);
     const observerPanePids = new Set(observerPanes.map((pane) => pane.pid).filter((pid) => pid > 0));
     const observerLoopRows = snapshot.processes.filter((row) => {
@@ -661,43 +779,77 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     for (const task of repo.tasks) {
+      if (terminalStatus(task.status)) continue;
+
+      const ageMinutes = task.updated ? (now - Date.parse(task.updated)) / 60000 : stateAgeMinutes;
+      const watchedPhase = task.phase === 'planning' || task.phase === 'coding' || task.phase === 'review' || task.phase === 'ready';
+      if (watchedPhase && ageMinutes !== undefined && Number.isFinite(ageMinutes) && ageMinutes > options.staleMinutes) {
+        const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+        const liveEvidence = taskHasLiveExecutionEvidence(repo, task, snapshot.panes, snapshot.processes);
+        if (task.worktree && !existsSync(task.worktree)) {
+          findings.push({
+            id: `stale-active-task-missing-worktree-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is non-terminal in ${task.phase} but its worktree is missing`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `worktree=${task.worktree}`,
+            ],
+            recommendation: 'Treat this as orphaned active state: terminalize or remove the workflow-state entry after confirming no cleanup resources remain.',
+          });
+        } else if (!liveEvidence) {
+          findings.push({
+            id: `stale-active-task-no-live-process-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} is stale in ${task.phase} with no live pane or process evidence`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `expectedWindow=${expectedWindow}`,
+              `worktree=${task.worktree ?? 'unknown'}`,
+            ],
+            recommendation: 'Inspect the task state and quarantine/cleanup path; if the process is gone, terminalize and clean the task instead of leaving it active.',
+          });
+        }
+      }
+
       if (!task.worktree || !task.slug || terminalStatus(task.status)) continue;
       const featureDir = join(task.worktree, 'features', task.slug);
-      if (task.phase === 'coding' && existsSync(join(featureDir, '.coding-complete'))) {
-        findings.push({
-          id: `coding-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in coding even though .coding-complete exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.coding-complete')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
-        });
-      }
-      if (task.phase === 'planning' && existsSync(join(featureDir, '.plan-approved'))) {
-        findings.push({
-          id: `plan-marker-ignored-${task.issue}`,
-          severity: 'urgent',
-          category: 'stuck',
-          confidence: 'high',
-          session: repo.session,
-          repoDir: repo.repoDir,
-          issue: task.issue,
-          title: `${task.issue} is still in planning even though .plan-approved exists`,
-          evidence: [
-            `statePhase=${task.phase}`,
-            `marker=${join(featureDir, '.plan-approved')}`,
-            `worktree=${task.worktree}`,
-          ],
-          recommendation: 'The monitor should launch coding. Inspect the monitor loop for a blocking external command.',
-        });
+      const markerFindings = [
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'coding',
+          markerName: '.coding-complete',
+          idPrefix: 'coding-marker-ignored',
+          titlePhase: 'coding',
+          staleRecommendation: 'The monitor should advance this to review. Check for a hung monitor child process before restarting the session.',
+          stateAliveRecommendation: 'The monitor should advance this to review. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+        buildMarkerIgnoredFinding(repo, task, featureDir, now, options, {
+          phase: 'planning',
+          markerName: '.plan-approved',
+          idPrefix: 'plan-marker-ignored',
+          titlePhase: 'planning',
+          staleRecommendation: 'The monitor should launch coding. Check for a hung monitor child process or blocking external command before restarting the session.',
+          stateAliveRecommendation: 'The monitor should launch coding. It is still writing workflow state but has not advanced this task — inspect its poll branch and this task\'s hook file before restarting anything.',
+        }),
+      ];
+      for (const finding of markerFindings) {
+        if (finding) findings.push(finding);
       }
     }
 
@@ -735,32 +887,64 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
-      if (/\b(FATAL|ERROR|panic|UnhandledPromiseRejection|uncaught exception)\b/i.test(line)) {
+      const parsed = parseMillLogLine(line);
+      if (!parsed) continue;
+      if (isAgentBoxOutputMessage(parsed.message)) continue;
+      if (parsed.level !== 'error' && parsed.level !== 'warn') continue;
+      if (parsed.level === 'warn') {
+        if (repeatedReadyWatchdogLines.has(line)) continue;
+        if (queueHealthDegraded && /queue analysis unavailable/i.test(parsed.message)) continue;
+      }
+
+      const normalizedMessage = normalizeMillLogFingerprintMessage(parsed.message);
+      const key = `${parsed.level}\0${normalizedMessage}`;
+      const grouped = genericLogFindings.get(key) ?? {
+        level: parsed.level,
+        normalizedMessage,
+        lines: [],
+      };
+      grouped.lines.push(line);
+      genericLogFindings.set(key, grouped);
+    }
+
+    for (const grouped of genericLogFindings.values()) {
+      const latestLine = grouped.lines[grouped.lines.length - 1];
+      const evidence = [
+        `occurrences=${grouped.lines.length}`,
+        `normalizedMessage=${grouped.normalizedMessage}`,
+        latestLine,
+      ];
+      if (grouped.lines.length > 1) {
+        const firstLine = grouped.lines[0];
+        if (firstLine !== latestLine) evidence.push(`first=${firstLine}`);
+      }
+      if (grouped.level === 'error') {
         findings.push({
-          id: `log-error-${repo.session}-${hashText(line)}`,
+          id: `log-error-${repo.session}-${hashText(grouped.normalizedMessage)}`,
           severity: 'high',
           category: 'crash',
-          confidence: 'medium',
+          confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
           title: 'Recent mill log contains an error-level event',
-          evidence: [line],
+          evidence,
           recommendation: 'Inspect surrounding log context and file a bug if this is not a task-local failure.',
+          occurrenceCount: grouped.lines.length,
         });
-      } else if (/\bWARN\b|warning|ready watchdog|queue analysis unavailable|timed out|timeout/i.test(line)) {
-        if (repeatedReadyWatchdogLines.has(line)) continue;
-        if (queueHealthDegraded && /queue analysis unavailable/i.test(line)) continue;
+      } else {
         findings.push({
-          id: `log-warning-${repo.session}-${hashText(line)}`,
-          severity: line.includes('ready watchdog') ? 'medium' : 'low',
+          id: `log-warning-${repo.session}-${hashText(grouped.normalizedMessage)}`,
+          severity: 'low',
           category: 'warning',
-          confidence: 'medium',
+          confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
           title: 'Recent mill log contains a warning',
-          evidence: [line],
+          evidence,
           recommendation: 'Watch for repeated occurrences. File an issue if the warning repeats or blocks progression.',
+          occurrenceCount: grouped.lines.length,
         });
       }
     }
@@ -857,8 +1041,62 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
   };
 }
 
+function parseMillLogLine(line: string): MillLogLine | null {
+  const match = line.match(/^(\d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s?(.*)$/);
+  if (!match) return null;
+  return {
+    raw: line,
+    timestamp: match[1],
+    level: match[2].trim().toLowerCase(),
+    message: match[3],
+  };
+}
+
+function isAgentBoxOutputMessage(message: string): boolean {
+  return /^\s*│/.test(message);
+}
+
+function normalizeMillLogFingerprintMessage(message: string): string {
+  return message
+    .replace(/\b(pid|ppid|processPid|plannerPid|monitorPid|childPid)=\d+\b/gi, '$1=<pid>')
+    .replace(/\b(pid|ppid|process|planner|monitor|child)\s+\d+\b/gi, '$1 <pid>')
+    .replace(/(?:\/private)?\/tmp\/[^\s'",)]+/g, '<tmp>')
+    .replace(/\/var\/folders\/[^\s'",)]+\/T\/[^\s'",)]+/g, '<tmp>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function terminalStatus(status?: string): boolean {
-  return status === 'merged' || status === 'complete' || status === 'closed' || status === 'done';
+  return status === 'merged'
+    || status === 'complete'
+    || status === 'completed'
+    || status === 'completed-external'
+    || status === 'closed'
+    || status === 'done'
+    || status === 'aborted';
+}
+
+function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes: Pane[], processes: ProcessRow[]): boolean {
+  const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
+  const matchingPanes = panes.filter((pane) => {
+    if (pane.session !== repo.session) return false;
+    return pane.windowName === expectedWindow
+      || pane.windowName === task.issue
+      || (task.slug ? pane.windowName === task.slug : false)
+      || pane.title.includes(task.issue)
+      || (task.worktree ? pane.title.includes(task.worktree) : false);
+  });
+
+  if (matchingPanes.some((pane) => !/dead|exited/i.test(`${pane.command} ${pane.title}`))) {
+    return true;
+  }
+
+  return processes.some((row) => {
+    const command = row.command;
+    return command.includes(task.issue)
+      || (task.slug ? command.includes(task.slug) : false)
+      || (task.worktree ? command.includes(task.worktree) : false);
+  });
 }
 
 function hashText(text: string): string {
@@ -1513,6 +1751,8 @@ async function main(): Promise<void> {
       await fileLinearIssues(snapshot, options);
       if (options.json) {
         process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+      } else if (options.compact) {
+        process.stdout.write(renderObserverStatus(snapshot, { width: process.stdout.columns ?? 100 }));
       } else {
         process.stdout.write(renderSummary(snapshot));
       }

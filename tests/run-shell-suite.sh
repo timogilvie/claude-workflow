@@ -20,6 +20,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Note: tests/check-shell.sh is deliberately absent. It is a lint/syntax pass
 # over every shell script, not a per-shard test, and runs once via `npm run lint`.
 TESTS=(
+  aborted-challenge-cleanup.test.sh
+  challenge-primary-merge-cleanup.test.sh
+  operator-abort-cleanup.test.sh
+  agent-resolve-from-model.test.sh
   terminal-reconciler.test.sh
   monitor-env-completeness.test.sh
   wavemill-expand-direct.test.sh
@@ -30,6 +34,7 @@ TESTS=(
   challenge-record-decisive.test.sh
   native-terminal-failure.test.sh
   native-agent-shell-operators.test.sh
+  native-coding-commit.test.sh
   hook-write-context-guard.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
@@ -43,11 +48,13 @@ TESTS=(
   cleanup-branch.test.sh
   completed-task-cleanup.test.sh
   error-recovery.test.sh
+  startup-terminal-prune.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh
   backstage-tend-watchdog.test.sh
   backstage-observer-watchdog.test.sh
+  backstage-observer-pane-promotion.test.sh
   control-layout.test.sh
   challenge-comparison-state.test.sh
   challenge-running-state.test.sh
@@ -70,6 +77,8 @@ TESTS=(
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
   global-model-parity.test.sh
+  stage-state.test.sh
+  startup-handoff.test.sh
 )
 
 SHARD_INDEX=1
@@ -110,15 +119,15 @@ for i in "${!TESTS[@]}"; do
   fi
 done
 
-if (( LIST_ONLY == 1 )); then
-  printf '%s\n' "${SELECTED[@]}"
-  exit 0
-fi
-
 # A shard with no work is a configuration error, not a silent pass.
 if (( ${#SELECTED[@]} == 0 )); then
   echo "run-shell-suite.sh: shard ${SHARD_INDEX}/${SHARD_TOTAL} selected no tests" >&2
   exit 2
+fi
+
+if (( LIST_ONLY == 1 )); then
+  printf '%s\n' "${SELECTED[@]}"
+  exit 0
 fi
 
 if (( SHARD_TOTAL > 1 )); then
