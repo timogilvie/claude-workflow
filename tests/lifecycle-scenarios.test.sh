@@ -176,6 +176,7 @@ for fn in \
   mark_ready_stale \
   write_ready_queue_artifacts \
   resolve_pair_on_primary_merge \
+  cleanup_merged_primary_challenge_task \
   monitor_issue_state
 do
   extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"

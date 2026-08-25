@@ -1231,7 +1231,7 @@ else
 fi
 
 if awk '
-  /cleanup_completed_task/ { saw_cleanup=1 }
+  /cleanup_completed_task|cleanup_merged_primary_challenge_task/ { saw_cleanup=1 }
   saw_cleanup && /launch_background_post_merge_eval/ { found=1; exit }
   END { exit !found }
 ' <<< "$MERGED_BLOCK"; then

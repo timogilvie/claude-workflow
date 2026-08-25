@@ -50,6 +50,7 @@ extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITO
 extract_function "$MILL_SCRIPT" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "resolve_pair_on_primary_merge" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "cleanup_merged_primary_challenge_task" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then

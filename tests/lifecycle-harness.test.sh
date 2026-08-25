@@ -161,6 +161,7 @@ harness_extract_real_functions() {
     ready_stage_pending_verdict \
     log_ready_stale_merge_lane_once \
     resolve_pair_on_primary_merge \
+    cleanup_merged_primary_challenge_task \
     monitor_issue_state \
     capture_planning_baseline \
     validate_planning_phase_output \
