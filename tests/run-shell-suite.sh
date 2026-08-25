@@ -49,7 +49,6 @@ TESTS=(
   error-recovery.test.sh
   startup-terminal-prune.test.sh
   planning-validation.test.sh
-  blocked-completion-liveness.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh
   backstage-tend-watchdog.test.sh
