@@ -9467,6 +9467,26 @@ set_ready_pass_labels() {
   (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
 }
 
+ready_remediation_resolve_model() {
+  local issue="$1"
+
+  local model=""
+  model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
+  [[ -n "$model" ]] && printf '%s' "$model" && return 0
+
+  model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+  [[ -n "$model" ]] && printf '%s' "$model" && return 0
+
+  model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+  [[ -n "$model" ]] && printf '%s' "$model" && return 0
+
+  model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+  [[ -n "$model" ]] && printf '%s' "$model" && return 0
+
+  printf ""
+  return 0
+}
+
 _launch_ready_remediation_attempt() {
   local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
   local state_dir="$7" win="$8" status_file="$9" current_agent="${10}" current_model="${11}"
@@ -9474,10 +9494,25 @@ _launch_ready_remediation_attempt() {
   local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
   local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
+  local resolved_model
 
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+
+  resolved_model=$(ready_remediation_resolve_model "$issue")
+
+  if [[ -z "$resolved_model" ]]; then
+    remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
+      "candidate-progress")
+    write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+      "Ready remediation cannot launch without model" \
+      "$remediation_failed_artifacts_json"
+    write_ready_attention_file "$state_dir" "Cannot launch remediation for PR #$pr_number: no model configured for task $issue."
+    log_error "  Failed to launch ready remediation agent for $issue (no model)"
+    return 1
+  fi
 
   prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
   build_ready_remediation_prompt \
@@ -9491,7 +9526,7 @@ _launch_ready_remediation_attempt() {
     "$failed_check_summary" \
     "$ready_result_file" > "$prompt_file"
 
-  _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$remediation_agent" "$resolved_model" "$prompt_file" "$slug" "$issue"
   launch_rc=$?
 
   if [[ "$launch_rc" -eq 0 ]]; then
@@ -9515,7 +9550,7 @@ _launch_ready_remediation_attempt() {
         remediationFailures: $remediation_failures
       }')
     remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
-    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
+    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$resolved_model" \
       "Ready remediation in progress for PR #$pr_number" \
       "$remediation_artifacts_json"
     rm -f "$state_dir/.needs-attention"
@@ -9528,9 +9563,9 @@ _launch_ready_remediation_attempt() {
   fi
 
   remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":$(( remediation_attempt_number - 1 )),\"remediationFailures\":${failed_check_names_json}}" \
+    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
     "candidate-progress")
-  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$resolved_model" \
     "Could not launch ready remediation agent" \
     "$remediation_failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."

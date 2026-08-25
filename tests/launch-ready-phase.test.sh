@@ -84,6 +84,7 @@ extract_function "$MILL_SCRIPT" "review_result_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_remediation_resolve_model" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
@@ -182,8 +183,23 @@ EOF
     _ensure_window_exists() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
     read_state_value() {
-      if [[ "${4:-}" == *".tasks["*".model"* ]]; then
-        printf "%s\n" "gpt-5.4"
+      if [[ "${5:-}" == *".tasks["*".coderModel"* ]]; then
+        case "$TEST_CASE" in
+          coder_model_resolution) printf "%s\n" "kimi-k2-thinking" ;;
+          *) printf "\n" ;;
+        esac
+        return 0
+      fi
+      if [[ "${5:-}" == *".tasks["*".reviewerModel"* ]] || [[ "${5:-}" == *".tasks["*".plannerModel"* ]]; then
+        printf "\n"
+        return 0
+      fi
+      if [[ "${5:-}" == *".tasks["*".model"* ]]; then
+        case "$TEST_CASE" in
+          empty_model_no_launch) printf "\n" ;;
+          coder_model_resolution) printf "\n" ;;
+          *) printf "%s\n" "gpt-5.4" ;;
+        esac
         return 0
       fi
       printf "\n"
@@ -206,6 +222,8 @@ EOF
         second_remediation_launch) printf "%s\n" "1" ;;
         remediation_exhausted) printf "%s\n" "3" ;;
         pass_after_remediation) printf "%s\n" "2" ;;
+        repeated_launch_failures_attempt2) printf "%s\n" "1" ;;
+        repeated_launch_failures_attempt3) printf "%s\n" "2" ;;
         *) printf "%s\n" "0" ;;
       esac
     }
@@ -236,6 +254,8 @@ EOF
       LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
       case "$TEST_CASE" in
         remediation_launch_failure) return 1 ;;
+        repeated_launch_failures) return 1 ;;
+        coder_model_resolution) return 0 ;;
         *) return 0 ;;
       esac
     }
@@ -361,7 +381,7 @@ EOF
           printf "%s\n" "TypeError: ready crashed" >&2
           return 1
           ;;
-        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head)
+        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|empty_model_no_launch|coder_model_resolution|already_inflight_same_head)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
@@ -730,7 +750,19 @@ output="$(run_launch_case remediation_launch_failure)"
 check_contains "launch failure returns failure" "$output" "rc=1"
 check_contains "launch failure records failed stage" "$output" "|ready|failed|"
 check_contains "launch failure writes operator message" "$output" "Could not launch remediation agent for PR #304."
-check_contains "launch failure does not pollute attempts" "$output" "\"remediationAttempts\":0"
+check_contains "launch failure records attempt number" "$output" "\"remediationAttempts\":1"
+
+output="$(run_launch_case empty_model_no_launch)"
+check_contains "empty model returns failure" "$output" "rc=1"
+check_contains "empty model does not call launcher" "$output" "launch_calls=0"
+check_contains "empty model records failed stage" "$output" "|ready|failed|"
+check_contains "empty model writes no model message" "$output" "Cannot launch remediation for PR #304: no model configured"
+check_contains "empty model records attempt" "$output" "\"remediationAttempts\":1"
+
+output="$(run_launch_case coder_model_resolution)"
+check_contains "coder model resolution returns success" "$output" "rc=5"
+check_contains "coder model resolution calls launcher" "$output" "launch_calls=1"
+check_contains "coder model resolution resolves coderModel" "$output" "launch_calls=1"
 
 output="$(run_launch_case already_inflight_same_head)"
 check_contains "inflight same head returns rc 5" "$output" "rc=5"

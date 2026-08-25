@@ -492,6 +492,9 @@ agent_normalize_phase_token() {
     *review-prompt*|*review_prompt*)
       printf '%s\n' "review"
       ;;
+    *ready-remediation-prompt*|*ready_remediation_prompt*)
+      printf '%s\n' "coding"
+      ;;
     *)
       return 1
       ;;
