@@ -35,6 +35,8 @@ eval "$(extract_function emit_challenge_stage_failure_quarantine)"
 eval "$(extract_function write_openrouter_warning_cache)"
 eval "$(extract_function record_openrouter_credits_challenge_abort)"
 eval "$(extract_function challenge_abort_pair)"
+eval "$(extract_function challenge_abort_scope_for_failure)"
+eval "$(extract_function _challenge_side_for_issue)"
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -281,6 +283,25 @@ else
   fail "invalid model ID was not detected"
 fi
 
+# ── Transient hook failure while running: challenger-only quarantine ──
+# HOK-2885: an upstream idle-timeout stall on the challenger must not stamp
+# the healthy primary, so the pair stays resolvable by forfeit.
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-transient-running"
+write_stage_result "$fd" "coding" "running" "native" "llama-4-maverick"
+write_hook "PAIR-1_c" "error" "provider-transient-error: Upstream idle timeout exceeded"
+if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-transient" "%9" "native" "llama-4-maverick"; then
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_launch_failure:provider-transient-error" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1"] | has("challengeAborted")' "$STATE_FILE")" == "false" ]] \
+    && [[ -f "$fd/.challenge-aborted.json" ]]; then
+    pass "running-stage transient challenger failure quarantines the challenger only"
+  else
+    fail "running-stage transient challenger scoping wrong"
+  fi
+else
+  fail "running-stage transient challenger failure was not detected"
+fi
+
 # ── Guards ────────────────────────────────────────────────────────────
 # A terminal hook is deliberately NOT TTL-gated, but it must never override a
 # run that actually produced its completion artifact.
@@ -376,6 +397,14 @@ if emit_challenge_stage_failure_quarantine "PAIR-1_c" "$fd" "review" "win-review
     pass "review-stage quarantine schedules aborted cleanup"
   else
     fail "review-stage quarantine did not schedule cleanup"
+  fi
+  # HOK-2885: a transient challenger fault aborts the challenger only — the
+  # healthy primary keeps running so the pair can resolve by forfeit.
+  if [[ "$(jq -r '.tasks["PAIR-1_c"].challengeAborted' "$STATE_FILE")" == "terminal_stage_failure:provider-transient-error" ]] \
+    && [[ "$(jq -r '.tasks["PAIR-1"] | has("challengeAborted")' "$STATE_FILE")" == "false" ]]; then
+    pass "transient challenger failure stamps only the challenger arm"
+  else
+    fail "transient challenger failure stamped the healthy primary"
   fi
 else
   fail "review-stage quarantine did not fire"

@@ -53,6 +53,14 @@ test('parses abort failure kinds and quality eligibility', () => {
   assert.equal(parseAbortFailureKind('varied_model_unresolvable'), 'varied_model_unresolvable');
   assert.equal(parseAbortFailureKind('other'), null);
 
+  // HOK-2885: the transient-retry exhaustion reason must classify as a
+  // provider fault instead of degrading to unknown-fault.
+  assert.equal(parseAbortFailureKind('retry_exhausted:provider-transient-error'), 'provider-transient-error');
+  assert.equal(
+    classifyArmFault({ failureKind: parseAbortFailureKind('retry_exhausted:provider-transient-error') }),
+    'provider-fault',
+  );
+
   assert.equal(isModelQualitySignal('model-fault'), true);
   assert.equal(isModelQualitySignal('provider-fault'), true);
   assert.equal(isModelQualitySignal('harness-fault'), false);
