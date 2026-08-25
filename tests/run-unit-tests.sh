@@ -96,6 +96,7 @@ TESTS=(
   shared/lib/context-analyzer.test.ts
   shared/lib/review-engine.test.ts
   shared/lib/review-runner.test.ts
+  shared/lib/review-scope-guard.test.ts
   shared/lib/review-progress.test.ts
   shared/lib/review-formatter.test.ts
   shared/lib/pr-comparison.test.ts
@@ -142,6 +143,7 @@ TESTS=(
   shared/lib/model-registry.test.ts
   shared/lib/model-promotion.test.ts
   shared/lib/model-evidence-policy.test.ts
+  shared/lib/disabled-models.test.ts
   shared/lib/effective-models.test.ts
   shared/lib/model-agent-resolution.test.ts
   shared/lib/model-resolution.test.ts

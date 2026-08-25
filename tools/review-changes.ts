@@ -13,6 +13,8 @@ import {
   type ReviewMetric,
 } from '../shared/lib/review-metrics.ts';
 import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { createReviewProgressReporter } from '../shared/lib/review-progress.ts';
 import {
   detectSinceCommit,
@@ -167,6 +169,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
       // Resolve sinceCommit: explicit flag > auto-detect from selected-task.json
       const sinceCommit = (args['since-commit'] as string | undefined)
         || detectSinceCommit(currentBranch, repoDir, verbose);
+      const featureDir = resolveReviewFeatureDir(repoDir, currentBranch);
       let operatingMode = forcedOperatingMode;
       if (!operatingMode) {
         try {
@@ -185,6 +188,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
           skipUi: !!args['skip-ui'],
           uiOnly: !!args['ui-only'],
           sinceCommit: sinceCommit || null,
+          featureDir: featureDir || null,
           operatingMode,
         },
       });
@@ -196,6 +200,9 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         console.error(`  Operating mode: ${operatingMode}`);
         if (sinceCommit) {
           console.error(`  Since commit: ${sinceCommit}`);
+        }
+        if (featureDir) {
+          console.error(`  Feature dir: ${featureDir}`);
         }
         console.error('');
       }
@@ -209,6 +216,7 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
         reporter,
         sinceCommit,
         operatingMode,
+        featureDir: featureDir ?? undefined,
       });
 
       // Add iteration to metric
@@ -285,3 +293,19 @@ Use the relative path: npx tsx tools/review-changes.ts ${targetBranch} --json
     }
   },
 });
+
+function resolveReviewFeatureDir(repoDir: string, branchName: string): string | null {
+  const match = branchName.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  for (const root of ['features', 'bugs']) {
+    const candidate = join(repoDir, root, match[1]);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
