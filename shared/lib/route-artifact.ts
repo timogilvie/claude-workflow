@@ -53,6 +53,7 @@ export interface RouteProvenance {
     nearestNeighborCount?: number;
     exactRouteMatchCount?: number;
   };
+  signalVector?: Record<string, unknown>;
 }
 
 export type RouteEscalationTriggerMetric = 'expectedSuccess' | 'confidence';

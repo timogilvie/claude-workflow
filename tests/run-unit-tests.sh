@@ -350,6 +350,7 @@ TESTS=(
   shared/lib/task-descriptor-backfill.test.ts
   shared/lib/task-descriptor-builder.test.ts
   shared/lib/task-difficulty-classifier.test.ts
+  shared/lib/task-packet-classifier.test.ts
   shared/lib/task-packet-utils.test.ts
   shared/lib/task-packet-validator.test.ts
   shared/lib/tool-runner.test.ts

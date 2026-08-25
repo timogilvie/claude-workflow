@@ -787,6 +787,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -994,6 +998,56 @@ challenge_pair_record_exists() {
   ' "$records_file" >/dev/null 2>&1
 }
 
+challenge_pr_number_from_url() {
+  local url="${1:-}"
+  if [[ "$url" =~ /pull/([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
+cleanup_forfeit_loser_from_resolution() {
+  local resolve_output="$1"
+  local outcome pair_id winner primary_pr_url challenger_pr_url primary_pr challenger_pr
+  local loser_key winner_pr loser_pr loser_slug evidence_id
+  outcome=$(jq -r '.outcome // .record.comparisonOutcome // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ "$outcome" == "forfeit" ]] || return 0
+  pair_id=$(jq -r '.record.challengePairId // empty' <<<"$resolve_output" 2>/dev/null || true)
+  winner=$(jq -r '.record.winner // empty' <<<"$resolve_output" 2>/dev/null || true)
+  evidence_id=$(jq -r '.record.timestamp // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ -n "$pair_id" && -n "$winner" && -n "$evidence_id" ]] || return 0
+
+  primary_pr_url=$(jq -r '.record.primaryPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  challenger_pr_url=$(jq -r '.record.challengerPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  primary_pr=$(challenge_pr_number_from_url "$primary_pr_url")
+  challenger_pr=$(challenge_pr_number_from_url "$challenger_pr_url")
+  if [[ "$winner" == "primary" ]]; then
+    winner_pr="$primary_pr"
+    loser_pr="$challenger_pr"
+    loser_key="${pair_id}_c"
+  elif [[ "$winner" == "challenger" ]]; then
+    winner_pr="$challenger_pr"
+    loser_pr="$primary_pr"
+    loser_key="$pair_id"
+  else
+    return 0
+  fi
+
+  [[ "$winner_pr" =~ ^[0-9]+$ && "$loser_pr" =~ ^[0-9]+$ ]] || return 0
+  [[ "$winner_pr" -gt 0 && "$loser_pr" -gt 0 && "$winner_pr" != "$loser_pr" ]] || return 0
+
+  if [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+    gh pr close "$loser_pr" \
+      --comment "Closing losing arm of pair $pair_id (forfeit resolution)." 2>/dev/null || true
+    log "status" "Closed losing forfeit PR #$loser_pr"
+  fi
+  loser_slug=$(get_task_meta "$loser_key" "slug")
+  if [[ -n "$loser_slug" ]]; then
+    cleanup_completed_task "$loser_key" "$loser_slug" "challenge forfeit loser"
+  fi
+}
+
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
@@ -1031,6 +1085,7 @@ resolve_challenge_pair_hard_failure() {
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
+        cleanup_forfeit_loser_from_resolution "$resolve_output"
       fi
       return 0
     fi
@@ -1249,12 +1304,13 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
-
 
 get_task_phase() {
   local issue="$1"
@@ -3448,6 +3504,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
   local _trace_id_for_state=""
@@ -4346,7 +4406,9 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
   fi
@@ -4605,6 +4667,7 @@ challenge_pair_record_exists() {
       ] | length == 0)
   ' "$records_file" >/dev/null 2>&1
 }
+
 
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
@@ -11025,6 +11088,17 @@ cleanup_aborted_challenge_arm() {
 
   log "debug" "Closed window: $win"
 
+  if [[ -n "$pr" ]]; then
+    log_warn "  $issue: PR #$pr exists - preserving worktree and local branch (aborted task)"
+    set_window_attention_state "$win" "needs-user"
+    rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+    reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+    remove_task_state "$issue"
+    CLEANED["$issue"]=1
+    log "$issue: Complete (aborted cleanup, worktree preserved due to PR #$pr)"
+    return 0
+  fi
+
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "Removed worktree: $wt_dir"
@@ -14245,7 +14319,7 @@ monitor_issue_state() {
 	  local challenge_aborted pair_id_for_cleanup
 	  challenge_aborted=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengeAborted // empty')
 	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
-	  if [[ "$task_status" == "aborted" && -n "$challenge_aborted" ]]; then
+	  if [[ "$task_status" == "aborted" ]]; then
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
 	    return 0
 	  fi

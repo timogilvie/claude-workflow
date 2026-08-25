@@ -33,7 +33,7 @@ test('upgrades retired Codex model IDs in every workflow stage', () => {
   assert.equal(upgraded.planner, 'gpt-5.6-terra');
   assert.equal(upgraded.coder, 'gpt-5.5');
   assert.equal(upgraded.reviewer, 'gpt-5.5');
-  assert.match(upgraded.reasoning.join('\n'), /gpt-5\.4 to its ChatGPT Codex successor gpt-5\.6-terra/);
+  assert.match(upgraded.reasoning.join('\n'), /gpt-5\.4 to successor gpt-5\.6-terra via model lineage/);
 });
 
 test('preserves routes that do not require an explicit successor', () => {

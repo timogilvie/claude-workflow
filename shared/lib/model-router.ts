@@ -31,6 +31,7 @@ import {
   type AgentType,
 } from './model-registry.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
+import { classifyTaskPacket } from './task-packet-classifier.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Task Type Classification
@@ -96,14 +97,7 @@ const TASK_TYPE_PATTERNS: { type: TaskType; patterns: RegExp[] }[] = [
  * Returns the first matching type (ordered by specificity).
  */
 export function classifyTaskType(prompt: string): TaskType {
-  for (const { type, patterns } of TASK_TYPE_PATTERNS) {
-    for (const pattern of patterns) {
-      if (pattern.test(prompt)) {
-        return type;
-      }
-    }
-  }
-  return 'unknown';
+  return classifyTaskPacket(prompt).taskType;
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -114,6 +108,8 @@ export interface PromptCharacteristics {
   length: 'short' | 'medium' | 'long';
   charCount: number;
   complexityScore: number;
+  complexityBand?: 'xs' | 's' | 'm' | 'l' | 'xl';
+  riskFlags?: string[];
   fileTypes: string[];
   taskType: TaskType;
 }
@@ -132,13 +128,9 @@ const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sq
  * Extract characteristics from a prompt for routing decisions.
  */
 export function analyzePrompt(prompt: string): PromptCharacteristics {
-  const charCount = prompt.length;
-  const length = charCount < 200 ? 'short' : charCount < 1000 ? 'medium' : 'long';
-
-  let complexityScore = 0;
-  for (const kw of COMPLEXITY_KEYWORDS) {
-    if (kw.test(prompt)) complexityScore++;
-  }
+  const classification = classifyTaskPacket(prompt);
+  const charCount = classification.evidence.charCount;
+  const length = classification.evidence.promptLength;
 
   const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
   const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
@@ -146,9 +138,11 @@ export function analyzePrompt(prompt: string): PromptCharacteristics {
   return {
     length,
     charCount,
-    complexityScore,
-    fileTypes,
-    taskType: classifyTaskType(prompt),
+    complexityScore: classification.complexityScore,
+    complexityBand: classification.complexityBand,
+    riskFlags: classification.riskFlags,
+    fileTypes: fileTypes.length > 0 ? fileTypes : classification.evidence.fileTypes,
+    taskType: classification.taskType,
   };
 }
 
