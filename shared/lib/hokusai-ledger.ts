@@ -2,6 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { getContributionConsentStatus } from './hokusai-consent.ts';
 import { resolveHokusaiLedgerPath } from './hokusai-queue-paths.ts';
+import type { HokusaiQueueProvenance } from './hokusai-queue.ts';
 
 export type HokusaiLedgerEventType = 'submitted' | 'accepted' | 'rejected' | 'reward_updated';
 export type HokusaiRewardStatus = 'pending' | 'none' | 'awarded' | 'unknown';
@@ -26,6 +27,7 @@ export interface HokusaiLedgerEntry {
   tokenReward?: number;
   summary?: string;
   errorCode?: string;
+  queueProvenance?: HokusaiQueueProvenance[];
 }
 
 export interface HokusaiLedgerOptions {
