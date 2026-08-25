@@ -3423,6 +3423,12 @@ terminalize_transient_retry_failure() {
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
   pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
   if [[ "$is_challenge" == "true" && -z "$pr" && -n "$feature_dir" ]]; then
+    # Attempt bounded relaunch for transient provider errors on challenger arms
+    if maybe_relaunch_challenger_transient_failure "$issue" "$feature_dir" "$result_stage" "${issue}-${slug}" "retry_exhausted:provider-transient-error"; then
+      # Relaunch succeeded, caller should stop
+      return 0
+    fi
+    
     win="${issue}-${slug}"
     challenge_abort_pair "$issue" "$feature_dir" "$win" "$result_stage" "$model" \
       "retry_exhausted:provider-transient-error" "$notes" "$next_action" || true
@@ -3454,6 +3460,126 @@ transient_error_recovery_pending() {
 
   retry_count="$(get_retry_count "$SESSION" "$issue")"
   (( retry_count < 4 ))
+}
+
+# Helper: get the transient relaunch counter for a challenge arm
+challenge_transient_relaunch_count() {
+  local feature_dir="$1"
+  local count_file="$feature_dir/.challenge-transient-relaunch-count"
+  if [[ -f "$count_file" ]]; then
+    cat "$count_file"
+  else
+    echo "0"
+  fi
+}
+
+# Helper: increment the transient relaunch counter for a challenge arm
+increment_challenge_transient_relaunch_count() {
+  local feature_dir="$1"
+  local count_file="$feature_dir/.challenge-transient-relaunch-count"
+  local current=$(challenge_transient_relaunch_count "$feature_dir")
+  echo $((current + 1)) > "$count_file"
+}
+
+# Attempt to relaunch a challenger arm that failed with a transient provider error.
+# Returns 0 if relaunch was attempted, 1 if conditions weren't met (caller should quarantine).
+# This mirrors the pattern used by relaunch_review_after_infra_recovery and _prepare_recovery_phase_launch.
+maybe_relaunch_challenger_transient_failure() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4" detail="$5"
+  local is_challenge challenge_role pr retry_max current_count next_action model agent
+  local hook_file retry_file
+
+  # Check if this is a challenge arm
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  # Check if it's a challenger role
+  challenge_role="$(get_task_meta "$issue" "challengeRole" 2>/dev/null || true)"
+  [[ "$challenge_role" == "challenger" ]] || return 1
+
+  # Check if there's no PR (post-PR failures have their own retry mechanism)
+  pr="$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')"
+  [[ -z "$pr" ]] || return 1
+
+  # Check if the failure is a provider-transient-error (caller should have computed this)
+  [[ "$detail" == *"provider-transient-error" ]] || return 1
+
+  # Check relaunch budget
+  retry_max="${WAVEMILL_CHALLENGE_TRANSIENT_RELAUNCH_MAX:-2}"
+  [[ "$retry_max" =~ ^[0-9]+$ ]] || retry_max=2
+  
+  current_count=$(challenge_transient_relaunch_count "$feature_dir")
+  if (( current_count >= retry_max )); then
+    log "info" "$issue → transient provider failure on challenger arm; budget exhausted (${current_count}/${retry_max})"
+    return 1
+  fi
+
+  # Increment counter
+  increment_challenge_transient_relaunch_count "$feature_dir"
+  current_count=$(challenge_transient_relaunch_count "$feature_dir")
+
+  # Clean up stale error hooks to prevent immediate re-triggering
+  hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  retry_file="/tmp/wavemill-${SESSION}-${issue}.retry"
+  rm -f "$hook_file" "$retry_file"
+
+  # Resolve model and agent from the failed stage result
+  model="$(stage_result_field "$feature_dir" "$stage" "model" 2>/dev/null || true)"
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent" 2>/dev/null || true)"
+  [[ -n "$agent" ]] || agent="$AGENT_CMD"
+  [[ -n "$model" ]] || model="unknown"
+
+  # Validate agent/model for launch (mirrors relaunch_review_after_infra_recovery)
+  if ! agent_validate_phase_launch "$agent" "$stage" "$model" "$REPO_DIR"; then
+    log_warn "$issue → cannot relaunch ${stage} after transient failure: agent/model validation failed"
+    return 1
+  fi
+
+  # Reset stage result to running and configure hooks (mirrors _prepare_recovery_phase_launch)
+  if ! write_stage_result_with_history "$feature_dir" "$stage" "running" "$agent" "$model" "Relaunched after transient provider failure" \
+    || ! jq -e --arg stage "$stage" --arg status "running" '.stage == $stage and .status == $status' "$feature_dir/.${stage}-result.json" >/dev/null 2>&1; then
+    log_warn "$issue → failed to reset ${stage} stage result for relaunch"
+    return 1
+  fi
+
+  if ! configure_agent_hooks "$agent" "$feature_dir" "$REPO_DIR"; then
+    log_warn "$issue → failed to configure hooks for relaunched ${stage} stage"
+    return 1
+  fi
+
+  # Clear window attention state
+  set_window_attention_state "$win" "clear"
+
+  # Re-launch the phase
+  case "$stage" in
+    planning)
+      launch_planning_phase "$issue" "$(basename "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')" \
+        "$(dirname "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')" "$BASE_BRANCH" \
+        "$model" "$agent" "light" || return 1
+      ;;
+    coding)
+      launch_coding_phase "$issue" "$(basename "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')" \
+        "$(dirname "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')" "$BASE_BRANCH" \
+        "$model" "$agent" || return 1
+      ;;
+    review)
+      local review_mode="static"
+      if declare -F read_phase_config >/dev/null 2>&1; then
+        review_mode=$(read_phase_config "$feature_dir" "review" "mode")
+        [[ -n "$review_mode" ]] || review_mode="static"
+      fi
+      launch_review_phase "$issue" "$(basename "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].title // "Task"')" \
+        "$(dirname "$feature_dir")" "$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // ""')" "$BASE_BRANCH" \
+        "$model" "$agent" "$review_mode" || return 1
+      ;;
+    *)
+      log_warn "$issue → unsupported stage '$stage' for relaunch"
+      return 1
+      ;;
+  esac
+
+  log "status" "♻ $issue → transient provider failure on challenger arm; relaunching ${stage} (attempt ${current_count}/${retry_max})"
+  return 0
 }
 
 # Close auxiliary panes when monitor exits so quitting control is a single action.
@@ -3883,7 +4009,7 @@ record_openrouter_credits_challenge_abort() {
 # the reason attached to the evidence rather than inferred after the fact.
 challenge_abort_pair() {
   local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7" next_action="${8:-}"
-  local result_stage pair_id role peer now artifact tmp
+  local result_stage pair_id role peer now artifact tmp mark_peer
   [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$reason" ]] || return 1
 
   result_stage="$(challenge_result_stage_for_launch "$stage")"
@@ -3896,6 +4022,18 @@ challenge_abort_pair() {
       peer="${pair_id}_c"
     fi
   fi
+  
+  # Determine whether to mark the peer (primary) arm
+  # Only spare the primary when:
+  # 1. The failing arm is a challenger
+  # 2. The failure reason is a provider-transient-error
+  if [[ "$role" == "challenger" ]] && [[ "$reason" == *"provider-transient-error" ]]; then
+    mark_peer="false"
+    log "info" "$issue → transient provider failure on challenger arm; sparing primary"
+  else
+    mark_peer="true"
+  fi
+  
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   write_stage_result "$feature_dir" "$result_stage" "failed" "" "$model" "$detail"
@@ -3911,13 +4049,14 @@ challenge_abort_pair() {
               | .tasks[$key].updated = (now | todate)
          else .
          end;
-       mark($issue) | mark($peer)' \
+       mark($issue) | if $mark_peer == "true" then mark($peer) else . end' \
       --arg issue "$issue" \
       --arg peer "${peer:-}" \
       --arg reason "$reason" \
       --arg detail "$detail" \
       --arg stage "$(challenge_stage_for_launch_env "$stage")" \
-      --arg nextAction "$next_action" >/dev/null 2>&1 || true
+      --arg nextAction "$next_action" \
+      --arg mark_peer "$mark_peer" >/dev/null 2>&1 || true
   fi
 
   mkdir -p "$feature_dir"
@@ -7166,9 +7305,15 @@ emit_native_terminal_failure_attention() {
     '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction}' \
     2>/dev/null || printf '{}')"
 
-  # Quarantine first: challenge_abort_pair also writes a stage result, so the
-  # richer artifact-bearing write below must land last and win.
+  # Attempt bounded relaunch for transient provider errors on challenger arms
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  if [[ "$is_challenge" == "true" ]] && maybe_relaunch_challenger_transient_failure "$issue" "$feature_dir" "$stage" "$win" "terminal_launch_failure:${failure_kind}"; then
+    # Relaunch succeeded, caller should stop
+    return 0
+  fi
+
+  # Quarantine: challenge_abort_pair also writes a stage result, so the
+  # richer artifact-bearing write below must land last and win.
   if [[ "$is_challenge" == "true" ]]; then
     challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
       "terminal_launch_failure:${failure_kind}" "$notes" "$next_action" || true
@@ -7220,6 +7365,12 @@ emit_challenge_stage_failure_quarantine() {
   failure_kind="$(native_terminal_failure_kind "$detail")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   model="$(stage_result_field "$feature_dir" "$stage" "model")"
+
+  # Attempt bounded relaunch for transient provider errors on challenger arms
+  if maybe_relaunch_challenger_transient_failure "$issue" "$feature_dir" "$stage" "$win" "terminal_stage_failure:${failure_kind}"; then
+    # Relaunch succeeded, caller should stop
+    return 0
+  fi
 
   challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
