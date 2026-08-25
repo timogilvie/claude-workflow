@@ -11,6 +11,10 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execSync as childExecSync } from 'node:child_process';
 import { writeArtifactAtomicSync } from './artifact-utils.ts';
+import {
+  formatReviewScopeGuardResult,
+  validateReviewScope,
+} from './review-scope-guard.ts';
 import type {
   PrePrVerificationRecipe,
   PrePrVerificationResult,
@@ -305,6 +309,31 @@ export function runVerificationRecipe(
     commands,
     startTime: runStart,
     endTime: Date.now(),
+  };
+}
+
+export function runPrePrSafetyGuard(options: {
+  stateDir: string;
+  baseSha: string;
+  headSha?: string;
+  featureDir?: string;
+}): { passed: boolean; reason?: string } {
+  const result = validateReviewScope({
+    repoDir: options.stateDir,
+    featureDir: options.featureDir,
+    baseRef: options.baseSha,
+    headRef: options.headSha ?? 'HEAD',
+    includeWorkingTree: false,
+    writeBaseline: false,
+  });
+
+  if (result.ok) {
+    return { passed: true };
+  }
+
+  return {
+    passed: false,
+    reason: formatReviewScopeGuardResult(result),
   };
 }
 

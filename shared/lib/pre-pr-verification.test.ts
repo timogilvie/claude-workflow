@@ -14,6 +14,7 @@ import {
   extractBoundedLogExcerpt,
   getRemediationGuidance,
   fetchAndResolveBase,
+  runPrePrSafetyGuard,
 } from './pre-pr-verification.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -338,6 +339,40 @@ test('fetchAndResolveBase: blocks when origin cannot be fetched', () => {
     assert('kind' in result);
     assert.equal(result.kind, 'fetch-failed');
     assert(result.diagnostics.includes("base branch 'auto/integration'"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: blocks unsafe branch diff after refreshed base', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+    writeFileSync(join(featureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['feature.txt'],
+    }));
+    writeAndCommit(repoDir, 'unrelated.txt', 'bad\n', 'unsafe review fix');
+
+    const result = runPrePrSafetyGuard({
+      stateDir: repoDir,
+      baseSha,
+      featureDir,
+    });
+
+    assert.equal(result.passed, false);
+    assert.match(result.reason ?? '', /unrelated\.txt/);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

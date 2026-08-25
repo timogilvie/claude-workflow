@@ -21,6 +21,7 @@ import {
   writeVerificationArtifact,
   readAndValidateArtifact,
   fetchAndResolveBase,
+  runPrePrSafetyGuard,
 } from '../shared/lib/pre-pr-verification.ts';
 import type { OperatorOverride } from '../shared/lib/pre-pr-verification-types.ts';
 
@@ -205,6 +206,25 @@ async function main(): Promise<void> {
   baseSha = baseResolution.baseSha;
   if (!opts.json) {
     console.log(`✓ Base refreshed to ${baseSha}`);
+  }
+
+  const safetyGuard = runPrePrSafetyGuard({
+    stateDir: opts.stateDir,
+    baseSha,
+    headSha,
+  });
+  if (!safetyGuard.passed) {
+    if (!opts.json) {
+      console.error(`✗ ${safetyGuard.reason}`);
+    } else {
+      console.log(JSON.stringify({
+        error: 'pre_pr_safety_guard_failed',
+        headSha,
+        baseSha,
+        reason: safetyGuard.reason,
+      }));
+    }
+    process.exit(1);
   }
 
   // Check if artifact is fresh AND matches current HEAD/base (skip if --force).

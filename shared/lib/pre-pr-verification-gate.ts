@@ -13,6 +13,7 @@ import {
   fetchAndResolveBase,
   readAndValidateArtifact,
   getRemediationGuidance,
+  runPrePrSafetyGuard,
 } from './pre-pr-verification.ts';
 import type { PrePrVerificationArtifact } from './pre-pr-verification-types.ts';
 
@@ -106,6 +107,21 @@ export function checkPrePrVerificationGate(
   }
 
   const latestBaseSha = baseResolution.baseSha;
+  const safetyGuard = runPrePrSafetyGuard({
+    stateDir,
+    baseSha: latestBaseSha,
+    headSha: currentHeadSha,
+  });
+  if (!safetyGuard.passed) {
+    return {
+      passed: false,
+      reason: 'Pre-PR safety guard failed',
+      recommendation:
+        `${safetyGuard.reason}\n\n` +
+        'Keep review fixes within the original task-owned files and re-run verification.',
+      requiresRemediation: true,
+    };
+  }
 
   // Check 3: Locate artifact
   const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
