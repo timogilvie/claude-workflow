@@ -7360,7 +7360,7 @@ maybe_retry_challenger_transient_phase() {
     exhausted_notes="Challenger ${stage} phase failed on a transient provider error after ${count}/${max} relaunches (attempts=${count}): ${detail}"
     challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
       "retry_exhausted:provider-transient-error" "$exhausted_notes" "$exhausted_next" "single" || true
-    log_warn "$issue → challenger transient retries exhausted at ${stage} (${count}/${max}). Challenger quarantined; primary unaffected."
+    log_warn "$issue → challenger transient retries exhausted at ${stage} (${count}/${max}). Challenger quarantined, primary unaffected."
     cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "retry_exhausted:provider-transient-error" || true
     return 1
   fi
@@ -7374,7 +7374,7 @@ maybe_retry_challenger_transient_phase() {
     else
       rm -f "$retry_file.tmp.$$"
     fi
-    log "status" "$issue → transient challenger failure at ${stage}; retrying in $(get_backoff_delay $((count + 1)))s (attempt $((count + 1))/${max})"
+    log "status" "$issue → transient challenger failure at ${stage}, retrying in $(get_backoff_delay $((count + 1)))s (attempt $((count + 1))/${max})"
     return 2
   fi
   backoff="$(get_backoff_delay $((count + 1)))"
