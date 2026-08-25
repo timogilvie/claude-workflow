@@ -16,23 +16,17 @@ FAIL=0
 pass() { echo "  PASS  $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
+# Top-level helpers in wavemill-common.sh always close with `}` at column 0,
+# so terminate on that rather than counting braces. Brace counting has to strip
+# quoted spans first, and that stripping is not portable across awk variants
+# (BSD awk locally vs mawk in CI) once a function contains tmux format strings
+# like '#{pane_width}' or an apostrophe in a comment.
 extract_function() {
   local source_file="$1" function_name="$2"
   awk -v name="$function_name" '
-    function brace_delta(line, stripped, opens, closes) {
-      stripped = line
-      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
-      gsub(/\047([^\047\\]|\\.)*\047/, "\047\047", stripped)
-      opens = gsub(/\{/, "{", stripped)
-      closes = gsub(/\}/, "}", stripped)
-      return opens - closes
-    }
-    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" { capture = 1; depth = 0 }
-    capture {
-      print
-      depth += brace_delta($0)
-      if (depth == 0) { exit }
-    }
+    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" { capture = 1 }
+    capture { print }
+    capture && /^\}/ { exit }
   ' "$source_file"
 }
 
@@ -52,6 +46,16 @@ if grep -q "wavemill_pane_area()" "$FUNCS" && grep -q "wavemill_promote_observer
   pass "extracted both helpers from wavemill-common.sh"
 else
   fail "extracted both helpers from wavemill-common.sh"
+  echo "Passed: $PASS"; echo "Failed: $FAIL"; exit 1
+fi
+
+# A truncated or malformed extraction would otherwise kill the script silently
+# under `set -e`, with no indication of which step died.
+if bash -n "$FUNCS" 2>/dev/null; then
+  pass "extracted helpers parse as valid shell"
+else
+  fail "extracted helpers parse as valid shell"
+  echo "--- extracted ---"; cat "$FUNCS"; echo "--- end ---"
   echo "Passed: $PASS"; echo "Failed: $FAIL"; exit 1
 fi
 
