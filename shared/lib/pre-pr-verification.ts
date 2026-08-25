@@ -312,30 +312,58 @@ export function runVerificationRecipe(
   };
 }
 
+export interface PrePrSafetyGuardResult {
+  passed: boolean;
+  reason?: string;
+  /** Set when the scope check was bypassed rather than evaluated. */
+  skipped?: boolean;
+  /**
+   * Why the scope check was bypassed:
+   * - 'feature-dir-unresolved': no explicit featureDir was supplied and none
+   *   could be derived from the branch name, so nothing about the task's
+   *   scope is knowable.
+   * - 'no-scope-authority': a feature directory resolved, but it yields
+   *   neither a declared scope (Files to Modify / Scope In) nor a persisted
+   *   review baseline, so there is nothing to enforce against.
+   */
+  skipCause?: 'feature-dir-unresolved' | 'no-scope-authority';
+}
+
 /**
  * Run the review scope guard as a pre-PR safety check.
  *
- * The guard needs a resolvable feature directory to know which files a task
- * owns. When it cannot resolve one it reports `featureDir: null` and blocks on
- * "review scope cannot be proven" -- which, for a caller that never supplies a
- * featureDir, means blocking unconditionally.
+ * Findings from `validateReviewScope` fall into three classes (see
+ * `ReviewScopeGuardFinding.kind`), and this wrapper maps them onto a
+ * pass/fail/skip contract:
  *
- * So an indeterminate scope fails **open**: the guard reports what it could not
- * evaluate rather than rejecting every caller. It does not fail open on a
- * concrete violation. Cross-PR reverts and deletion-budget findings are derived
- * from baseRef, not from the feature directory, so they remain enforced even
- * when scope itself is unknowable -- and those are the findings that actually
- * protect merged work.
+ * - Any `violation` (out-of-scope path, deletion budget, cross-PR revert) or
+ *   `error` (git/contract collection failed) blocks. Cross-PR revert and
+ *   deletion-budget findings derive from baseRef, not the feature directory,
+ *   so they block even when scope itself is unknowable — those are the
+ *   findings that protect merged work.
+ * - When only `missing-authority` findings remain, nothing was actually
+ *   violated; the guard's behavior depends on how much authority it had:
+ *   - No feature directory at all → fail **open** with
+ *     `skipCause: 'feature-dir-unresolved'` (a missing input is not evidence
+ *     of a violation).
+ *   - Feature directory resolved but no declared scope AND no baseline →
+ *     fail open with `skipCause: 'no-scope-authority'`.
+ *   - Feature directory resolved and at least one authority present → the
+ *     scope check ran against the available authority and found nothing, so
+ *     this is a real **pass** (a task with a declared scope but no baseline
+ *     file must not block on the absent baseline).
  *
- * `skipped` is set when the guard failed open, so callers can log a real check
- * having been bypassed instead of mistaking it for a pass.
+ * `skipped` is set when the guard failed open, so callers can log a bypassed
+ * check instead of mistaking it for a pass. Strictness on skip is the
+ * caller's decision: `checkPrePrVerificationGate` treats
+ * 'feature-dir-unresolved' as a configuration error.
  */
 export function runPrePrSafetyGuard(options: {
   stateDir: string;
   baseSha: string;
   headSha?: string;
   featureDir?: string;
-}): { passed: boolean; reason?: string; skipped?: boolean } {
+}): PrePrSafetyGuardResult {
   const result = validateReviewScope({
     repoDir: options.stateDir,
     featureDir: options.featureDir,
@@ -349,18 +377,41 @@ export function runPrePrSafetyGuard(options: {
     return { passed: true };
   }
 
-  // Without a feature directory no scope evaluation happened at all: declared
-  // scope and the baseline both derive from it, so every 'review-scope' finding
-  // is a consequence of that, not evidence of a violation.
-  const scopeIndeterminate = result.featureDir === null;
-  const concreteViolations = result.findings.filter(
-    (finding) => finding.severity === 'blocker' && finding.category !== 'review-scope',
-  );
+  const hasDeclaredScope = result.declaredScope.length > 0;
+  const hasBaseline = result.baselineSource !== 'unresolved';
+  const hasScopeAuthority = hasDeclaredScope || hasBaseline;
 
-  if (scopeIndeterminate && concreteViolations.length === 0 && result.crossPrReverts.length === 0) {
+  // Fail closed on anything that is not a consequence of missing scope
+  // authority: concrete violations, infrastructure errors, and (defensively)
+  // findings predating the `kind` discriminant. One exception: with no scope
+  // authority at all, every changed path is flagged as a review-scope
+  // "violation" because it was compared against an empty allow-list — those
+  // are artifacts of the missing authority, not evidence. Deletion-budget and
+  // cross-PR-revert violations derive from baseRef, so they stay enforceable
+  // regardless.
+  const enforceableBlockers = result.findings.filter((finding) => {
+    if (finding.severity !== 'blocker') return false;
+    if (finding.kind === 'missing-authority') return false;
+    if (!hasScopeAuthority && finding.kind === 'violation' && finding.category === 'review-scope') {
+      return false;
+    }
+    return true;
+  });
+  if (enforceableBlockers.length > 0 || result.crossPrReverts.length > 0) {
+    return {
+      passed: false,
+      reason: formatReviewScopeGuardResult(result),
+    };
+  }
+
+  // Only missing-authority blockers (and, absent any authority, the per-path
+  // findings they induce) remain: nothing was provably violated, but some
+  // scope input could not be resolved.
+  if (result.featureDir === null) {
     return {
       passed: true,
       skipped: true,
+      skipCause: 'feature-dir-unresolved',
       reason:
         'Review scope guard skipped: no task feature directory could be resolved, ' +
         'so in-scope files could not be determined. Cross-PR revert and deletion ' +
@@ -368,10 +419,22 @@ export function runPrePrSafetyGuard(options: {
     };
   }
 
-  return {
-    passed: false,
-    reason: formatReviewScopeGuardResult(result),
-  };
+  if (!hasScopeAuthority) {
+    return {
+      passed: true,
+      skipped: true,
+      skipCause: 'no-scope-authority',
+      reason:
+        `Review scope guard skipped: feature directory ${result.featureDir} resolved, ` +
+        'but the task declares no Files to Modify / Scope In entries and no review ' +
+        'baseline artifact exists, so there is no scope authority to enforce. ' +
+        'Cross-PR revert and deletion checks still ran and found nothing.',
+    };
+  }
+
+  // At least one scope authority was available and the changed files all
+  // passed against it; the other, absent authority is not a failure.
+  return { passed: true };
 }
 
 /**

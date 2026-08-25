@@ -16,6 +16,7 @@ import {
   fetchAndResolveBase,
   runPrePrSafetyGuard,
 } from './pre-pr-verification.ts';
+import { reviewScopeGuardDeps } from './review-scope-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -390,6 +391,7 @@ test('runPrePrSafetyGuard: fails open when no feature directory can be resolved'
 
     assert.equal(result.passed, true);
     assert.equal(result.skipped, true);
+    assert.equal(result.skipCause, 'feature-dir-unresolved');
     assert.match(result.reason ?? '', /scope guard skipped/i);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -423,6 +425,98 @@ test('runPrePrSafetyGuard: a resolvable scope still blocks an out-of-scope chang
     assert.equal(result.passed, false);
     assert.notEqual(result.skipped, true);
   } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: branch derivation alone blocks an out-of-scope change', () => {
+  // No explicit featureDir: the guard must derive features/test from the
+  // task/test branch, proving the zero-config path enforces at every call site.
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+    writeAndCommit(repoDir, 'rogue.txt', 'bad\n', 'out of scope');
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
+
+    assert.equal(result.passed, false);
+    assert.notEqual(result.skipped, true);
+    assert.match(result.reason ?? '', /rogue\.txt/);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: declared scope with no baseline file passes an in-scope change', () => {
+  // Regression: a resolvable featureDir with a declared scope but no
+  // persisted baseline must enforce against the declared scope and pass —
+  // not block on "Unable to resolve a review baseline".
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, true);
+    assert.notEqual(result.skipped, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: resolvable featureDir with no scope authority skips', () => {
+  // Keeps the fail-open path reachable: a feature directory that declares
+  // nothing (unexpanded packet, no baseline) degrades instead of blocking.
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, true);
+    assert.equal(result.skipped, true);
+    assert.equal(result.skipCause, 'no-scope-authority');
+    assert.match(result.reason ?? '', /no scope authority/i);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: git collection errors fail closed even without declared scope', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  const realRunner = reviewScopeGuardDeps.execShellCommand;
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    reviewScopeGuardDeps.execShellCommand = ((cmd: string, opts?: { encoding?: string; cwd?: string }) => {
+      if (cmd.startsWith('git diff')) {
+        throw new Error('simulated git failure');
+      }
+      return realRunner(cmd, opts);
+    }) as typeof realRunner;
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, false);
+    assert.notEqual(result.skipped, true);
+    assert.match(result.reason ?? '', /simulated git failure/);
+  } finally {
+    reviewScopeGuardDeps.execShellCommand = realRunner;
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });

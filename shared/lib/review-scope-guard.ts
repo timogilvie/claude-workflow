@@ -15,6 +15,18 @@ type ShellRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }) => 
 export interface ReviewScopeGuardFinding {
   severity: 'blocker' | 'warning';
   category: 'review-scope' | 'deletion-budget' | 'cross-pr-revert';
+  /**
+   * Machine-readable discriminant so callers can react differently to the
+   * three failure classes without parsing messages:
+   * - 'violation': positive evidence of an out-of-scope change (unexpected
+   *   path, exceeded deletion budget, unacknowledged cross-PR revert).
+   * - 'missing-authority': a scope authority (feature directory, baseline
+   *   artifact, declared Files to Modify) could not be resolved, so the
+   *   corresponding check could not run. Not evidence of a violation.
+   * - 'error': infrastructure failure (git/contract collection threw); the
+   *   check ran but could not complete, so its result is unknown.
+   */
+  kind?: 'violation' | 'missing-authority' | 'error';
   path?: string;
   status?: string;
   message: string;
@@ -86,6 +98,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'missing-authority',
       message: 'Unable to resolve the task feature directory; review scope cannot be proven.',
     });
   }
@@ -107,6 +120,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'missing-authority',
       message: 'Unable to resolve a review baseline from reviewBaseCommit or an existing baseline artifact.',
     });
   }
@@ -122,6 +136,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'missing-authority',
       message: 'Task contract has no usable Files to Modify or Scope In path entries.',
     });
   }
@@ -133,6 +148,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'violation',
       path: entry.path,
       status: entry.status,
       message:
@@ -174,6 +190,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     findings.push({
       severity: 'blocker',
       category: 'cross-pr-revert',
+      kind: 'violation',
       message:
         `This branch appears to revert changes from PR #${revert.prNumber}` +
         `${revert.title ? ` (${revert.title})` : ''}. ` +
@@ -230,6 +247,7 @@ function loadDeclaredScope(featureDir: string, findings: ReviewScopeGuardFinding
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'error',
       message: `Unable to build task contract for review scope: ${(error as Error).message}`,
     });
     return [];
@@ -349,6 +367,7 @@ function collectNameOnly(
     findings.push({
       severity: 'blocker',
       category: 'review-scope',
+      kind: 'error',
       message: `Unable to collect review baseline files: ${(error as Error).message}`,
     });
     return [];
@@ -381,6 +400,7 @@ function collectChangedEntries(
       findings.push({
         severity: 'blocker',
         category: 'review-scope',
+        kind: 'error',
         message: `Unable to collect changed files for review scope: ${(error as Error).message}`,
       });
     }
@@ -398,6 +418,7 @@ function collectChangedEntries(
       findings.push({
         severity: 'blocker',
         category: 'review-scope',
+        kind: 'error',
         message: `Unable to collect untracked files for review scope: ${(error as Error).message}`,
       });
     }
@@ -425,6 +446,7 @@ function collectDeletionBudgetFindings(
     findings.push({
       severity: 'blocker',
       category: 'deletion-budget',
+      kind: 'error',
       message: `Unable to collect deletion budget evidence: ${(error as Error).message}`,
     });
     return [];
@@ -437,6 +459,7 @@ function collectDeletionBudgetFindings(
     .map((entry) => ({
       severity: 'blocker' as const,
       category: 'deletion-budget' as const,
+      kind: 'violation' as const,
       path: entry.path,
       message:
         `Deletion budget exceeded outside task baseline: ${entry.path} ` +
@@ -479,6 +502,7 @@ function collectCrossPrReverts(input: {
     input.findings.push({
       severity: 'blocker',
       category: 'cross-pr-revert',
+      kind: 'error',
       message:
         `Unable to prove the branch does not revert recent integration work: ${(error as Error).message}`,
     });

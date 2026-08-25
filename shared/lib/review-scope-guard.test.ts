@@ -93,7 +93,44 @@ test('validateReviewScope blocks later committed files outside baseline and decl
     });
 
     assert.equal(result.ok, false);
-    assert(result.findings.some((finding) => finding.path === 'shared/lib/unrelated.ts'));
+    const violation = result.findings.find((finding) => finding.path === 'shared/lib/unrelated.ts');
+    assert(violation);
+    assert.equal(violation.kind, 'violation');
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope marks unresolved authorities as missing-authority findings', () => {
+  const { repoDir, featureDir, cleanup } = makeRepo();
+  try {
+    // No sinceCommit and no persisted baseline artifact: the baseline
+    // authority cannot be resolved.
+    const result = validateReviewScope({ repoDir, featureDir, writeBaseline: false });
+
+    assert.equal(result.ok, false);
+    const baselineFinding = result.findings.find((finding) =>
+      finding.message.includes('Unable to resolve a review baseline'));
+    assert(baselineFinding);
+    assert.equal(baselineFinding.kind, 'missing-authority');
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope marks an unresolvable feature directory as missing-authority', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    git(repoDir, 'checkout -b unrelated-branch');
+
+    const result = validateReviewScope({ repoDir, writeBaseline: false });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.featureDir, null);
+    const featureDirFinding = result.findings.find((finding) =>
+      finding.message.includes('Unable to resolve the task feature directory'));
+    assert(featureDirFinding);
+    assert.equal(featureDirFinding.kind, 'missing-authority');
   } finally {
     cleanup();
   }
