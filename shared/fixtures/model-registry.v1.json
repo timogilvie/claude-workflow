@@ -2661,6 +2661,11 @@
           "nativeProvider": "openrouter",
           "piTransportKind": "openai-completions",
           "readOnlyNative": "certified",
+          "certification": {
+            "maxCertifiedPhase": "workflow",
+            "certifiedAt": "2026-08-24T22:22:00.000Z",
+            "certificationSuiteVersion": "v3"
+          },
           "compatFlags": {
             "thinkingFormat": "openrouter"
           }
