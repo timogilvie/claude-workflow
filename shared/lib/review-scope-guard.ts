@@ -347,6 +347,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
         repoDir,
         baseRef,
         headRef,
+        integrationRef,
         acknowledgementText: options.acknowledgementText,
         maxRecentMerges: options.maxRecentMerges,
         shellRunner,
@@ -695,6 +696,7 @@ function collectCrossPrReverts(input: {
   repoDir: string;
   baseRef: string;
   headRef: string;
+  integrationRef: string;
   acknowledgementText?: string;
   maxRecentMerges?: number;
   shellRunner: ShellRunner;
@@ -705,18 +707,24 @@ function collectCrossPrReverts(input: {
     return [];
   }
 
-  const integrationRef = getIntegrationConfig(input.repoDir).integrationBranch;
   try {
     const reverts = reviewScopeGuardDeps.detectCrossPrReverts({
       repoDir: input.repoDir,
       baseRef: input.baseRef,
       headRef: input.headRef,
-      integrationRef,
+      integrationRef: input.integrationRef,
       maxRecentMerges: input.maxRecentMerges ?? reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
       shellRunner: input.shellRunner,
     });
     const acknowledgements = parseRevertAcknowledgements(input.acknowledgementText ?? loadAcknowledgementText(input.repoDir, input.shellRunner));
-    return filterUnacknowledgedReverts(reverts, acknowledgements);
+    const unacknowledged = filterUnacknowledgedReverts(reverts, acknowledgements);
+    return filterRevertsAlreadyOnIntegration(
+      unacknowledged,
+      input.repoDir,
+      input.integrationRef,
+      input.headRef,
+      input.shellRunner,
+    );
   } catch (error) {
     input.findings.push({
       severity: 'blocker',
@@ -725,6 +733,49 @@ function collectCrossPrReverts(input: {
         `Unable to prove the branch does not revert recent integration work: ${(error as Error).message}`,
     });
     return [];
+  }
+}
+
+/**
+ * Drop revert findings the branch did not introduce: when HEAD's blob for a
+ * flagged path matches the integration tip's blob, the "revert" already
+ * lives in the integration branch's own history (e.g. integration itself
+ * reverted the PR), so merging this branch cannot regress that path. Without
+ * this filter, every branch that is simply up to date with integration is
+ * flagged for any PR that integration later reverted.
+ */
+function filterRevertsAlreadyOnIntegration(
+  reverts: CrossPrRevertFinding[],
+  repoDir: string,
+  integrationRef: string,
+  headRef: string,
+  shellRunner: ShellRunner,
+): CrossPrRevertFinding[] {
+  return reverts
+    .map((revert) => ({
+      ...revert,
+      files: revert.files.filter((file) =>
+        blobIdAtRef(repoDir, integrationRef, file.path, shellRunner)
+        !== blobIdAtRef(repoDir, headRef, file.path, shellRunner)),
+    }))
+    .filter((revert) => revert.files.length > 0);
+}
+
+function blobIdAtRef(
+  repoDir: string,
+  ref: string,
+  path: string,
+  shellRunner: ShellRunner,
+): string | null {
+  try {
+    const blob = runGit(
+      shellRunner,
+      repoDir,
+      `git rev-parse --verify --quiet ${escapeShellArg(`${ref}:${path}`)}`,
+    ).trim();
+    return blob || null;
+  } catch {
+    return null;
   }
 }
 

@@ -356,6 +356,45 @@ test('validateReviewScope still admits a packet-declared new file via declared s
   }
 });
 
+test('validateReviewScope ignores reverts that live in the integration branch history itself', () => {
+  // The cross-PR revert detector flags any branch whose HEAD matches the
+  // pre-PR content of a recently merged PR — including branches that are
+  // simply up to date with an integration branch that itself reverted the
+  // PR. The guard must not block commits for reverts this branch did not
+  // introduce.
+  const repoDir = mkdtempSync(join(tmpdir(), 'review-scope-guard-revert-'));
+  try {
+    git(repoDir, 'init -b auto/integration');
+    git(repoDir, 'config user.name "Test User"');
+    git(repoDir, 'config user.email "test@example.com"');
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      reviewMerge: { crossPrRevertCheck: { enabled: true } },
+    }));
+    git(repoDir, 'add .wavemill-config.json');
+    commitFile(repoDir, 'lib/common.sh', 'original\n', 'base');
+
+    // A PR merges into integration...
+    git(repoDir, 'checkout -b fix/liveness');
+    commitFile(repoDir, 'lib/common.sh', 'liveness fix\n', 'liveness fix');
+    git(repoDir, 'checkout auto/integration');
+    git(repoDir, 'merge --no-ff fix/liveness -m "Merge pull request #7 from test/fix-liveness"');
+    // ...and integration itself later reverts it.
+    commitFile(repoDir, 'lib/common.sh', 'original\n', 'revert: drop liveness fix');
+
+    // A task branch off the current tip stages purely in-scope work.
+    git(repoDir, 'checkout -b task/up-to-date');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+    stageFile(repoDir, 'tools/observer.ts', 'export const a = 2;\n');
+
+    const result = validateReviewScope({ repoDir, includeWorkingTree: true });
+
+    assert.equal(result.status, 'pass');
+    assert.deepEqual(result.crossPrReverts, []);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 // ────────────────────────────────────────────────────────────────
 // CLI exit contract: 0 pass / 1 policy violation / 2 tool failure
 // ────────────────────────────────────────────────────────────────
