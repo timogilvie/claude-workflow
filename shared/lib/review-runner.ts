@@ -198,8 +198,14 @@ function collectReviewScopeGuardFindings(input: {
   featureDir?: string;
   sinceCommit?: string;
 }): ReviewFinding[] {
+  // Both inputs missing is an error condition - we can't validate scope
   if (!input.sinceCommit && !input.featureDir) {
-    return [];
+    return [{
+      severity: 'blocker',
+      location: 'review-runner',
+      category: 'requirements',
+      description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',
+    }];
   }
 
   const result = reviewRunnerDeps.validateReviewScope({
