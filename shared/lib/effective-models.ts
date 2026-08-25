@@ -175,14 +175,56 @@ export function explainEffectiveModelAvailability(
   };
 }
 
+/**
+ * Exclusion reasons a challenger arm is allowed to carry.
+ *
+ * A challenge pair is the mechanism for gathering evidence about an unproven
+ * model: the primary is always a proven model and the challenger is the
+ * experiment. Refusing provisional models here means the one mechanism designed
+ * to evaluate an unknown model cannot be pointed at one.
+ *
+ * Narrow on purpose. It permits *only* provisional identity, and only for the
+ * challenger pool -- `listEffectiveModelsForStage` is untouched, so primaries
+ * and every routing path still exclude provisional models entirely. Their
+ * evidence also stays held: evaluateEvidenceEligibility reports
+ * `provisional_model_identity` / `provisional-observation-only`, so records are
+ * written but never feed routing, training, or launch-priority persistence.
+ */
+const CHALLENGER_PERMITTED_EXCLUSIONS: ReadonlySet<string> = new Set(['provisional-identity']);
+
+/**
+ * Models eligible to run as the *challenger* arm of a challenge pair.
+ *
+ * Identical to `listEffectiveModelsForStage` except that provisional identities
+ * are permitted. Never use this to choose a primary.
+ */
+export function listChallengerEligibleModelsForStage(
+  stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
+  opts: EffectiveModelOptions = {},
+): { models: string[]; exclusions: ModelExclusionDiagnostic[] } {
+  return listModelsForStage(stage, opts, CHALLENGER_PERMITTED_EXCLUSIONS);
+}
+
 export function listEffectiveModelsForStage(
   stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
   opts: EffectiveModelOptions = {},
 ): { models: string[]; exclusions: ModelExclusionDiagnostic[] } {
+  return listModelsForStage(stage, opts, undefined);
+}
+
+function listModelsForStage(
+  stage: SupportedModelStage | DescriptorModelStage | RegistryTaskType,
+  opts: EffectiveModelOptions,
+  permittedExclusions: ReadonlySet<string> | undefined,
+): { models: string[]; exclusions: ModelExclusionDiagnostic[] } {
   const registry = registryFromOptions(opts);
   const normalizedStage = normalizeSupportedModelStage(stage);
   const supported = Object.entries(registry.models)
-    .filter(([modelId]) => explainModelSupportExclusion(modelId, normalizedStage, registry) === undefined)
+    .filter(([modelId]) => {
+      const exclusion = explainModelSupportExclusion(modelId, normalizedStage, registry);
+      if (exclusion === undefined) return true;
+      return permittedExclusions?.has(exclusion) === true;
+    })
     .filter(([, capabilities]) => {
       const configuredStages = capabilities.supportedModel?.stages;
       if (configuredStages) {
