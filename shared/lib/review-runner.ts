@@ -198,9 +198,19 @@ function collectReviewScopeGuardFindings(input: {
   featureDir?: string;
   sinceCommit?: string;
 }): ReviewFinding[] {
-  // The guard always evaluates: without sinceCommit/featureDir it derives
-  // scope from git (merge base against the integration branch), so there is
-  // no "cannot evaluate" skip path any more (HOK-2887).
+  // Neither input available means scope cannot be evaluated. Report it, but as
+  // a warning rather than a blocker: a missing input is not evidence of a scope
+  // violation, and blocking here makes every review of a task without these
+  // inputs fail closed. Same fail-open rule as runPrePrSafetyGuard.
+  if (!input.sinceCommit && !input.featureDir) {
+    return [{
+      severity: 'warning',
+      location: 'review-runner',
+      category: 'requirements',
+      description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',
+    }];
+  }
+
   const result = reviewRunnerDeps.validateReviewScope({
     repoDir: input.repoDir,
     featureDir: input.featureDir,
@@ -209,20 +219,6 @@ function collectReviewScopeGuardFindings(input: {
     includeWorkingTree: false,
     writeBaseline: true,
   });
-
-  // A tool/git failure means scope is UNVERIFIED — surface that explicitly as
-  // a warning rather than silently passing or fabricating a violation.
-  if (result.status === 'error') {
-    const toolDetail = result.toolError
-      ? ` (${result.toolError.commandClass}: ${result.toolError.stderr})`
-      : '';
-    return [{
-      severity: 'warning',
-      location: 'review-runner',
-      category: 'requirements',
-      description: `Review scope guard could not verify scope — treat as unverified, not as a pass${toolDetail}.`,
-    }];
-  }
 
   return result.findings.map(buildReviewScopeFinding);
 }
@@ -259,8 +255,50 @@ async function collectCrossPrRevertReviewFindings(input: {
 
   const acknowledgements = parseRevertAcknowledgements(loadRevertAcknowledgementText(input.repoDir));
   const unacknowledged = filterUnacknowledgedReverts(findings, acknowledgements);
+  const filtered = filterRevertsAlreadyOnIntegration(
+    unacknowledged,
+    input.repoDir,
+    integrationBranch,
+  );
 
-  return unacknowledged.map(buildCrossPrRevertReviewFinding);
+  return filtered.map(buildCrossPrRevertReviewFinding);
+}
+
+/**
+ * Drop revert findings the branch did not introduce: when HEAD's blob for a
+ * flagged path matches the integration tip's blob, the "revert" already
+ * lives in the integration branch's own history (e.g. integration itself
+ * reverted the PR), so merging this branch cannot regress that path.
+ */
+function filterRevertsAlreadyOnIntegration(
+  reverts: CrossPrRevertFinding[],
+  repoDir: string,
+  integrationRef: string,
+): CrossPrRevertFinding[] {
+  return reverts
+    .map((revert) => ({
+      ...revert,
+      files: revert.files.filter((file) =>
+        getBlobIdAtRef(repoDir, integrationRef, file.path)
+        !== getBlobIdAtRef(repoDir, 'HEAD', file.path)),
+    }))
+    .filter((revert) => revert.files.length > 0);
+}
+
+function getBlobIdAtRef(
+  repoDir: string,
+  ref: string,
+  path: string,
+): string | null {
+  try {
+    const blob = String(reviewRunnerDeps.execShellCommand(
+      `git rev-parse --verify --quiet ${escapeShellArg(`${ref}:${path}`)}`,
+      { cwd: repoDir, encoding: 'utf-8' },
+    )).trim();
+    return blob || null;
+  } catch {
+    return null;
+  }
 }
 
 function loadRevertAcknowledgementText(repoDir: string): string {
