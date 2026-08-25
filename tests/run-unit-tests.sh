@@ -139,6 +139,7 @@ TESTS=(
   shared/lib/launch-validation.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
+  shared/lib/model-promotion.test.ts
   shared/lib/model-evidence-policy.test.ts
   shared/lib/effective-models.test.ts
   shared/lib/model-agent-resolution.test.ts
@@ -227,6 +228,7 @@ TESTS=(
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
+  tools/promote-provisional-model.test.ts
   tools/generate-skip-report.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts

@@ -1,0 +1,178 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://wavemill.local/schemas/model-transition.schema.json",
+  "title": "Wavemill provisional model transition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "promotionId",
+    "provisional",
+    "final",
+    "disclosure"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1"
+    },
+    "promotionId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "manifestId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "catalogPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minimumOldReferences": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximumOldReferences": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "provisional": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["alias", "identityRevision"],
+      "properties": {
+        "alias": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerNativeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityRevision": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "final": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alias",
+        "provider",
+        "providerNativeId",
+        "identityRevision",
+        "displayName",
+        "family",
+        "pricing",
+        "verification"
+      ],
+      "properties": {
+        "alias": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerNativeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityRevision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1,
+          "not": {
+            "const": "unknown"
+          }
+        },
+        "pricingRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pricing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "inputCostPerMTok",
+            "outputCostPerMTok",
+            "cacheWriteCostPerMTok",
+            "cacheReadCostPerMTok"
+          ],
+          "properties": {
+            "inputCostPerMTok": {
+              "type": "number",
+              "minimum": 0
+            },
+            "outputCostPerMTok": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cacheWriteCostPerMTok": {
+              "type": "number",
+              "minimum": 0
+            },
+            "cacheReadCostPerMTok": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "observedAt", "catalogHash"],
+          "properties": {
+            "source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "observedAt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "catalogHash": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "capabilities": {
+          "type": "object"
+        }
+      }
+    },
+    "disclosure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disclosedAt", "source"],
+      "properties": {
+        "disclosedAt": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
