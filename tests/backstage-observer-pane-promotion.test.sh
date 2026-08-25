@@ -62,48 +62,65 @@ fi
 # shellcheck source=/dev/null
 source "$FUNCS"
 
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "  SKIP  tmux not available; geometry assertions skipped"
+summarize_and_exit() {
   echo
   echo "Passed: $PASS"
   echo "Failed: $FAIL"
   [[ "$FAIL" -eq 0 ]]
-  exit 0
-fi
+  exit $?
+}
 
+skip_geometry() {
+  echo "  SKIP  $1"
+  summarize_and_exit
+}
+
+command -v tmux >/dev/null 2>&1 || skip_geometry "tmux not available"
+
+# The geometry assertions depend on a working tmux server. A CI runner may have
+# the binary but be unable to start a server or honour a split. Drive the setup
+# with explicit checks instead of `set -e`, so an environment limitation skips
+# with a reason rather than killing the script with no output.
 SESSION="wavemill-pane-promo-test-$$"
 tmux kill-session -t "$SESSION" 2>/dev/null || true
-if ! tmux new-session -d -s "$SESSION" -x 200 -y 60 'sleep 300' 2>/dev/null; then
-  echo "  SKIP  could not start a tmux session; geometry assertions skipped"
-  echo
-  echo "Passed: $PASS"
-  echo "Failed: $FAIL"
-  [[ "$FAIL" -eq 0 ]]
-  exit 0
-fi
+
+tmux new-session -d -s "$SESSION" -x 200 -y 60 'sleep 300' 2>/dev/null \
+  || skip_geometry "could not start a tmux server ($(tmux -V 2>/dev/null || echo 'version unknown'))"
 trap 'tmux kill-session -t "$SESSION" 2>/dev/null || true; rm -f "$FUNCS"' EXIT
 
-tmux split-window -t "$SESSION:0.0" -h -p 25 'sleep 300' >/dev/null 2>&1
-small_pane="$(tmux list-panes -t "$SESSION:0" -F '#{pane_id} #{pane_width}' | sort -k2 -n | head -1 | cut -d' ' -f1)"
-big_pane="$(tmux list-panes -t "$SESSION:0" -F '#{pane_id} #{pane_width}' | sort -k2 -nr | head -1 | cut -d' ' -f1)"
+# `-p` is deprecated in tmux 3.x in favour of `-l N%`; try the modern spelling
+# first so a runner on a newer tmux still exercises the assertions.
+tmux split-window -t "$SESSION:0.0" -h -l 25% 'sleep 300' 2>/dev/null \
+  || tmux split-window -t "$SESSION:0.0" -h -p 25 'sleep 300' 2>/dev/null \
+  || skip_geometry "could not split the tmux window ($(tmux -V 2>/dev/null || echo 'version unknown'))"
 
-observer_area_before="$(wavemill_pane_area "$small_pane" || true)"
-tend_area_before="$(wavemill_pane_area "$big_pane" || true)"
+# awk rather than `head` so a closed pipe cannot trip pipefail.
+panes="$(tmux list-panes -t "$SESSION:0" -F '#{pane_id} #{pane_width}' 2>/dev/null || true)"
+small_pane="$(printf '%s\n' "$panes" | sort -k2 -n | awk 'NR==1 { print $1 }')"
+big_pane="$(printf '%s\n' "$panes" | sort -k2 -nr | awk 'NR==1 { print $1 }')"
+
+if [[ -z "$small_pane" || -z "$big_pane" || "$small_pane" == "$big_pane" ]]; then
+  skip_geometry "expected two panes, got: $(printf '%s' "$panes" | tr '\n' ' ')"
+fi
+
+observer_area_before="$(wavemill_pane_area "$small_pane" 2>/dev/null || true)"
+tend_area_before="$(wavemill_pane_area "$big_pane" 2>/dev/null || true)"
 
 if [[ "$observer_area_before" =~ ^[0-9]+$ && "$tend_area_before" =~ ^[0-9]+$ ]]; then
   pass "wavemill_pane_area reports numeric areas"
 else
   fail "wavemill_pane_area reports numeric areas (got '$observer_area_before' / '$tend_area_before')"
+  summarize_and_exit
 fi
 
 if (( observer_area_before < tend_area_before )); then
   pass "observer starts in the smaller pane"
 else
-  fail "observer starts in the smaller pane"
+  fail "observer starts in the smaller pane ($observer_area_before vs $tend_area_before)"
 fi
 
-wavemill_promote_observer_pane "$small_pane" "$big_pane"
-observer_area_after="$(wavemill_pane_area "$small_pane" || true)"
+wavemill_promote_observer_pane "$small_pane" "$big_pane" || true
+observer_area_after="$(wavemill_pane_area "$small_pane" 2>/dev/null || true)"
 
 if [[ "$observer_area_after" =~ ^[0-9]+$ ]] && (( observer_area_after > observer_area_before )); then
   pass "observer pane grew after promotion"
@@ -112,8 +129,8 @@ else
 fi
 
 # Idempotence: a second pass must not swap back.
-wavemill_promote_observer_pane "$small_pane" "$big_pane"
-observer_area_twice="$(wavemill_pane_area "$small_pane" || true)"
+wavemill_promote_observer_pane "$small_pane" "$big_pane" || true
+observer_area_twice="$(wavemill_pane_area "$small_pane" 2>/dev/null || true)"
 if [[ "$observer_area_twice" == "$observer_area_after" ]]; then
   pass "promotion is idempotent across repeated passes"
 else
@@ -121,15 +138,14 @@ else
 fi
 
 # Degenerate inputs must be no-ops rather than errors.
-if wavemill_promote_observer_pane "" "$big_pane" \
-  && wavemill_promote_observer_pane "$small_pane" "" \
-  && wavemill_promote_observer_pane "$small_pane" "$small_pane"; then
+degenerate_ok=true
+wavemill_promote_observer_pane "" "$big_pane" || degenerate_ok=false
+wavemill_promote_observer_pane "$small_pane" "" || degenerate_ok=false
+wavemill_promote_observer_pane "$small_pane" "$small_pane" || degenerate_ok=false
+if [[ "$degenerate_ok" == "true" ]]; then
   pass "missing or identical pane ids are a safe no-op"
 else
   fail "missing or identical pane ids are a safe no-op"
 fi
 
-echo
-echo "Passed: $PASS"
-echo "Failed: $FAIL"
-[[ "$FAIL" -eq 0 ]]
+summarize_and_exit
