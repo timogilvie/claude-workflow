@@ -281,6 +281,50 @@ describe('openrouter alias audit', () => {
     assert.deepEqual(report.findings, []);
   });
 
+  it('accepts Ox Alpha provisional zero pricing and absent cache prices', () => {
+    const registry: ModelRegistry = {
+      models: {
+        'ox-alpha': makeModel({
+          vendor: 'unknown',
+          qualityScores: { routing: 0, planning: 0, coding: 0, review: 0, classify: 0 },
+          pricing: {
+            inputCostPerMTok: 0,
+            outputCostPerMTok: 0,
+          },
+          costPerMillionInputTokensUsd: 0,
+          costPerMillionOutputTokensUsd: 0,
+          contextWindowTokens: 1_048_576,
+          multimodal: { text: true, image: true, video: true },
+          supportedModel: {
+            lifecycle: 'supported',
+            stages: ['planning', 'coding', 'review'],
+            providerNativeId: 'stealth/ox-alpha',
+            routingEligible: false,
+          },
+        }),
+      },
+      ladders: {},
+    };
+
+    const report = auditOpenRouterAliases({
+      registry,
+      openRouterModels: new Map<string, OpenRouterModel>([
+        ['stealth/ox-alpha', {
+          id: 'stealth/ox-alpha',
+          context_length: 1_048_576,
+          top_provider: { context_length: 1_048_576 },
+          supported_parameters: ['reasoning', 'tools'],
+          pricing: { prompt: '0', completion: '0' },
+        }],
+      ]),
+      now: new Date('2026-08-24T22:16:05.000Z'),
+      catalogSource: 'file',
+    });
+
+    assert.deepEqual(report.findings, []);
+    assert.equal(report.checked, 1);
+  });
+
   it('reports malformed provider pricing as invalid instead of comparing fallback values', () => {
     const registry: ModelRegistry = {
       models: {

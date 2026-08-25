@@ -99,6 +99,37 @@ exceed the provider catalog and declared tool support when the provider catalog
 omits tool support. The CI workflow runs this audit daily and on demand. Retired
 aliases may appear in the report as expected non-selectable findings.
 
+## Provisional Explicit-Native OpenRouter Models
+
+Use a provisional identity when OpenRouter exposes a useful native model whose
+final provider family, vendor lineage, pricing, or quality profile is not yet
+verified. The Wavemill alias must be stable, but the provider wire ID remains
+the exact OpenRouter ID in `supportedModel.providerNativeId`.
+
+For provisional entries:
+
+- Set `identity.status: "provisional"`, `identity.family: "unknown"`, and
+  `identity.evidencePolicy: "held"`.
+- Keep every `qualityScores` value at `0`, set
+  `defaultLadderEligible: false`, and set
+  `supportedModel.routingEligible: false`.
+- Preserve observed zero input/output pricing only when the live catalog
+  advertises zero. Leave cache read/write prices absent when the provider does
+  not advertise them.
+- Do not encode rumored vendor or model-family lineage. Add lineage only after
+  a verified successor is available.
+- Require live OpenRouter smoke before publishing a global certification
+  artifact. A fresh `workflow` certificate can satisfy planner, coder, and
+  reviewer native phase gates through the normal certification phase ordering,
+  but it does not make the model eligible for automatic routing.
+- Do not run launch-priority `--persist` for held provisional identities; those
+  observations are operational only and must not feed performance consumers.
+
+Ox Alpha follows this path as alias `ox-alpha` with wire ID
+`stealth/ox-alpha`. Roll back a provisional native model by changing its
+lifecycle to `blocked` and its launch-priority status to `deprecated`; keep the
+identity and certification history for audit.
+
 ## Family Aliases
 
 Family aliases are stable developer-facing names that parse into `ModelSelector` values in `shared/lib/model-registry.ts`. `parseModelSelector` only validates selector syntax and shape; it does not resolve aliases against the active registry.

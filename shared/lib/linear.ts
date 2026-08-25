@@ -620,7 +620,8 @@ export async function getBacklog(projectName?: string): Promise<LinearIssue[]> {
 }
 
 /**
- * Leaner backlog query for scoring — omits parent, children, project, state.id
+ * Leaner backlog query for scoring — omits parent, project, state.id
+ * Includes children for parent/epic detection (HOK-2867)
  *
  * @param projectName - Optional project name filter
  * @returns Array of issues with minimal fields
@@ -648,6 +649,12 @@ export async function getBacklogForScoring(projectName?: string): Promise<Linear
           priority
           priorityLabel
           dueDate
+          children {
+            nodes {
+              id
+              identifier
+            }
+          }
           relations {
             nodes {
               type

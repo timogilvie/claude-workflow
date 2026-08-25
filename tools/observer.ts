@@ -89,6 +89,7 @@ interface Finding {
   evidence: string[];
   recommendation: string;
   linearIssueUrl?: string;
+  occurrenceCount?: number;
 }
 
 interface ReadyWatchdogLogEntry {
@@ -97,6 +98,21 @@ interface ReadyWatchdogLogEntry {
   label: string;
   action: string;
   detail: string;
+}
+
+type MillLogLevel = 'error' | 'warn' | 'status' | 'debug' | 'info' | string;
+
+interface MillLogLine {
+  raw: string;
+  timestamp: string;
+  level: MillLogLevel;
+  message: string;
+}
+
+interface AggregatedMillLogFinding {
+  level: 'error' | 'warn';
+  normalizedMessage: string;
+  lines: string[];
 }
 
 interface RepoSnapshot {
@@ -871,32 +887,64 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
-      if (/\b(FATAL|ERROR|panic|UnhandledPromiseRejection|uncaught exception)\b/i.test(line)) {
+      const parsed = parseMillLogLine(line);
+      if (!parsed) continue;
+      if (isAgentBoxOutputMessage(parsed.message)) continue;
+      if (parsed.level !== 'error' && parsed.level !== 'warn') continue;
+      if (parsed.level === 'warn') {
+        if (repeatedReadyWatchdogLines.has(line)) continue;
+        if (queueHealthDegraded && /queue analysis unavailable/i.test(parsed.message)) continue;
+      }
+
+      const normalizedMessage = normalizeMillLogFingerprintMessage(parsed.message);
+      const key = `${parsed.level}\0${normalizedMessage}`;
+      const grouped = genericLogFindings.get(key) ?? {
+        level: parsed.level,
+        normalizedMessage,
+        lines: [],
+      };
+      grouped.lines.push(line);
+      genericLogFindings.set(key, grouped);
+    }
+
+    for (const grouped of genericLogFindings.values()) {
+      const latestLine = grouped.lines[grouped.lines.length - 1];
+      const evidence = [
+        `occurrences=${grouped.lines.length}`,
+        `normalizedMessage=${grouped.normalizedMessage}`,
+        latestLine,
+      ];
+      if (grouped.lines.length > 1) {
+        const firstLine = grouped.lines[0];
+        if (firstLine !== latestLine) evidence.push(`first=${firstLine}`);
+      }
+      if (grouped.level === 'error') {
         findings.push({
-          id: `log-error-${repo.session}-${hashText(line)}`,
+          id: `log-error-${repo.session}-${hashText(grouped.normalizedMessage)}`,
           severity: 'high',
           category: 'crash',
-          confidence: 'medium',
+          confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
           title: 'Recent mill log contains an error-level event',
-          evidence: [line],
+          evidence,
           recommendation: 'Inspect surrounding log context and file a bug if this is not a task-local failure.',
+          occurrenceCount: grouped.lines.length,
         });
-      } else if (/\bWARN\b|warning|ready watchdog|queue analysis unavailable|timed out|timeout/i.test(line)) {
-        if (repeatedReadyWatchdogLines.has(line)) continue;
-        if (queueHealthDegraded && /queue analysis unavailable/i.test(line)) continue;
+      } else {
         findings.push({
-          id: `log-warning-${repo.session}-${hashText(line)}`,
-          severity: line.includes('ready watchdog') ? 'medium' : 'low',
+          id: `log-warning-${repo.session}-${hashText(grouped.normalizedMessage)}`,
+          severity: 'low',
           category: 'warning',
-          confidence: 'medium',
+          confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
           title: 'Recent mill log contains a warning',
-          evidence: [line],
+          evidence,
           recommendation: 'Watch for repeated occurrences. File an issue if the warning repeats or blocks progression.',
+          occurrenceCount: grouped.lines.length,
         });
       }
     }
@@ -991,6 +1039,31 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
     action: match[3],
     detail: match[4],
   };
+}
+
+function parseMillLogLine(line: string): MillLogLine | null {
+  const match = line.match(/^(\d{2}:\d{2}:\d{2})\s+\[([^\]]+)\]\s?(.*)$/);
+  if (!match) return null;
+  return {
+    raw: line,
+    timestamp: match[1],
+    level: match[2].trim().toLowerCase(),
+    message: match[3],
+  };
+}
+
+function isAgentBoxOutputMessage(message: string): boolean {
+  return /^\s*│/.test(message);
+}
+
+function normalizeMillLogFingerprintMessage(message: string): string {
+  return message
+    .replace(/\b(pid|ppid|processPid|plannerPid|monitorPid|childPid)=\d+\b/gi, '$1=<pid>')
+    .replace(/\b(pid|ppid|process|planner|monitor|child)\s+\d+\b/gi, '$1 <pid>')
+    .replace(/(?:\/private)?\/tmp\/[^\s'",)]+/g, '<tmp>')
+    .replace(/\/var\/folders\/[^\s'",)]+\/T\/[^\s'",)]+/g, '<tmp>')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function terminalStatus(status?: string): boolean {
