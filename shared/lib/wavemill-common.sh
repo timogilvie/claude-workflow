@@ -1149,6 +1149,31 @@ wavemill_pid_is_descendant() {
   return 1
 }
 
+wavemill_command_line_matches_blocking_command() {
+  local command_line="${1:-}" blocking_command="${2:-}"
+  [[ -n "$command_line" && -n "$blocking_command" ]] || return 1
+
+  if [[ "$command_line" == "$blocking_command" || "$command_line" == "$blocking_command"[[:space:]]* ]]; then
+    return 0
+  fi
+
+  local candidate_exe candidate_rest candidate_base blocking_exe blocking_rest
+  candidate_exe="${command_line%%[[:space:]]*}"
+  blocking_exe="${blocking_command%%[[:space:]]*}"
+  [[ -n "$candidate_exe" && -n "$blocking_exe" ]] || return 1
+
+  candidate_base="${candidate_exe##*/}"
+  [[ "$candidate_exe" == "$blocking_exe" || "$candidate_base" == "$blocking_exe" ]] || return 1
+
+  candidate_rest="${command_line#"$candidate_exe"}"
+  blocking_rest="${blocking_command#"$blocking_exe"}"
+  candidate_rest="$(printf '%s' "$candidate_rest" | sed -E 's/^[[:space:]]+//')"
+  blocking_rest="$(printf '%s' "$blocking_rest" | sed -E 's/^[[:space:]]+//')"
+
+  [[ -z "$blocking_rest" ]] && return 0
+  [[ "$candidate_rest" == "$blocking_rest" || "$candidate_rest" == "$blocking_rest"[[:space:]]* ]]
+}
+
 mill_pane_has_live_blocking_process() {
   local pane_pid="${1:-}"
   shift || true
@@ -1216,7 +1241,7 @@ mill_pane_has_live_blocking_process() {
     fi
 
     for blocking_command in "${blocking_commands[@]}"; do
-      if [[ "$command_line" == *"$blocking_command"* ]]; then
+      if wavemill_command_line_matches_blocking_command "$command_line" "$blocking_command"; then
         matched=true
         matched_pids+=("$pid")
         if [[ -z "$MILL_BLOCKING_PROCESS_COMMAND" ]]; then
