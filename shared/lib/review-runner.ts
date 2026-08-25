@@ -26,6 +26,10 @@ import {
   type CrossPrRevertFinding,
 } from './cross-pr-revert-detector.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import {
+  validateReviewScope,
+  type ReviewScopeGuardFinding,
+} from './review-scope-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -71,6 +75,7 @@ export const reviewRunnerDeps = {
   getCurrentBranch,
   getGitDiff,
   runReview,
+  validateReviewScope,
 };
 
 
@@ -131,8 +136,9 @@ export async function reviewChanges(
     sinceCommit: options.sinceCommit,
   });
 
-  const deterministicFindings = await collectCrossPrRevertReviewFindings({
+  const deterministicFindings = await collectDeterministicReviewFindings({
     repoDir,
+    featureDir: options.featureDir,
     sinceCommit: options.sinceCommit,
   });
   const reviewContextWithDeterministicFindings = deterministicFindings.length > 0
@@ -176,6 +182,47 @@ export async function reviewChanges(
   return mergeDeterministicFindings(result, deterministicFindings);
 }
 
+async function collectDeterministicReviewFindings(input: {
+  repoDir: string;
+  featureDir?: string;
+  sinceCommit?: string;
+}): Promise<ReviewFinding[]> {
+  const findings: ReviewFinding[] = [];
+  findings.push(...collectReviewScopeGuardFindings(input));
+  findings.push(...await collectCrossPrRevertReviewFindings(input));
+  return deduplicateReviewFindings(findings);
+}
+
+function collectReviewScopeGuardFindings(input: {
+  repoDir: string;
+  featureDir?: string;
+  sinceCommit?: string;
+}): ReviewFinding[] {
+  // Neither input available means scope cannot be evaluated. Report it, but as
+  // a warning rather than a blocker: a missing input is not evidence of a scope
+  // violation, and blocking here makes every review of a task without these
+  // inputs fail closed. Same fail-open rule as runPrePrSafetyGuard.
+  if (!input.sinceCommit && !input.featureDir) {
+    return [{
+      severity: 'warning',
+      location: 'review-runner',
+      category: 'requirements',
+      description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',
+    }];
+  }
+
+  const result = reviewRunnerDeps.validateReviewScope({
+    repoDir: input.repoDir,
+    featureDir: input.featureDir,
+    sinceCommit: input.sinceCommit,
+    headRef: 'HEAD',
+    includeWorkingTree: false,
+    writeBaseline: true,
+  });
+
+  return result.findings.map(buildReviewScopeFinding);
+}
+
 async function collectCrossPrRevertReviewFindings(input: {
   repoDir: string;
   sinceCommit?: string;
@@ -203,21 +250,13 @@ async function collectCrossPrRevertReviewFindings(input: {
       maxRecentMerges: reviewMergeConfig.crossPrRevertCheck.maxRecentMerges,
     });
   } catch (error) {
-    if (isMissingIntegrationRefError(error)) {
-      return [];
-    }
-    throw error;
+    return [buildCrossPrEvidenceUnavailableFinding(error)];
   }
 
   const acknowledgements = parseRevertAcknowledgements(loadRevertAcknowledgementText(input.repoDir));
   const unacknowledged = filterUnacknowledgedReverts(findings, acknowledgements);
 
   return unacknowledged.map(buildCrossPrRevertReviewFinding);
-}
-
-function isMissingIntegrationRefError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /not a valid object name|bad revision|ambiguous argument|unknown revision/i.test(message);
 }
 
 function loadRevertAcknowledgementText(repoDir: string): string {
@@ -240,15 +279,37 @@ function loadRevertAcknowledgementText(repoDir: string): string {
 
 function buildCrossPrRevertReviewFinding(finding: CrossPrRevertFinding): ReviewFinding {
   const paths = finding.files.map((file) => file.path);
+  const changedKinds = finding.files.map((file) => `${file.path}:${file.confidence}`).join(', ');
   return {
     severity: 'blocker',
     location: paths.join(', ') || 'cross-pr-revert',
     category: 'cross-pr-revert',
     description:
-      `This change deletes files introduced by PR #${finding.prNumber}` +
+      `This change appears to revert files changed by PR #${finding.prNumber}` +
       `${finding.title ? ` (${finding.title})` : ''}. ` +
+      `Evidence: ${changedKinds}. ` +
       `Add an explicit acknowledgement like "Reverts #${finding.prNumber}" or ` +
       `"Intentionally reverts #${finding.prNumber}" for every affected PR.`,
+  };
+}
+
+function buildCrossPrEvidenceUnavailableFinding(error: unknown): ReviewFinding {
+  return {
+    severity: 'blocker',
+    location: 'cross-pr-revert',
+    category: 'cross-pr-revert',
+    description:
+      'Unable to prove this branch does not revert recent integration work. ' +
+      `Git evidence collection failed: ${error instanceof Error ? error.message : String(error)}`,
+  };
+}
+
+function buildReviewScopeFinding(finding: ReviewScopeGuardFinding): ReviewFinding {
+  return {
+    severity: finding.severity,
+    location: finding.path ?? finding.category,
+    category: finding.category,
+    description: finding.message,
   };
 }
 

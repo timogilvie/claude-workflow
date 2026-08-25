@@ -75,33 +75,25 @@ export function detectCrossPrReverts(
       .map((entry) => entry.path),
   );
 
-  if (deletedPaths.size === 0) {
-    return [];
-  }
-
   return collectRecentPrCommits(shellRunner, options.repoDir, options.integrationRef, options.maxRecentMerges)
     .map((commit) => {
-      const addedFiles = parseNameStatusOutput(
+      const revertedFiles = parseNameStatusOutput(
         runGit(
           shellRunner,
           options.repoDir,
           `git diff --name-status ${escapeShellArg(commit.parent)} ${escapeShellArg(commit.commit)}`,
         ),
       )
-        .filter((entry) => entry.status === 'A' && deletedPaths.has(entry.path))
-        .map((entry) => ({
-          path: entry.path,
-          status: 'deleted' as const,
-          confidence: 'deleted' as const,
-        }));
+        .map((entry) => classifyRevertedPrFile(shellRunner, options.repoDir, options.headRef, commit, entry, deletedPaths))
+        .filter((entry): entry is CrossPrRevertFile => entry !== null);
 
-      if (addedFiles.length === 0) {
+      if (revertedFiles.length === 0) {
         return null;
       }
 
       return {
         prNumber: commit.prNumber,
-        files: addedFiles,
+        files: revertedFiles,
         mergeCommit: commit.commit,
         title: commit.title,
       } satisfies CrossPrRevertFinding;
@@ -252,6 +244,65 @@ function fileExistsAtRef(
     return true;
   } catch {
     return false;
+  }
+}
+
+function classifyRevertedPrFile(
+  shellRunner: ShellRunner,
+  repoDir: string,
+  headRef: string,
+  commit: RecentPrCommit,
+  entry: NameStatusEntry,
+  deletedPaths: ReadonlySet<string>,
+): CrossPrRevertFile | null {
+  if (entry.status === 'A' && deletedPaths.has(entry.path)) {
+    return {
+      path: entry.path,
+      status: 'deleted',
+      confidence: 'deleted',
+    };
+  }
+
+  const prBlob = blobIdAtRef(shellRunner, repoDir, commit.commit, entry.path);
+  const headBlob = blobIdAtRef(shellRunner, repoDir, headRef, entry.path);
+  if (!headBlob) {
+    if (entry.status === 'A' || entry.status === 'M' || entry.status === 'R') {
+      return {
+        path: entry.path,
+        status: 'deleted',
+        confidence: 'deleted',
+      };
+    }
+    return null;
+  }
+
+  const parentPath = entry.previousPath ?? entry.path;
+  const parentBlob = blobIdAtRef(shellRunner, repoDir, commit.parent, parentPath);
+  if (parentBlob && prBlob && headBlob === parentBlob && headBlob !== prBlob) {
+    return {
+      path: entry.path,
+      status: 'modified',
+      confidence: 'reverted',
+    };
+  }
+
+  return null;
+}
+
+function blobIdAtRef(
+  shellRunner: ShellRunner,
+  repoDir: string,
+  ref: string,
+  path: string,
+): string | null {
+  try {
+    return runGit(
+      shellRunner,
+      repoDir,
+      `git rev-parse ${escapeShellArg(`${ref}:${path}`)} 2>/dev/null`,
+    ).trim() || null;
+  } catch {
+    return null;
   }
 }
 
