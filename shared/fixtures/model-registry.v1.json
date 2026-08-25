@@ -2677,8 +2677,8 @@
           ],
           "requiredCertificationPhaseByStage": {
             "planning": "workflow",
-            "coding": "patch",
-            "review": "read-only"
+            "coding": "workflow",
+            "review": "workflow"
           },
           "certificationSuiteVersion": "v3",
           "certificationFreshnessDays": 60,
