@@ -7418,6 +7418,13 @@ maybe_retry_challenger_transient_phase() {
   contract_payload="$(jq -cn --arg stageRole "$stage" --arg agent "$agent" --arg model "$model" \
     '{stageRole:$stageRole,agent:$agent,model:$model}' 2>/dev/null || printf '{}')"
 
+  # Clear the stale terminal-error hook before relaunching. Launch paths never
+  # reset it, and _prepare_recovery_phase_launch's hook write is a no-op in the
+  # monitor (no WAVEMILL_ISSUE in env) — leaving the old {"state":"error"} in
+  # place would let emit_native_terminal_failure_attention re-quarantine the
+  # relaunched arm on the next tick, before the new process writes its first hook.
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+
   case "$stage" in
     planning)
       depth="$(read_phase_config "$feature_dir" "planning" "depth")"

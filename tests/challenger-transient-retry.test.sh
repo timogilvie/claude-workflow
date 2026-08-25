@@ -203,6 +203,7 @@ fi
 
 # ── Backoff elapsed → relaunch, counter incremented, stage re-armed ───
 jq -n '{stage:"coding",count:0,lastAt:1}' > "$fd/.challenger-transient-retries.json"
+write_hook "PAIR-9_c" "error" "$transient_detail"
 rc=0
 maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-first" || rc=$?
 if [[ "$rc" -eq 0 ]] \
@@ -217,6 +218,13 @@ if [[ "$rc" -eq 0 ]] \
   pass "elapsed backoff relaunches the phase and re-arms the stage result"
 else
   fail "relaunch handling wrong (rc=$rc, launches=$LAUNCH_CALLS)"
+fi
+# The stale terminal-error hook must be cleared so the running-stage failure
+# detector cannot re-quarantine the relaunched arm before its first hook write.
+if [[ ! -f "/tmp/wavemill-${SESSION}-PAIR-9_c.hook" ]]; then
+  pass "relaunch clears the stale terminal error hook"
+else
+  fail "stale terminal error hook survived the relaunch"
 fi
 
 # ── Stage change resets the counter ───────────────────────────────────
