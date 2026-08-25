@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readChallengeComparisons } from './challenge-comparison.ts';
-import { resolveUnresolvablePair } from './challenge-pair-resolver.ts';
+import { resolvePrimaryMergedPair, resolveUnresolvablePair } from './challenge-pair-resolver.ts';
 import { applyChallengePairGates, type ChallengeEligibleWorkItem } from './tend-challenge-gate.ts';
 
 function setupRepoDir(config: Record<string, unknown> = {}): { repoDir: string; cleanup: () => void } {
@@ -70,6 +70,227 @@ test('resolver is idempotent for orphaned pairs', async () => {
     assert.equal(first.status, 'resolved');
     assert.equal(second.status, 'already-resolved');
     assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('primary-merged resolver writes forfeit and aborts challenger', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1230,
+        branch: 'task/primary',
+        updated: '2026-08-24T16:56:00Z',
+        challengePairId: 'pair-primary-merged',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        updated: '2026-08-24T16:57:00Z',
+        challengePairId: 'pair-primary-merged',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        phase: 'review',
+        status: 'active',
+      },
+    });
+
+    const result = await resolvePrimaryMergedPair({
+      pairId: 'pair-primary-merged',
+      primaryPr: 1230,
+      repoDir,
+      now: () => new Date('2026-08-24T17:02:49Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.reason, 'primary_merged');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.terminalReason, 'primary_merged');
+    assert.equal(result.record.noComparisonReason, 'primary_merged');
+    assert.match(result.record.rationale, /Primary PR #1230 merged/);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
+
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks.HOK_1_c.phase, 'aborted');
+    assert.equal(state.tasks.HOK_1_c.status, 'aborted');
+    assert.equal(state.tasks.HOK_1_c.abortedReason, 'Primary already merged as PR #1230');
+    assert.equal(state.tasks.HOK_1_c.abortedAt, '2026-08-24T17:02:49.000Z');
+  } finally {
+    cleanup();
+  }
+});
+
+test('primary-merged resolver is idempotent when challenger is already aborted', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1227,
+        branch: 'task/primary',
+        challengePairId: 'pair-idempotent',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        challengePairId: 'pair-idempotent',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        phase: 'aborted',
+        status: 'aborted',
+        abortedReason: 'Primary already merged as PR #1227',
+        abortedAt: '2026-08-24T15:25:37.000Z',
+      },
+    });
+
+    const first = await resolvePrimaryMergedPair({
+      pairId: 'pair-idempotent',
+      primaryPr: 1227,
+      repoDir,
+      now: () => new Date('2026-08-24T15:25:37Z'),
+    });
+    const second = await resolvePrimaryMergedPair({
+      pairId: 'pair-idempotent',
+      primaryPr: 1227,
+      repoDir,
+      now: () => new Date('2026-08-24T16:00:00Z'),
+    });
+
+    assert.equal(first.status, 'resolved');
+    assert.equal(second.status, 'already-resolved');
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks.HOK_1_c.abortedAt, '2026-08-24T15:25:37.000Z');
+  } finally {
+    cleanup();
+  }
+});
+
+test('primary-merged resolver writes forfeit when challenger is absent', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1230,
+        branch: 'task/primary',
+        challengePairId: 'pair-no-challenger',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+    });
+
+    const result = await resolvePrimaryMergedPair({
+      pairId: 'pair-no-challenger',
+      primaryPr: 1230,
+      repoDir,
+      now: () => new Date('2026-08-24T17:02:49Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.challengerModel, 'unknown');
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 1);
+  } finally {
+    cleanup();
+  }
+});
+
+test('primary-merged resolver dry run does not append or mutate state', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1230,
+        branch: 'task/primary',
+        challengePairId: 'pair-dry-run',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        challengePairId: 'pair-dry-run',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        phase: 'review',
+        status: 'active',
+      },
+    });
+
+    const result = await resolvePrimaryMergedPair({
+      pairId: 'pair-dry-run',
+      primaryPr: 1230,
+      repoDir,
+      dryRun: true,
+      now: () => new Date('2026-08-24T17:02:49Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.dryRun, true);
+    assert.equal(readChallengeComparisons(join(repoDir, '.wavemill', 'evals')).length, 0);
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks.HOK_1_c.phase, 'review');
+    assert.equal(state.tasks.HOK_1_c.status, 'active');
+    assert.equal(state.tasks.HOK_1_c.abortedReason, undefined);
+  } finally {
+    cleanup();
+  }
+});
+
+test('primary-merged resolver aborts active challenger when record already exists', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1230,
+        branch: 'task/primary',
+        challengePairId: 'pair-existing-record',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        challengePairId: 'pair-existing-record',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-sonnet-4',
+        phase: 'review',
+        status: 'active',
+      },
+    });
+
+    const first = await resolvePrimaryMergedPair({
+      pairId: 'pair-existing-record',
+      primaryPr: 1230,
+      repoDir,
+      dryRun: true,
+      now: () => new Date('2026-08-24T17:02:49Z'),
+    });
+    assert.equal(first.status, 'resolved');
+    writeFileSync(
+      join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
+      `${JSON.stringify(first.record)}\n`,
+    );
+
+    const second = await resolvePrimaryMergedPair({
+      pairId: 'pair-existing-record',
+      primaryPr: 1230,
+      repoDir,
+      now: () => new Date('2026-08-24T17:03:00Z'),
+    });
+
+    assert.equal(second.status, 'already-resolved');
+    const state = JSON.parse(readFileSync(join(repoDir, '.wavemill', 'workflow-state.json'), 'utf-8'));
+    assert.equal(state.tasks.HOK_1_c.phase, 'aborted');
+    assert.equal(state.tasks.HOK_1_c.status, 'aborted');
+    assert.equal(state.tasks.HOK_1_c.abortedReason, 'Primary already merged as PR #1230');
   } finally {
     cleanup();
   }

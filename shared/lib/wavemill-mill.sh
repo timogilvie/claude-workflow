@@ -10833,6 +10833,38 @@ maybe_resolve_unresolvable_challenge_pair() {
   esac
 }
 
+resolve_pair_on_primary_merge() {
+  local issue="$1"
+  local pr="$2"
+  local role pair_id resolve_output resolve_status resolve_reason
+
+  role=$(get_task_meta "$issue" "challengeRole")
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ "$role" == "primary" && -n "$pair_id" && -n "$pr" ]] || return 0
+
+  resolve_output=$(npx tsx "$TOOLS_DIR/resolve-primary-merged-pair.ts" \
+    --pair-id "$pair_id" \
+    --primary-pr "$pr" \
+    --repo-dir "$REPO_DIR" 2>/dev/null || true)
+  resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+
+  case "$resolve_status" in
+    resolved)
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      ;;
+    already-resolved)
+      mark_challenge_compared "$pair_id" "record" >/dev/null || true
+      log "status" "challenge pair $pair_id already resolved, primary merge cleanup continuing"
+      ;;
+    skipped|"")
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      log_warn "challenge pair $pair_id primary-merge resolver skipped: $resolve_reason"
+      ;;
+  esac
+}
+
 # Archive stage artifacts from worktree before cleanup.
 # Copies plan.md, task-packet.md, and routing decision to a durable location
 # so post-merge eval can still access them after the worktree is removed.
@@ -14352,6 +14384,7 @@ monitor_issue_state() {
 
     set_window_attention_state "$WIN" "clear"
     if [[ "$task_status" == "merged" && "$merged_before_ready" == "true" ]]; then
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
       cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
       return 0
@@ -14365,6 +14398,9 @@ monitor_issue_state() {
       return 0
     fi
 
+    if [[ "$task_status" == "merged" ]]; then
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+    fi
     cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
 
     # Prune worktrees after cleanup
@@ -15520,6 +15556,7 @@ monitor_issue_state() {
     elif should_update_linear_state "$ISSUE"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
+    resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
     cleanup_completed_task "$ISSUE" "$SLUG"
     if [[ "$_eval_needed" == "true" ]]; then
       log_task "info" "$ISSUE" "📊 Eval queued in background"

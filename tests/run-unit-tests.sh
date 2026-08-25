@@ -250,6 +250,7 @@ TESTS=(
   tools/openrouter-doctor.test.ts
   tools/audit-openrouter-aliases.test.ts
   tools/resolve-orphan-challenge-pair.test.ts
+  tools/resolve-primary-merged-pair.test.ts
   tests/drift-detector.test.ts
   tests/check-drift-tool.test.ts
   tests/jq-filter-smoke.test.ts
