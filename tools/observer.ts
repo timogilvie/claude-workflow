@@ -13,6 +13,7 @@ import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-
 import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-linear-retry-queue.ts';
 import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
 import { countRejectedEvalRecords, listRejectedEvalRecords } from '../shared/lib/eval-rejected-store.ts';
+import { renderObserverStatus } from '../shared/lib/observer-status-renderer.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -23,6 +24,7 @@ interface ObserverOptions {
   loop: boolean;
   once: boolean;
   json: boolean;
+  compact: boolean;
   intervalSeconds: number;
   staleMinutes: number;
   hungMinutes: number;
@@ -166,6 +168,7 @@ Options:
   --loop                 Watch continuously
   --interval <seconds>   Loop interval (default: ${DEFAULT_INTERVAL_SECONDS})
   --json                 Emit JSON snapshots
+  --compact              One line per actionable finding; rolls up log-scrape noise
   --file-linear          Create Linear issues for high-confidence findings
   --file-incidents       Create/update Linear issues for confirmed deduplicated incidents
   --incidents-dry-run    Preview incident Linear actions without writes
@@ -195,6 +198,7 @@ export function parseArgs(argv: string[]): ObserverOptions {
     loop: false,
     once: true,
     json: false,
+    compact: false,
     intervalSeconds: DEFAULT_INTERVAL_SECONDS,
     staleMinutes: DEFAULT_STALE_MINUTES,
     hungMinutes: DEFAULT_HUNG_MINUTES,
@@ -230,6 +234,8 @@ export function parseArgs(argv: string[]): ObserverOptions {
       options.once = false;
     } else if (arg === '--json') {
       options.json = true;
+    } else if (arg === '--compact') {
+      options.compact = true;
     } else if (arg === '--file-linear') {
       options.fileLinear = true;
     } else if (arg === '--file-incidents') {
@@ -1745,6 +1751,8 @@ async function main(): Promise<void> {
       await fileLinearIssues(snapshot, options);
       if (options.json) {
         process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
+      } else if (options.compact) {
+        process.stdout.write(renderObserverStatus(snapshot, { width: process.stdout.columns ?? 100 }));
       } else {
         process.stdout.write(renderSummary(snapshot));
       }
