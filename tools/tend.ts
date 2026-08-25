@@ -89,6 +89,7 @@ runTool({
     const decision = await selectNextCandidate({
       repoDir,
       loserCleanup: args['dry-run'] ? () => {} : undefined,
+      staleGuardBlockReconciler: args['dry-run'] ? () => ({ ok: true }) : undefined,
     });
     if (args['dry-run'] || decision.nextPR === null) {
       console.log(formatStatusLine(decision, { action: 'idle' }));

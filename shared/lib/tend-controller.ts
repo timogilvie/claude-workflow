@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -82,6 +82,7 @@ export interface GhPrListEntry {
   number: number;
   title: string;
   headRefName: string;
+  headRefOid?: string;
   createdAt: string;
   isDraft: boolean;
   labels: { name: string }[];
@@ -99,6 +100,7 @@ export interface SelectNextCandidateOptions {
   repoDir: string;
   prFetcher?: PrFetcher;
   healthChecker?: HealthChecker;
+  staleGuardBlockReconciler?: StaleGuardBlockReconciler;
   loserCleanup?: (candidate: ChallengeLoserCleanupCandidate, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
   challengeGateOptions?: ChallengeGateOptions;
@@ -108,6 +110,34 @@ interface EligibleWorkItem {
   pr: GhPrListEntry;
   metadata: PrMetadata;
 }
+
+interface CrossPrRevertGuardEvidence {
+  prNumber?: number;
+  headSha?: string;
+  outcome?: 'pass' | 'policy-fail' | 'tool-fail';
+  checkedAt?: string;
+  reason?: string;
+}
+
+interface ReadyGuardState {
+  status?: string;
+  verdict?: string;
+  readyLabelsUpdated?: boolean;
+  readyHeadSha?: string;
+  guard?: CrossPrRevertGuardEvidence;
+}
+
+interface StaleGuardBlockReconciliationResult {
+  ok: boolean;
+  labels?: { name: string }[];
+  reason?: string;
+}
+
+export type StaleGuardBlockReconciler = (
+  pr: GhPrListEntry,
+  guardState: ReadyGuardState,
+  repoDir: string,
+) => StaleGuardBlockReconciliationResult;
 
 interface IntegrationBranchResolution {
   sha: string;
@@ -160,7 +190,7 @@ export function createPrFetcher(deps: {
             '--state',
             'open',
             '--json',
-            'number,title,headRefName,createdAt,isDraft,labels,body',
+            'number,title,headRefName,headRefOid,createdAt,isDraft,labels,body',
           ].join(' '),
           { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
         ));
@@ -302,12 +332,19 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   const allPrs = await prFetcher(integrationBranch, options.repoDir);
   const wavemillPrs = allPrs.filter(isWavemillPr);
   const openPrNumbers = new Set(wavemillPrs.map((pr) => pr.number));
+  const staleGuardBlockReconciler = options.staleGuardBlockReconciler ?? defaultStaleGuardBlockReconciler;
   const blocked: BlockedCandidate[] = [];
   let eligibleWorkItems: EligibleWorkItem[] = [];
 
   for (const pr of wavemillPrs) {
     const metadataResult = getValidMetadata(pr.body);
-    const reason = getInitialBlockReason(pr, metadataResult.metadata, openPrNumbers);
+    const reason = getInitialBlockReason(
+      pr,
+      metadataResult.metadata,
+      openPrNumbers,
+      options.repoDir,
+      staleGuardBlockReconciler,
+    );
 
     if (reason) {
       blocked.push(toBlockedCandidate(pr, reason));
@@ -1262,15 +1299,34 @@ function getInitialBlockReason(
   pr: GhPrListEntry,
   metadata: PrMetadata | null,
   openPrNumbers: Set<number>,
+  repoDir: string,
+  staleGuardBlockReconciler: StaleGuardBlockReconciler,
 ): string | null {
-  const labels = labelSet(pr);
+  let labels = labelSet(pr);
 
   if (pr.isDraft) {
     return 'draft';
   }
 
   if (labels.has(WM_LABELS.blocked)) {
-    return 'blocked-label';
+    const guardState = readReadyGuardStateForPr(pr, metadata, repoDir);
+    if (!blockedLabelCanBeReconciledFromGuardPass(pr, guardState)) {
+      return guardState?.guard?.outcome === 'policy-fail'
+        && pr.headRefOid
+        && guardState.guard.headSha
+        && guardState.guard.headSha !== pr.headRefOid
+        ? 'blocked-label:stale-cross-pr-guard'
+        : 'blocked-label';
+    }
+
+    const reconciliation = staleGuardBlockReconciler(pr, guardState, repoDir);
+    if (!reconciliation.ok) {
+      return 'blocked-label:stale-guard-label-removal-failed';
+    }
+
+    labels = reconciliation.labels
+      ? new Set(reconciliation.labels.map((label) => label.name))
+      : new Set([...labels].filter((label) => label !== WM_LABELS.blocked).concat(WM_LABELS.ready));
   }
 
   if (!metadata) {
@@ -1297,6 +1353,180 @@ function getInitialBlockReason(
   }
 
   return null;
+}
+
+function defaultStaleGuardBlockReconciler(pr: GhPrListEntry): StaleGuardBlockReconciliationResult {
+  try {
+    const reconciled = setWavemillReady(pr.number);
+    return { ok: true, labels: reconciled.labels };
+  } catch (error) {
+    return { ok: false, reason: errorMessage(error) };
+  }
+}
+
+function blockedLabelCanBeReconciledFromGuardPass(
+  pr: GhPrListEntry,
+  guardState: ReadyGuardState | null,
+): guardState is ReadyGuardState & { guard: CrossPrRevertGuardEvidence } {
+  if (!pr.headRefOid || !guardState?.guard) {
+    return false;
+  }
+
+  return (
+    guardState.status === 'completed'
+    && (guardState.verdict === 'pass' || guardState.verdict === 'warn')
+    && guardState.guard.outcome === 'pass'
+    && guardState.guard.headSha === pr.headRefOid
+    && (!guardState.readyHeadSha || guardState.readyHeadSha === pr.headRefOid)
+  );
+}
+
+function readReadyGuardStateForPr(
+  pr: GhPrListEntry,
+  metadata: PrMetadata | null,
+  repoDir: string,
+): ReadyGuardState | null {
+  const stateDir = findReadyStateDir(pr, metadata, repoDir);
+  if (!stateDir) {
+    return null;
+  }
+
+  const resultFile = join(stateDir, '.ready-result.json');
+  if (!existsSync(resultFile)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(resultFile, 'utf-8')) as {
+      status?: unknown;
+      artifacts?: {
+        verdict?: unknown;
+        readyLabelsUpdated?: unknown;
+        readyHeadSha?: unknown;
+        crossPrRevertGuard?: unknown;
+      };
+    };
+    const artifacts = parsed.artifacts && typeof parsed.artifacts === 'object' ? parsed.artifacts : {};
+    const guard = parseCrossPrRevertGuardEvidence(artifacts.crossPrRevertGuard);
+    return {
+      status: typeof parsed.status === 'string' ? parsed.status : undefined,
+      verdict: typeof artifacts.verdict === 'string' ? artifacts.verdict : undefined,
+      readyLabelsUpdated: typeof artifacts.readyLabelsUpdated === 'boolean' ? artifacts.readyLabelsUpdated : undefined,
+      readyHeadSha: typeof artifacts.readyHeadSha === 'string' ? artifacts.readyHeadSha : undefined,
+      guard,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseCrossPrRevertGuardEvidence(value: unknown): CrossPrRevertGuardEvidence | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const outcome = record.outcome;
+  if (outcome !== 'pass' && outcome !== 'policy-fail' && outcome !== 'tool-fail') {
+    return undefined;
+  }
+  return {
+    prNumber: typeof record.prNumber === 'number' ? record.prNumber : undefined,
+    headSha: typeof record.headSha === 'string' ? record.headSha : undefined,
+    outcome,
+    checkedAt: typeof record.checkedAt === 'string' ? record.checkedAt : undefined,
+    reason: typeof record.reason === 'string' ? record.reason : undefined,
+  };
+}
+
+function findReadyStateDir(pr: GhPrListEntry, metadata: PrMetadata | null, repoDir: string): string | null {
+  const taskId = metadata?.task;
+  if (!taskId) {
+    return null;
+  }
+
+  for (const candidate of readyStateDirsFromWorkflowState(taskId, repoDir)) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const root of ['features', 'bugs']) {
+    const rootDir = join(repoDir, root);
+    if (!existsSync(rootDir)) {
+      continue;
+    }
+    for (const entry of safeReadDirNames(rootDir)) {
+      const stateDir = join(rootDir, entry);
+      if (selectedTaskMatches(stateDir, taskId)) {
+        return stateDir;
+      }
+    }
+  }
+
+  const branchSlug = pr.headRefName.replace(/^(task|bug)\//, '');
+  for (const root of ['features', 'bugs']) {
+    const candidate = join(repoDir, root, branchSlug);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function readyStateDirsFromWorkflowState(taskId: string, repoDir: string): string[] {
+  const stateFile = join(repoDir, '.wavemill', 'workflow-state.json');
+  if (!existsSync(stateFile)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(stateFile, 'utf-8')) as { tasks?: Record<string, unknown> };
+    const tasks = parsed.tasks && typeof parsed.tasks === 'object' ? parsed.tasks : {};
+    const candidates = [taskId, taskId.replace(/-/g, '_')];
+    const dirs: string[] = [];
+    for (const key of candidates) {
+      const task = tasks[key];
+      if (!task || typeof task !== 'object') {
+        continue;
+      }
+      const record = task as Record<string, unknown>;
+      const slug = typeof record.slug === 'string' ? record.slug : undefined;
+      const worktree = typeof record.worktree === 'string' ? record.worktree : undefined;
+      if (worktree && slug) {
+        dirs.push(join(worktree, 'features', slug), join(worktree, 'bugs', slug));
+      }
+      if (slug) {
+        dirs.push(join(repoDir, 'features', slug), join(repoDir, 'bugs', slug));
+      }
+    }
+    return dirs;
+  } catch {
+    return [];
+  }
+}
+
+function selectedTaskMatches(stateDir: string, taskId: string): boolean {
+  const selectedTaskPath = join(stateDir, 'selected-task.json');
+  if (!existsSync(selectedTaskPath)) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(selectedTaskPath, 'utf-8')) as { taskId?: unknown };
+    return parsed.taskId === taskId;
+  } catch {
+    return false;
+  }
+}
+
+function safeReadDirNames(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
 }
 
 function removeCandidatesWithBlockedDependencies(eligible: EligibleWorkItem[]): {

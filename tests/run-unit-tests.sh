@@ -235,6 +235,7 @@ TESTS=(
   tools/check-pi-version.test.ts
   tools/check-ci-command-map-drift.test.ts
   tools/check-cross-pr-reverts.test.ts
+  tools/set-pr-ready-label.test.ts
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
   tools/launch-validation.test.ts

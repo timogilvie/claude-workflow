@@ -32,6 +32,7 @@ function pr(overrides: Partial<GhPrListEntry> = {}): GhPrListEntry {
     number: 1,
     title: 'Test PR',
     headRefName: 'task/test-pr',
+    headRefOid: 'head-sha',
     createdAt: '2026-04-01T00:00:00Z',
     isDraft: false,
     labels: [{ name: WM_LABELS.wavemill }, { name: WM_LABELS.ready }],
@@ -82,6 +83,22 @@ function writeChallengeComparisons(repoDir: string, records: object[]): void {
     join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
     records.map((record) => JSON.stringify(record)).join('\n'),
   );
+}
+
+function writeSelectedTask(repoDir: string, slug: string, taskId = 'HOK-1437'): string {
+  const featureDir = join(repoDir, 'features', slug);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, 'selected-task.json'), JSON.stringify({
+    taskId,
+    featureName: slug,
+    workflowType: 'feature',
+  }));
+  return featureDir;
+}
+
+function writeReadyResult(repoDir: string, slug: string, result: object): void {
+  const featureDir = writeSelectedTask(repoDir, slug);
+  writeFileSync(join(featureDir, '.ready-result.json'), JSON.stringify(result));
 }
 
 function candidate(overrides: Partial<TendCandidate> = {}): TendCandidate {
@@ -329,6 +346,124 @@ describe('selectNextCandidate filtering', () => {
     ], (decision) => {
       assert.equal(decision.blocked[0]?.reason, 'blocked-label');
     });
+  });
+
+  it('keeps a blocked label when current cross-PR guard evidence still fails', async () => {
+    const blockedPr = pr({
+      headRefName: 'task/current-guard-block',
+      headRefOid: 'current-head',
+      labels: [label(WM_LABELS.wavemill), label(WM_LABELS.blocked)],
+    });
+    const options = buildTestOptions([blockedPr]);
+    writeReadyResult(options.repoDir, 'current-guard-block', {
+      stage: 'ready',
+      status: 'failed',
+      startedAt: '2026-04-01T00:00:00Z',
+      finishedAt: '2026-04-01T00:01:00Z',
+      agent: '',
+      model: '',
+      notes: '',
+      artifacts: {
+        type: 'ready',
+        prNumber: 1,
+        crossPrRevertGuard: {
+          prNumber: 1,
+          headSha: 'current-head',
+          outcome: 'policy-fail',
+          checkedAt: '2026-04-01T00:01:00Z',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('reconciles a stale blocked label when current guard and ready evidence pass', async () => {
+    const blockedPr = pr({
+      headRefName: 'task/stale-guard-label',
+      headRefOid: 'current-head',
+      labels: [label(WM_LABELS.wavemill), label(WM_LABELS.blocked)],
+    });
+    const options = buildTestOptions([blockedPr]);
+    options.staleGuardBlockReconciler = () => ({
+      ok: true,
+      labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready)],
+    });
+    writeReadyResult(options.repoDir, 'stale-guard-label', {
+      stage: 'ready',
+      status: 'completed',
+      startedAt: '2026-04-01T00:00:00Z',
+      finishedAt: '2026-04-01T00:01:00Z',
+      agent: '',
+      model: '',
+      notes: '',
+      artifacts: {
+        type: 'ready',
+        verdict: 'pass',
+        readyLabelsUpdated: true,
+        readyHeadSha: 'current-head',
+        crossPrRevertGuard: {
+          prNumber: 1,
+          headSha: 'current-head',
+          outcome: 'pass',
+          checkedAt: '2026-04-01T00:01:00Z',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 1);
+      assert.equal(decision.nextPR, 1);
+      assert.equal(decision.blocked.length, 0);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('keeps a stale blocked label blocked when label reconciliation fails', async () => {
+    const blockedPr = pr({
+      headRefName: 'task/stale-guard-label-failure',
+      headRefOid: 'current-head',
+      labels: [label(WM_LABELS.wavemill), label(WM_LABELS.blocked)],
+    });
+    const options = buildTestOptions([blockedPr]);
+    options.staleGuardBlockReconciler = () => ({ ok: false, reason: 'gh label removal failed' });
+    writeReadyResult(options.repoDir, 'stale-guard-label-failure', {
+      stage: 'ready',
+      status: 'completed',
+      startedAt: '2026-04-01T00:00:00Z',
+      finishedAt: '2026-04-01T00:01:00Z',
+      agent: '',
+      model: '',
+      notes: '',
+      artifacts: {
+        type: 'ready',
+        verdict: 'pass',
+        readyLabelsUpdated: true,
+        readyHeadSha: 'current-head',
+        crossPrRevertGuard: {
+          prNumber: 1,
+          headSha: 'current-head',
+          outcome: 'pass',
+          checkedAt: '2026-04-01T00:01:00Z',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:stale-guard-label-removal-failed');
+    } finally {
+      options.cleanup();
+    }
   });
 
   it('blocks PRs missing metadata', async () => {

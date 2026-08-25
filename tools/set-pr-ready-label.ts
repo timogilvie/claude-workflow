@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { fileURLToPath } from 'node:url';
-import { setWavemillReady } from '../shared/lib/pr-state-labels.ts';
+import { setWavemillReady, WM_LABELS } from '../shared/lib/pr-state-labels.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 export const setPrReadyLabelDeps = {
@@ -15,6 +15,11 @@ export function setPrReadyLabel(prNumber: string, repo?: string): void {
   }
 
   const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, { repo });
+  const labels = new Set(pr.labels.map((label) => label.name));
+  if (!labels.has(WM_LABELS.ready) || labels.has(WM_LABELS.blocked)) {
+    const labelSummary = [...labels].sort().join(', ') || '(none)';
+    throw new Error(`Ready label reconciliation failed for PR #${pr.number}: labels=[${labelSummary}]`);
+  }
   setPrReadyLabelDeps.log(`Restored ready labels for PR #${pr.number}`);
 }
 

@@ -49,6 +49,7 @@ extract_function "$MILL_SCRIPT" "write_ready_conflict_recheck_at" >> "$MONITOR_F
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "cross_pr_guard_blocks_current_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
 
 if [[ ! -s "$MONITOR_FUNC_FILE" ]]; then
@@ -172,6 +173,22 @@ JSON
         READY_LAUNCH_RC=0
         cat > "$READY_DIR/.ready-result.json" <<JSON
 {"stage":"ready","status":"failed","artifacts":{"verdict":"fail"}}
+JSON
+        ;;
+      ready_failed_current_guard_block_parks)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","artifacts":{"verdict":"fail","crossPrRevertGuard":{"headSha":"current-head","outcome":"policy-fail"}}}
+JSON
+        ;;
+      ready_failed_stale_guard_block_repolls)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","artifacts":{"verdict":"fail","crossPrRevertGuard":{"headSha":"old-head","outcome":"policy-fail"}}}
 JSON
         ;;
       ready_remediation_repolls_active)
@@ -449,6 +466,15 @@ ready_failed_resume_repolls_output="$(run_monitor_case ready_failed_resume_repol
 check_contains "failed ready resumes by re-running checks" "$ready_failed_resume_repolls_output" "ready_launches=1"
 check_contains "failed ready pass clears attention" "$ready_failed_resume_repolls_output" "attention=clear"
 check_contains "failed ready pass holds slot active" "$ready_failed_resume_repolls_output" "active_count=1"
+
+ready_failed_current_guard_block_output="$(run_monitor_case ready_failed_current_guard_block_parks)"
+check_contains "current-head guard block does not relaunch ready" "$ready_failed_current_guard_block_output" "ready_launches=0"
+check_contains "current-head guard block needs user" "$ready_failed_current_guard_block_output" "attention=needs-user"
+
+ready_failed_stale_guard_block_output="$(run_monitor_case ready_failed_stale_guard_block_repolls)"
+check_contains "stale-head guard block relaunches ready" "$ready_failed_stale_guard_block_output" "ready_launches=1"
+check_contains "stale-head guard block clears attention after pass" "$ready_failed_stale_guard_block_output" "attention=clear"
+check_contains "stale-head guard block holds slot active" "$ready_failed_stale_guard_block_output" "active_count=1"
 
 ready_remediation_repolls_active_output="$(run_monitor_case ready_remediation_repolls_active)"
 check_contains "ready remediation rc 5 relaunches once" "$ready_remediation_repolls_active_output" "ready_launches=1"

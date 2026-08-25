@@ -165,6 +165,17 @@ export interface ReadyArtifacts {
   changedFiles?: string[];
   unblocksCount?: number;
   transientMergeabilityAttempts?: number;
+  crossPrRevertGuard?: {
+    prNumber?: number;
+    headSha?: string;
+    outcome?: 'pass' | 'policy-fail' | 'tool-fail';
+    checkedAt?: string;
+    reason?: string;
+    unacknowledgedPrs?: number[];
+    files?: string[];
+    commandClass?: string;
+    ref?: string;
+  };
   /** Per-edit-path guardrail decision for stale-base / merge-conflict remediation (HOK-2361). */
   remediationDecision?: ReadyRemediationDecision;
 }

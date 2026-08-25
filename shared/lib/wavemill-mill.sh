@@ -9055,12 +9055,60 @@ _write_cross_pr_diagnostic() {
   rm -f "$tmp"
 }
 
+write_cross_pr_guard_artifact() {
+  local state_dir="$1" guard_json="$2" status="${3:-running}" notes="${4:-}"
+  local result_file="$state_dir/.ready-result.json"
+  local existing now tmp
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  mkdir -p "$state_dir"
+  existing=$(jq -c . "$result_file" 2>/dev/null || echo '{}')
+  tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 1
+  if jq -cn \
+    --argjson existing "$existing" \
+    --argjson guard "$guard_json" \
+    --arg status "$status" \
+    --arg notes "$notes" \
+    --arg now "$now" '
+      $existing
+      + {
+          stage: "ready",
+          status: $status,
+          startedAt: ($existing.startedAt // $now),
+          finishedAt: (if ($status == "completed" or $status == "failed" or $status == "aborted") then $now else ($existing.finishedAt // null) end),
+          agent: ($existing.agent // ""),
+          model: ($existing.model // ""),
+          notes: (if $notes == "" then ($existing.notes // "") else $notes end),
+          artifacts: (($existing.artifacts // {type:"ready"}) + {type:"ready", crossPrRevertGuard:$guard})
+        }
+    ' > "$tmp"; then
+    mv "$tmp" "$result_file"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+read_cross_pr_guard_artifact() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  [[ -f "$result_file" ]] || { printf '{}\n'; return 0; }
+  jq -c '.artifacts.crossPrRevertGuard // {}' "$result_file" 2>/dev/null || printf '{}\n'
+}
+
+cross_pr_guard_blocks_current_head() {
+  local state_dir="$1" current_head="$2"
+  [[ -n "$current_head" ]] || return 1
+  [[ "$(jq -r '.artifacts.crossPrRevertGuard.outcome // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" == "policy-fail" ]] || return 1
+  [[ "$(jq -r '.artifacts.crossPrRevertGuard.headSha // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" == "$current_head" ]]
+}
+
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
-  local result rc prs files message stderr_file raw_error classification
+  local result rc prs files message stderr_file raw_error classification head_sha guard_json
   local tool_stderr=""
   local extra_args=()
   raw_error=""
+  head_sha=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
   [[ -n "$base_branch" ]] && extra_args+=(--base-ref "$base_branch" --integration-ref "$base_branch")
   stderr_file=$(mktemp 2>/dev/null) || stderr_file=""
@@ -9080,6 +9128,12 @@ cross_pr_revert_gate_allows_merge() {
   fi
 
   if [[ "$rc" -eq 0 ]]; then
+    guard_json=$(jq -cn \
+      --argjson pr_number "$pr_number" \
+      --arg head "$head_sha" \
+      --arg now "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      '{prNumber:$pr_number, headSha:$head, outcome:"pass", checkedAt:$now}')
+    write_cross_pr_guard_artifact "$state_dir" "$guard_json" "running" "Cross-PR revert guard passed for PR #$pr_number" || true
     return 0
   fi
   tool_stderr="$raw_error"
@@ -9091,6 +9145,23 @@ cross_pr_revert_gate_allows_merge() {
     message="PR #$pr_number removes files from $prs without explicit acknowledgement."
     if [[ -n "$files" ]]; then
       message="$message Affected files: $files."
+    fi
+    guard_json=$(printf '%s' "$result" | jq -c \
+      --argjson pr_number "$pr_number" \
+      --arg head "$head_sha" \
+      --arg now "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      --arg reason "$message" '
+        {
+          prNumber:$pr_number,
+          headSha:$head,
+          outcome:"policy-fail",
+          checkedAt:$now,
+          reason:$reason,
+          unacknowledgedPrs: ([.unacknowledged[]?.prNumber] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end)),
+          files: ([.unacknowledged[]?.files[]?.path] | reduce .[] as $item ([]; if index($item) then . else . + [$item] end))
+        }' 2>/dev/null || echo "")
+    if [[ -n "$guard_json" ]]; then
+      write_cross_pr_guard_artifact "$state_dir" "$guard_json" "failed" "$message" || true
     fi
     write_ready_attention_file "$state_dir" "$message"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
@@ -9120,6 +9191,15 @@ cross_pr_revert_gate_allows_merge() {
       message="$message Diagnostic: $diag_stderr"
     fi
 
+    guard_json=$(jq -cn \
+      --argjson pr_number "$pr_number" \
+      --arg head "$head_sha" \
+      --arg now "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+      --arg reason "$message" \
+      --arg commandClass "$cmd_class" \
+      --arg ref "$ref_name" \
+      '{prNumber:$pr_number, headSha:$head, outcome:"tool-fail", checkedAt:$now, reason:$reason, commandClass:$commandClass, ref:$ref}')
+    write_cross_pr_guard_artifact "$state_dir" "$guard_json" "failed" "$message" || true
     write_ready_attention_file "$state_dir" "$message"
     _write_cross_pr_diagnostic "$state_dir" "$ref_name" "$cmd_class" "$diag_stderr"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
@@ -9140,6 +9220,13 @@ cross_pr_revert_gate_allows_merge() {
   fi
 
   write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
+  guard_json=$(jq -cn \
+    --argjson pr_number "$pr_number" \
+    --arg head "$head_sha" \
+    --arg now "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    --arg reason "Cross-PR revert guard failed for PR #$pr_number." \
+    '{prNumber:$pr_number, headSha:$head, outcome:"tool-fail", checkedAt:$now, reason:$reason}')
+  write_cross_pr_guard_artifact "$state_dir" "$guard_json" "failed" "Cross-PR revert guard failed for PR #$pr_number." || true
   npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
     --state-dir "$state_dir" \
     --stage "cross-pr-guard" \
@@ -9769,8 +9856,9 @@ launch_ready_phase() {
   clear_transient_mergeability_state "$state_dir"
 
   if [[ "$ready_rc" -eq 0 ]]; then
-    local main_sha completed_artifacts_json label_failed_artifacts_json
+    local main_sha completed_artifacts_json label_failed_artifacts_json cross_pr_guard_json
     main_sha=$(get_main_head_sha "$wt_dir" "$base_branch")
+    cross_pr_guard_json=$(read_cross_pr_guard_artifact "$state_dir")
     if ! set_ready_pass_labels "$wt_dir" "$pr_number" "$state_dir" >/dev/null 2>&1; then
       label_failed_artifacts_json=$(jq -cn \
         --arg verdict "${verdict:-unknown}" \
@@ -9782,7 +9870,8 @@ launch_ready_phase() {
         --arg ready_head_sha "$ready_head_sha" \
         --arg ci_conclusion "$ci_conclusion" \
         --arg required_source "$required_source" \
-        --argjson required_contexts "$required_contexts_json" '
+        --argjson required_contexts "$required_contexts_json" \
+        --argjson cross_pr_guard "$cross_pr_guard_json" '
           {
             type:"ready",
             verdict:$verdict,
@@ -9795,7 +9884,8 @@ launch_ready_phase() {
             readyHeadSha:$ready_head_sha,
             ciConclusion:$ci_conclusion,
             requiredSource:$required_source,
-            requiredContexts:$required_contexts
+            requiredContexts:$required_contexts,
+            crossPrRevertGuard:$cross_pr_guard
           } | with_entries(select(.value != ""))
         ')
       label_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$label_failed_artifacts_json" "candidate-progress")
@@ -9817,7 +9907,8 @@ launch_ready_phase() {
       --arg ready_head_sha "$ready_head_sha" \
       --arg ci_conclusion "$ci_conclusion" \
       --arg required_source "$required_source" \
-      --argjson required_contexts "$required_contexts_json" '
+      --argjson required_contexts "$required_contexts_json" \
+      --argjson cross_pr_guard "$cross_pr_guard_json" '
         {
           type:"ready",
           verdict:$verdict,
@@ -9830,7 +9921,8 @@ launch_ready_phase() {
           readyHeadSha:$ready_head_sha,
           ciConclusion:$ci_conclusion,
           requiredSource:$required_source,
-          requiredContexts:$required_contexts
+          requiredContexts:$required_contexts,
+          crossPrRevertGuard:$cross_pr_guard
         } | with_entries(select(.value != ""))
       ')
     completed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$completed_artifacts_json" "completed")
@@ -15854,6 +15946,10 @@ monitor_issue_state() {
 
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
     if [[ "$ready_status" == "failed" ]]; then
+      if cross_pr_guard_blocks_current_head "$ready_state_dir_path" "$current_head"; then
+        set_window_attention_state "$WIN" "needs-user"
+        return 0
+      fi
       log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR"
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
