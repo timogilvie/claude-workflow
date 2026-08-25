@@ -123,6 +123,7 @@ TESTS=(
   shared/lib/tend-singleton.test.ts
   shared/lib/promotion-controller.test.ts
   shared/lib/cross-pr-revert-detector.test.ts
+  shared/lib/review-scope-guard.test.ts
   shared/lib/llm-cli.test.ts
   shared/lib/headless-llm.test.ts
   shared/lib/router-log.test.ts
@@ -246,6 +247,7 @@ TESTS=(
   tools/select-wave.test.ts
   tools/smoke-deepseek.test.ts
   tools/openrouter-doctor.test.ts
+  tools/review-scope-prompt.test.ts
   tools/audit-openrouter-aliases.test.ts
   tools/resolve-orphan-challenge-pair.test.ts
   tests/drift-detector.test.ts
