@@ -180,6 +180,7 @@ export interface MintEligibilityConfig {
 export interface EvalConfig {
   aggregation?: AggregationConfig;
   evalsDir?: string;
+  rejectedRetention?: number;
   judge?: JudgeConfig;
   pricing?: Record<string, PricingEntry>;
   interventionPenalties?: InterventionPenaltiesConfig;
@@ -259,6 +260,14 @@ export interface RouterConfig {
   };
   hokusai?: HokusaiRouterConfig;
   difficulty?: DifficultyClassifierConfig;
+  escalation?: RouterEscalationConfig;
+}
+
+export interface RouterEscalationConfig {
+  enabled?: boolean;
+  expectedSuccessFloor?: number;
+  confidenceFloor?: number;
+  minCoderClassRankIncrease?: number;
 }
 
 export interface ChallengeGateConfig {

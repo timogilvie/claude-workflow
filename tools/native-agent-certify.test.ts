@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { certifyNativeAgent } from './native-agent-certify.ts';
+import { certifyAllNativeAgents, certifyNativeAgent } from './native-agent-certify.ts';
 import type { HarnessReport, HarnessScenarioResult } from '../shared/lib/native-agent/certification/scenario-runner.ts';
 import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
@@ -622,5 +622,99 @@ describe('certifyNativeAgent', () => {
       written.scenarios.map((scenario) => scenario.scenarioId),
       ['s1'],
     );
+  });
+});
+
+describe('certifyAllNativeAgents', () => {
+  it('dry-run iterates native-capable registry models without publishing', async () => {
+    const seen: string[] = [];
+    let writeCalls = 0;
+
+    const result = await certifyAllNativeAgents({
+      phase: 'workflow',
+      repoDir: '/repo',
+      dryRun: true,
+      registry: STUB_REGISTRY,
+      runScenariosFn: async (opts) => {
+        seen.push(`${opts.provider}/${opts.model}`);
+        return {
+          ...PASSING_REPORT,
+          provider: opts.provider,
+          model: opts.model,
+          transport: opts.transport,
+          dryRun: true,
+          liveCertifiable: false,
+        };
+      },
+      writeCertificationFn: () => {
+        writeCalls++;
+        return '/repo/cert.json';
+      },
+    });
+
+    assert.deepEqual(seen.sort(), [
+      'openai/gpt-4o',
+      'openrouter/glm-5.2',
+      'openrouter/kimi-k2.7-code',
+      'openrouter/ox-alpha',
+      'openrouter/qwen-3-coder',
+    ]);
+    assert.equal(writeCalls, 0);
+    assert.equal(result.published.length, 0);
+    assert.equal(result.failed.length, 0);
+    assert.equal(result.skipped.length, 5);
+  });
+
+  it('classifies provisional OpenRouter live-smoke policy refusals as skipped', async () => {
+    const written: string[] = [];
+
+    const result = await certifyAllNativeAgents({
+      provider: 'openrouter',
+      phase: 'workflow',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async (opts) => ({
+        ...PASSING_REPORT,
+        provider: opts.provider,
+        model: opts.model,
+        transport: opts.transport,
+        results: [{
+          scenarioId: 'workflow.phase.workflow-persistence-roundtrip',
+          category: 'phase',
+          classification: 'deterministic',
+          phase: 'workflow',
+          status: 'pass',
+          durationMs: 1,
+        } as HarnessScenarioResult],
+        countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+      }),
+      writeCertificationFn: (_repoDir, artifact) => {
+        written.push(`${artifact.provider}/${artifact.model}`);
+        return `/repo/${artifact.provider}/${artifact.model}/${artifact.suiteVersion}.json`;
+      },
+      env: {},
+    });
+
+    assert.equal(result.failed.length, 0);
+    assert.equal(result.skipped.length, 1);
+    assert.equal(result.skipped[0].model, 'ox-alpha');
+    assert.match(result.skipped[0].reason ?? '', /OPENROUTER_LIVE_SMOKE=1/);
+    assert.equal(result.published.length, 3);
+    assert.equal(written.length, 3);
+  });
+
+  it('classifies harness failures as failed', async () => {
+    const result = await certifyAllNativeAgents({
+      provider: 'openai',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => FAILING_REPORT,
+      writeCertificationFn: () => '/repo/cert.json',
+    });
+
+    assert.equal(result.published.length, 0);
+    assert.equal(result.skipped.length, 0);
+    assert.deepEqual(result.failed.map((entry) => entry.model), ['gpt-4o']);
   });
 });

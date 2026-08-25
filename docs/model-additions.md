@@ -36,6 +36,13 @@ Every canonical entry in `DEFAULT_MODEL_REGISTRY` must include:
 Repository-local `modelRegistry.models.<id>` overrides are no longer accepted.
 Canonical global registry entries must provide the complete metadata above.
 
+The authoritative registry data lives in
+`shared/fixtures/model-registry.v1.json` and is projected by
+`shared/lib/model-registry-loader.ts` into `DEFAULT_MODEL_REGISTRY`. Keep model
+entries, ladders, OpenRouter launch mappings, identity metadata, and lineage in
+the catalog; do not update the generated/effective TypeScript projection by
+text replacement.
+
 ## Admission Criteria
 
 A model may only claim stages it can run. For each claimed
@@ -68,6 +75,13 @@ Retire models by keeping their registry entry and setting
 ID, pricing, or certification identity, because historical eval records use
 those mappings for attribution.
 
+When a retired model has a future launch replacement, declare
+`identity.lineage.successor` on the retired entry and
+`identity.lineage.predecessors` on the replacement. The successor must exist and
+must not be provisional. Lineage resolution is only for future route intent at
+external-router and cache-restoration boundaries; it must not rewrite raw eval
+or historical performance records.
+
 For native OpenRouter models, also set the launch-priority fixture row to
 `status: "deprecated"` and remove retired aliases from smoke watchlists. A model
 with `toolSupport: "none"` is never selectable for Wavemill stages because every
@@ -84,6 +98,37 @@ from the current OpenRouter catalog. It also flags declared context windows that
 exceed the provider catalog and declared tool support when the provider catalog
 omits tool support. The CI workflow runs this audit daily and on demand. Retired
 aliases may appear in the report as expected non-selectable findings.
+
+## Provisional Explicit-Native OpenRouter Models
+
+Use a provisional identity when OpenRouter exposes a useful native model whose
+final provider family, vendor lineage, pricing, or quality profile is not yet
+verified. The Wavemill alias must be stable, but the provider wire ID remains
+the exact OpenRouter ID in `supportedModel.providerNativeId`.
+
+For provisional entries:
+
+- Set `identity.status: "provisional"`, `identity.family: "unknown"`, and
+  `identity.evidencePolicy: "held"`.
+- Keep every `qualityScores` value at `0`, set
+  `defaultLadderEligible: false`, and set
+  `supportedModel.routingEligible: false`.
+- Preserve observed zero input/output pricing only when the live catalog
+  advertises zero. Leave cache read/write prices absent when the provider does
+  not advertise them.
+- Do not encode rumored vendor or model-family lineage. Add lineage only after
+  a verified successor is available.
+- Require live OpenRouter smoke before publishing a global certification
+  artifact. A fresh `workflow` certificate can satisfy planner, coder, and
+  reviewer native phase gates through the normal certification phase ordering,
+  but it does not make the model eligible for automatic routing.
+- Do not run launch-priority `--persist` for held provisional identities; those
+  observations are operational only and must not feed performance consumers.
+
+Ox Alpha follows this path as alias `ox-alpha` with wire ID
+`stealth/ox-alpha`. Roll back a provisional native model by changing its
+lifecycle to `blocked` and its launch-priority status to `deprecated`; keep the
+identity and certification history for audit.
 
 ## Family Aliases
 

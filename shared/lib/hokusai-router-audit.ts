@@ -21,6 +21,7 @@ import { findKNearest, loadStageAwareEvalRecords, type ScoredNeighbor } from './
 import type { EvalRecord, TaskDescriptor } from './eval-schema.ts';
 import { recordStageModel, type ChallengeStage } from './challenge-scheduler.ts';
 import { DIVERSITY_STAGES, resolveCoverageConfig, type StageShareEntry } from './router-diversity.ts';
+import { partitionEvidence } from './model-evidence-policy.ts';
 
 export type AuditStageRole = 'planner' | 'coder' | 'reviewer';
 
@@ -119,6 +120,8 @@ export interface HokusaiAuditReport {
   dryRun: boolean;
   redacted: boolean;
   corpusRecords: number;
+  excludedRecords: number;
+  exclusionReasonCounts: Record<string, number>;
   sampledRecords: number;
   successfulResponses: number;
   failures: AuditFailure[];
@@ -639,7 +642,8 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
   const timeoutMs = options.timeoutMs ?? config.timeout ?? DEFAULT_HOKUSAI_TIMEOUT_MS;
   const fetchFn = options.fetchFn ?? fetch;
   const coverage = resolveCoverageConfig({ ...getRouterConfig(repoDir).coverage, maxStageShare: options.maxShare });
-  const corpus = loadStageAwareEvalRecords({ repoDir });
+  const evidencePartition = partitionEvidence(loadStageAwareEvalRecords({ repoDir }), 'hokusai_audit');
+  const corpus = evidencePartition.eligible;
   const sampled = stratifiedSampleRecords(corpus, options.sample ?? 100);
   const requests = buildAuditRequests(sampled, { repoDir, redact: options.redact !== false });
   const constructionFailures = requestConstructionFailures(sampled);
@@ -653,6 +657,8 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
       dryRun: true,
       redacted: options.redact !== false,
       corpusRecords: corpus.length,
+      excludedRecords: evidencePartition.excluded.length,
+      exclusionReasonCounts: evidencePartition.reasonCounts,
       sampledRecords: sampled.length,
       successfulResponses: 0,
       failures: constructionFailures,
@@ -733,6 +739,8 @@ export async function runHokusaiRouterAudit(options: HokusaiAuditOptions = {}): 
     dryRun: false,
     redacted: options.redact !== false,
     corpusRecords: corpus.length,
+    excludedRecords: evidencePartition.excluded.length,
+    exclusionReasonCounts: evidencePartition.reasonCounts,
     sampledRecords: sampled.length,
     successfulResponses: recommendations.length,
     failures,
@@ -783,6 +791,13 @@ function formatPercent(value: number): string {
 export function formatHokusaiAuditReport(report: HokusaiAuditReport): string {
   const lines: string[] = [];
   lines.push(`Hokusai router audit — ${report.successfulResponses}/${report.sampledRecords} responses from ${report.corpusRecords} corpus records`);
+  if (report.excludedRecords > 0) {
+    const reasons = Object.entries(report.exclusionReasonCounts)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(', ');
+    lines.push(`Excluded held evidence: ${report.excludedRecords}${reasons ? ` (${reasons})` : ''}`);
+  }
   lines.push(`Endpoint: ${report.endpoint}`);
   lines.push(`Redacted: ${report.redacted ? 'yes' : 'no'}${report.dryRun ? ' (dry run)' : ''}`);
   lines.push('');

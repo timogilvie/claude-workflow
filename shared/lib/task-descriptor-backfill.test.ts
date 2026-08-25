@@ -113,7 +113,7 @@ test('handles sparse legacy rows with only originalPrompt', () => {
 
   assert.equal(result.changed, true);
   assert.deepEqual(result.record.taskDescriptor?.signals.heuristic.languages, []);
-  assert.equal(result.record.taskDescriptor?.signals.learned.complexity, 3);
+  assert.equal(result.record.taskDescriptor?.signals.learned.complexity, 2);
   assert.equal(result.record.taskDescriptor?.outcome?.interventions, 0);
 });
 

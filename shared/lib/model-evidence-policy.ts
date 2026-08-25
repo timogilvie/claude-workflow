@@ -19,7 +19,8 @@ export type EvidenceHoldReason =
   | 'provisional_model_identity'
   | 'provisional_candidate_decision'
   | 'legacy_missing_attribution'
-  | 'registry_provisional_fallback';
+  | 'registry_provisional_fallback'
+  | 'provisional-observation-only';
 
 export interface EvidenceDecision {
   eligible: boolean;
@@ -114,6 +115,33 @@ function makeDecision(reasons: Set<EvidenceHoldReason>, roles: Set<RoutingRole>)
   };
 }
 
+function addExecutedRegistryFallback(
+  record: EvalRecord,
+  registry: ModelRegistry,
+  reasons: Set<EvidenceHoldReason>,
+  affectedRoles: Set<RoutingRole>,
+  reason: EvidenceHoldReason,
+): void {
+  for (const ref of extractExecutedModelRefs(record)) {
+    if (isProvisionalModelId(ref.modelId, registry)) {
+      reasons.add(reason);
+      affectedRoles.add(ref.role);
+    }
+  }
+}
+
+function addCandidateRegistryFallback(
+  record: EvalRecord,
+  registry: ModelRegistry,
+  reasons: Set<EvidenceHoldReason>,
+): void {
+  for (const ref of extractCandidateModelRefs(record)) {
+    if (isProvisionalModelId(ref.modelId, registry)) {
+      reasons.add('provisional_candidate_decision');
+    }
+  }
+}
+
 export function evaluateEvidenceEligibility(
   record: EvalRecord,
   use: EvidenceUse,
@@ -122,10 +150,18 @@ export function evaluateEvidenceEligibility(
   const reasons = new Set<EvidenceHoldReason>();
   const affectedRoles = new Set<RoutingRole>();
   const attribution = record.modelIdentityAttribution;
+  const registry = opts.registry ?? DEFAULT_MODEL_REGISTRY;
+  const shouldFallback = opts.strict === true || STRICT_FALLBACK_USES.has(use);
+  const executedFallbackReason: EvidenceHoldReason = use === 'launch_priority_persistence'
+    ? 'provisional-observation-only'
+    : 'registry_provisional_fallback';
+  const attributedExecutedReason: EvidenceHoldReason = use === 'launch_priority_persistence'
+    ? 'provisional-observation-only'
+    : 'provisional_model_identity';
 
   if (attribution) {
     for (const role of attribution.provisionalRoles) {
-      reasons.add('provisional_model_identity');
+      reasons.add(attributedExecutedReason);
       affectedRoles.add(role);
     }
     if (
@@ -134,20 +170,22 @@ export function evaluateEvidenceEligibility(
     ) {
       reasons.add('provisional_candidate_decision');
     }
+    if (shouldFallback) {
+      addExecutedRegistryFallback(record, registry, reasons, affectedRoles, executedFallbackReason);
+      if (DECISION_TRAINING_USES.has(use)) {
+        addCandidateRegistryFallback(record, registry, reasons);
+      }
+    }
     return makeDecision(reasons, affectedRoles);
   }
 
-  const shouldFallback = opts.strict === true || STRICT_FALLBACK_USES.has(use);
   if (!shouldFallback) {
     return emptyDecision();
   }
 
-  const registry = opts.registry ?? DEFAULT_MODEL_REGISTRY;
-  for (const ref of extractExecutedModelRefs(record)) {
-    if (isProvisionalModelId(ref.modelId, registry)) {
-      reasons.add('registry_provisional_fallback');
-      affectedRoles.add(ref.role);
-    }
+  addExecutedRegistryFallback(record, registry, reasons, affectedRoles, executedFallbackReason);
+  if (DECISION_TRAINING_USES.has(use)) {
+    addCandidateRegistryFallback(record, registry, reasons);
   }
   return makeDecision(reasons, affectedRoles);
 }

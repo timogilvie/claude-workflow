@@ -121,6 +121,44 @@ test('detectSurvivingChangeWarnings reports history-only PRs whose added files a
   }
 });
 
+test('detectCrossPrReverts flags restoring the parent version of a file modified by a recent integration PR', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'router.ts', 'export const timeout = 30;\n', 'Add router');
+    const branchBase = git(repoDir, 'rev-parse HEAD');
+    git(repoDir, 'checkout -b pr-438');
+    commitFile(repoDir, 'router.ts', 'export const timeout = 5;\n', 'Bound fallback timeout');
+    git(repoDir, 'checkout auto/integration');
+    const mergeCommit = mergePrBranch(repoDir, 'pr-438', 438, 'Bound queue classifier fallback ladder');
+
+    git(repoDir, `checkout -b task/stale-review ${branchBase}`);
+    commitFile(repoDir, 'task.txt', 'task work\n', 'Task work');
+    const findings = detectCrossPrReverts({
+      repoDir,
+      baseRef: branchBase,
+      headRef: 'HEAD',
+      integrationRef: 'auto/integration',
+    });
+
+    assert.deepEqual(findings, [
+      {
+        prNumber: 438,
+        title: 'Merge pull request #438 from test/pr-438',
+        mergeCommit,
+        files: [
+          {
+            path: 'router.ts',
+            status: 'modified',
+            confidence: 'reverted',
+          },
+        ],
+      },
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
 test('detectCrossPrReverts ignores non-merge integration commits even when their subject mentions a PR number', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

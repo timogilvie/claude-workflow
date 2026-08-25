@@ -16,6 +16,9 @@ import {
 import { runOpenRouterSmoke, type SmokeReport } from '../shared/lib/openrouter-smoke.ts';
 import { runTool, resolveRepoDir, type ParsedArgs } from '../shared/lib/tool-runner.ts';
 import { runWavemillRouterEval } from '../src/evaluation/adapters/wavemill-router-adapter.ts';
+import { evaluateEvidenceEligibility } from '../shared/lib/model-evidence-policy.ts';
+import type { EvalRecord } from '../shared/lib/eval-schema.ts';
+import type { EvidenceDecision } from '../shared/lib/model-evidence-policy.ts';
 import {
   createDryRunEntries,
   createDryRunTransport,
@@ -150,6 +153,9 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
     return !listEffectiveModelsForStage(effectiveStage, { repoDir }).models.includes(model.wavemillAlias);
   });
 
+  const registryModel = getModel(registry, model.wavemillAlias);
+  const isProvisional = registryModel?.identity?.status === 'provisional';
+
   return [
     {
       name: 'fixture',
@@ -164,6 +170,13 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
         : `${model.wavemillAlias} is missing from the effective model registry.`,
     },
     {
+      name: 'provisional-status',
+      status: isProvisional ? 'blocker' : 'ok',
+      detail: isProvisional
+        ? `${model.wavemillAlias} has provisional identity status; persistence is not permitted.`
+        : `${model.wavemillAlias} has supported identity status; persistence is permitted.`,
+    },
+    {
       name: 'global-effective-pools',
       status: routerMissingRoles.length === 0 ? 'ok' : 'blocker',
       detail: routerMissingRoles.length === 0
@@ -171,6 +184,65 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
         : `${model.wavemillAlias} is missing from global effective-model pools for: ${routerMissingRoles.join(', ')}.`,
     },
   ];
+}
+
+function launchPriorityPersistenceProbe(modelId: string): EvalRecord {
+  return {
+    id: `launch-priority-persistence:${modelId}`,
+    schemaVersion: '1.43.0',
+    originalPrompt: `Launch-priority persistence probe for ${modelId}`,
+    modelId,
+    modelVersion: modelId,
+    attempted_model: modelId,
+    score: 1,
+    scoreBand: 'Strong',
+    timeSeconds: 0,
+    timestamp: new Date(0).toISOString(),
+    interventionRequired: false,
+    interventionCount: 0,
+    interventionDetails: [],
+    rationale: 'persistence eligibility probe',
+    taskDescriptor: {
+      schema_version: '1.0',
+      signals: {
+        heuristic: {
+          task_type: 'feature',
+          languages: [],
+          framework_tags: [],
+          files_touched: 0,
+          repo_size_loc: 0,
+          description_tokens: 0,
+          is_greenfield: false,
+          has_migration: false,
+          has_ui: false,
+          has_tests: false,
+          cross_service: false,
+        },
+        learned: {
+          complexity: 1,
+          domain: 'devtools',
+          risk_flags: [],
+        },
+      },
+      constraints: {
+        models_available: [modelId],
+        objective: 'balanced',
+      },
+      stages: {
+        planner: { model: modelId },
+        coder: { model: modelId },
+        reviewer: { model: modelId },
+      },
+    },
+  } as EvalRecord;
+}
+
+export function evaluateLaunchPriorityPersistence(modelId: string): EvidenceDecision {
+  return evaluateEvidenceEligibility(
+    launchPriorityPersistenceProbe(modelId),
+    'launch_priority_persistence',
+    { strict: true },
+  );
 }
 
 async function runDrySmoke(model: LaunchPriorityModel, prompt: string): Promise<SmokeReport[]> {
@@ -264,10 +336,14 @@ export async function runCertifyLaunchPriorityModelCommand(args: CliArgs): Promi
   const target = parseInteger('--target', args.target, 1);
   const catalog = loadLaunchPriorityList();
   const model = resolveModel(args.model, catalog);
+  const persistenceEvidence = evaluateLaunchPriorityPersistence(model.wavemillAlias);
   const reportPath = resolveOutPath(repoDir, (args.out as string | undefined) ?? defaultReportPath(model.wavemillAlias));
   const auditPath = resolveOutPath(repoDir, (args['audit-out'] as string | undefined) ?? DEFAULT_AUDIT_OUT);
   const prompt = (args.prompt as string | undefined) || 'ping';
   const persist = args.persist === true;
+  if (persist && !persistenceEvidence.eligible) {
+    throw new Error(`Refusing to persist provisional launch-priority evidence: ${persistenceEvidence.reasons.join(', ')}`);
+  }
   const beforeAudit = auditLaunchPriorityCoverage({ catalog, repoDir, coverageTargetPerRole: target });
   const beforeRows = evidenceRows(beforeAudit, model.wavemillAlias);
   const beforeByRole = rowsByRole(beforeRows);

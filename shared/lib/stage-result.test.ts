@@ -20,6 +20,7 @@ import {
   updateStageResult,
   extractReviewOutcome,
   getResultFilePath,
+  isInfrastructureReviewFailure,
   isValidStage,
   isValidStatus,
   reviewResultPassed,
@@ -554,6 +555,7 @@ describe('review outcome helpers', () => {
       blockerCount: 0,
       warningCount: 1,
       reviewToolError: undefined,
+      failureCategory: undefined,
       diagnostics: undefined,
     });
   });
@@ -596,8 +598,64 @@ describe('review outcome helpers', () => {
       blockerCount: 0,
       warningCount: 3,
       reviewToolError: undefined,
+      failureCategory: undefined,
       diagnostics: undefined,
     });
+  });
+
+  it('extracts failureCategory from flat and nested review artifacts', () => {
+    const flat = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        exitCode: 0,
+        verdict: 'not_ready',
+        iterations: 1,
+        blockerCount: 1,
+        failureCategory: 'native-runtime-unavailable',
+      },
+    });
+    assert.equal(extractReviewOutcome(flat)?.failureCategory, 'native-runtime-unavailable');
+    assert.equal(isInfrastructureReviewFailure(flat), true);
+
+    const nested = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        review: {
+          exitCode: 0,
+          verdict: 'not_ready',
+          iterations: 1,
+          blockerCount: 1,
+          failureCategory: 'native-review-prompt-missing',
+        },
+      } as StageResult['artifacts'],
+    });
+    assert.equal(extractReviewOutcome(nested)?.failureCategory, 'native-review-prompt-missing');
+    assert.equal(isInfrastructureReviewFailure(nested), true);
+  });
+
+  it('classifies only retryable infrastructure review failures', () => {
+    assert.equal(isInfrastructureReviewFailure({
+      type: 'review',
+      verdict: 'not_ready',
+      failureCategory: 'native-runtime-unavailable',
+    }), true);
+    assert.equal(isInfrastructureReviewFailure({
+      verdict: 'error',
+      reviewToolError: 'spawnSync /bin/bash ETIMEDOUT',
+    }), true);
+    assert.equal(isInfrastructureReviewFailure({
+      type: 'review',
+      verdict: 'not_ready',
+      blockerCount: 1,
+    }), false);
+    assert.equal(isInfrastructureReviewFailure({
+      type: 'review',
+      verdict: 'not_ready',
+      failureCategory: 'native-review-malformed-response',
+    }), false);
   });
 });
 

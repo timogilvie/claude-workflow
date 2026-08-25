@@ -787,6 +787,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
       | if $agent != "" then .tasks[$issue].agent = $agent else . end
@@ -994,6 +998,56 @@ challenge_pair_record_exists() {
   ' "$records_file" >/dev/null 2>&1
 }
 
+challenge_pr_number_from_url() {
+  local url="${1:-}"
+  if [[ "$url" =~ /pull/([0-9]+)$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+  else
+    printf '0\n'
+  fi
+}
+
+cleanup_forfeit_loser_from_resolution() {
+  local resolve_output="$1"
+  local outcome pair_id winner primary_pr_url challenger_pr_url primary_pr challenger_pr
+  local loser_key winner_pr loser_pr loser_slug evidence_id
+  outcome=$(jq -r '.outcome // .record.comparisonOutcome // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ "$outcome" == "forfeit" ]] || return 0
+  pair_id=$(jq -r '.record.challengePairId // empty' <<<"$resolve_output" 2>/dev/null || true)
+  winner=$(jq -r '.record.winner // empty' <<<"$resolve_output" 2>/dev/null || true)
+  evidence_id=$(jq -r '.record.timestamp // empty' <<<"$resolve_output" 2>/dev/null || true)
+  [[ -n "$pair_id" && -n "$winner" && -n "$evidence_id" ]] || return 0
+
+  primary_pr_url=$(jq -r '.record.primaryPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  challenger_pr_url=$(jq -r '.record.challengerPrUrl // empty' <<<"$resolve_output" 2>/dev/null || true)
+  primary_pr=$(challenge_pr_number_from_url "$primary_pr_url")
+  challenger_pr=$(challenge_pr_number_from_url "$challenger_pr_url")
+  if [[ "$winner" == "primary" ]]; then
+    winner_pr="$primary_pr"
+    loser_pr="$challenger_pr"
+    loser_key="${pair_id}_c"
+  elif [[ "$winner" == "challenger" ]]; then
+    winner_pr="$challenger_pr"
+    loser_pr="$primary_pr"
+    loser_key="$pair_id"
+  else
+    return 0
+  fi
+
+  [[ "$winner_pr" =~ ^[0-9]+$ && "$loser_pr" =~ ^[0-9]+$ ]] || return 0
+  [[ "$winner_pr" -gt 0 && "$loser_pr" -gt 0 && "$winner_pr" != "$loser_pr" ]] || return 0
+
+  if [[ "$(pr_state "$loser_pr")" == "OPEN" ]]; then
+    gh pr close "$loser_pr" \
+      --comment "Closing losing arm of pair $pair_id (forfeit resolution)." 2>/dev/null || true
+    log "status" "Closed losing forfeit PR #$loser_pr"
+  fi
+  loser_slug=$(get_task_meta "$loser_key" "slug")
+  if [[ -n "$loser_slug" ]]; then
+    cleanup_completed_task "$loser_key" "$loser_slug" "challenge forfeit loser"
+  fi
+}
+
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
   local primary_key="$pair_id" challenger_key="${pair_id}_c"
@@ -1031,6 +1085,7 @@ resolve_challenge_pair_hard_failure() {
       if [[ "$resolve_status" == "resolved" ]]; then
         resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
         log_warn "challenge pair $pair_id resolved via $resolve_reason"
+        cleanup_forfeit_loser_from_resolution "$resolve_output"
       fi
       return 0
     fi
@@ -1249,12 +1304,13 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
   fi
 }
-
 
 get_task_phase() {
   local issue="$1"
@@ -1761,9 +1817,41 @@ trap cleanup_on_exit INT TERM
 init_state_ledger
 
 
+cleanup_terminal_missing_worktree_entries() {
+  local terminal_issues
+  terminal_issues=$(jq -r '
+    (.tasks // {})
+    | to_entries[]
+    | select((.value.worktree // "") != "")
+    | select(.value.status as $status
+        | ["aborted","merged","completed-external","complete","completed","closed","done"] | index($status))
+    | select((.value.worktree | type) == "string")
+    | "\(.key)|\(.value.worktree)|\(.value.status)"
+  ' "$STATE_FILE" 2>/dev/null || true)
+  [[ -n "$terminal_issues" ]] || return 0
+
+  local issue worktree status dropped=0
+  while IFS='|' read -r issue worktree status; do
+    [[ -n "$issue" && -n "$worktree" ]] || continue
+    if [[ ! -e "$worktree" ]]; then
+      remove_task_state "$issue"
+      dropped=$((dropped + 1))
+      log "debug" "  Dropped terminal task state for $issue ($status, missing worktree: $worktree)"
+    fi
+  done <<<"$terminal_issues"
+
+  if (( dropped > 0 )); then
+    local entry_label="entries"
+    (( dropped == 1 )) && entry_label="entry"
+    log "debug" "  Dropped $dropped terminal task state $entry_label with missing worktrees"
+  fi
+}
+
 # Prune stale tasks from previous runs
 # Check each task: if PR merged or branch deleted, clean up worktree + state
 cleanup_stale_tasks() {
+  cleanup_terminal_missing_worktree_entries
+
   local stale_issues
   stale_issues=$(jq -r '.tasks | to_entries[] | .key' "$STATE_FILE" 2>/dev/null)
   [[ -z "$stale_issues" ]] && return 0
@@ -2022,6 +2110,10 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
     log "status" "No backlog items returned from Linear."
     exit 0
   fi
+
+  # Filter out parent issues (epics) - HOK-2867
+  # Warnings go to stderr, filtered JSON goes to stdout
+  BACKLOG="$(filter_parent_issues "$BACKLOG")"
 
   CANDIDATES="$(pick_candidates "$BACKLOG")"
   if [[ -z "$CANDIDATES" ]]; then
@@ -3231,7 +3323,6 @@ handle_agent_error_recovery() {
 
   now="$(date +%s)"
   staleness=$(( now - hook_ts ))
-  (( staleness < 300 )) || return 0
 
   if [[ "$hook_state" != "error" ]]; then
     if [[ -f "$retry_file" ]] && [[ "$hook_state" == "working" || "$hook_state" == "waiting" || "$hook_state" == "idle" ]]; then
@@ -3250,11 +3341,22 @@ handle_agent_error_recovery() {
 
   retry_count="$(get_retry_count "$SESSION" "$issue")"
   max_retries=4
-  if (( retry_count >= max_retries )); then
+  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( staleness >= 300 )); then
+    if (( retry_count > 0 )); then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry process stopped updating after a transient error"
+    fi
     return 0
   fi
 
-  last_retry_ts="$(get_retry_timestamp "$SESSION" "$issue")"
+  if (( retry_count >= max_retries )); then
+    time_since_last_retry=$(( now - last_retry_ts ))
+    if (( hook_ts >= last_retry_ts )) || [[ "$time_since_last_retry" -ge 300 ]]; then
+      terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "transient retries exhausted"
+    fi
+    return 0
+  fi
+
   backoff_delay="$(get_backoff_delay $((retry_count + 1)))"
   time_since_last_retry=$(( now - last_retry_ts ))
 
@@ -3273,7 +3375,63 @@ handle_agent_error_recovery() {
     log "debug" "  Resume command sent to $issue"
   else
     log_error "  Failed to resume $issue after transient error"
+    terminalize_transient_retry_failure "$issue" "$agent_cmd" "$error_detail" "retry resume command failed"
   fi
+}
+
+terminalize_transient_retry_failure() {
+  local issue="$1" agent_cmd="${2:-}" error_detail="${3:-}" terminal_reason="${4:-transient retry failed}"
+  local slug wt_dir phase result_stage feature_dir is_challenge pr model notes artifacts_json win next_action
+
+  [[ -n "$issue" ]] || return 1
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  wt_dir=$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')
+  [[ -z "$wt_dir" && -n "$slug" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+  phase=$(read_state_value "coding" --arg i "$issue" '.tasks[$i].phase // "coding"')
+  case "$phase" in
+    planning|coding|review|ready) result_stage="$phase" ;;
+    *) result_stage="coding" ;;
+  esac
+  [[ -n "$wt_dir" && -n "$slug" ]] && feature_dir="${wt_dir}/features/${slug}"
+
+  next_action="transient upstream failure persisted, retire the challenge arm and relaunch if needed"
+  notes="Native ${result_stage} failed after retry recovery (${terminal_reason}): ${error_detail}. Next: ${next_action}"
+  artifacts_json="$(jq -cn \
+    --arg failureKind "provider-transient-error" \
+    --arg detail "$error_detail" \
+    --arg terminalReason "$terminal_reason" \
+    --arg nextAction "$next_action" \
+    '{type:"transientRetryFailure", failureKind:$failureKind, detail:$detail, terminalReason:$terminalReason, nextAction:$nextAction}' \
+    2>/dev/null || printf '{}')"
+
+  if [[ -n "$feature_dir" ]]; then
+    model="$(stage_result_field "$feature_dir" "$result_stage" "model" 2>/dev/null || true)"
+    write_stage_result "$feature_dir" "$result_stage" "failed" "$agent_cmd" "$model" "$notes" "$artifacts_json"
+  fi
+
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then
+      .
+    else
+      .tasks[$issue].status = "error"
+      | .tasks[$issue].retryFailure = $reason
+      | .tasks[$issue].retryFailureDetail = $detail
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end
+  ' --arg issue "$issue" --arg reason "$terminal_reason" --arg detail "$error_detail" >/dev/null 2>&1 || true
+
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  if [[ "$is_challenge" == "true" && -z "$pr" && -n "$feature_dir" ]]; then
+    win="${issue}-${slug}"
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$result_stage" "$model" \
+      "retry_exhausted:provider-transient-error" "$notes" "$next_action" || true
+    cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$result_stage" "$terminal_reason" || true
+    log_warn "$issue → challenge arm failed after transient retry recovery. Pair quarantined. $next_action"
+  else
+    log_warn "$issue → transient retry recovery reached terminal state: $terminal_reason"
+  fi
+  return 0
 }
 
 transient_error_recovery_pending() {
@@ -3350,6 +3508,10 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
 
   # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
   local _trace_id_for_state=""
@@ -4248,7 +4410,9 @@ remove_task_state() {
 set_task_phase() {
   local issue="$1" phase="$2"
   if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue].phase = $phase | .tasks[$issue].updated = (now | todate)' \
+     '.tasks[$issue].phase = $phase
+      | .tasks[$issue].updated = (now | todate)
+      | if $phase == "aborted" then .tasks[$issue].status = "aborted" else . end' \
      --arg issue "$issue" --arg phase "$phase"; then
     log_warn "set_task_phase: failed to update $issue"
   fi
@@ -4507,6 +4671,7 @@ challenge_pair_record_exists() {
       ] | length == 0)
   ' "$records_file" >/dev/null 2>&1
 }
+
 
 resolve_challenge_pair_hard_failure() {
   local pair_id="$1"
@@ -7014,6 +7179,12 @@ emit_native_terminal_failure_attention() {
   if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
     wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
   fi
+  if [[ "$is_challenge" == "true" ]]; then
+    if cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "native terminal failure" 2>/dev/null; then
+      log_warn "$issue → Native ${stage} failed (${failure_kind}). Pair quarantined. ${next_action}"
+      return 0
+    fi
+  fi
   set_window_attention_state "$win" "needs-user"
   log_warn "$issue → Native ${stage} failed (${failure_kind}). ${next_action}"
   active_count=$((active_count + 1))
@@ -7054,6 +7225,7 @@ emit_challenge_stage_failure_quarantine() {
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
 
   log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
+  cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "terminal stage failure:${failure_kind}" || true
   return 0
 }
 
@@ -7998,7 +8170,7 @@ _restore_inflight_task_window_if_missing() {
 #   $5 = slug (optional)
 #   $6 = issue ID (optional)
 _launch_agent_in_pane() {
-  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}"
+  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}" semantic_phase="${7:-}"
   local session window
   if [[ "$target" == @* ]]; then
     session="$SESSION"
@@ -8019,12 +8191,14 @@ _launch_agent_in_pane() {
     feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
-  if declare -F agent_normalize_launch_phase >/dev/null 2>&1; then
+  launch_phase="$semantic_phase"
+  if [[ -z "$launch_phase" ]] && declare -F agent_normalize_launch_phase >/dev/null 2>&1; then
     launch_phase="$(agent_normalize_launch_phase "$window" "$prompt_file" 2>/dev/null || true)"
   fi
-  [[ -n "$launch_phase" ]] || launch_phase="$window"
-  varied_launch_stage="$(challenge_stage_for_launch_env "$launch_phase")"
-  varied_launch_model="$(challenge_varied_stage_model "$issue" "$varied_launch_stage" 2>/dev/null || true)"
+  if [[ -n "$launch_phase" ]]; then
+    varied_launch_stage="$(challenge_stage_for_launch_env "$launch_phase")"
+    varied_launch_model="$(challenge_varied_stage_model "$issue" "$varied_launch_stage" 2>/dev/null || true)"
+  fi
 
   # Export wavemill context environment variables for hook protocol
   if declare -F get_linear_issue_id >/dev/null 2>&1; then
@@ -8874,7 +9048,7 @@ _write_cross_pr_diagnostic() {
   tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
 
   if [[ -f "$result_file" ]]; then
-    jq --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
+    jq -c --argjson diag "$diag_json" '. + {crossPrDiagnostic: $diag}' "$result_file" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$result_file"
   else
     printf '{"crossPrDiagnostic":%s}\n' "$diag_json" > "$tmp" \
@@ -8883,12 +9057,79 @@ _write_cross_pr_diagnostic() {
   rm -f "$tmp"
 }
 
+write_cross_pr_guard_ready_result() {
+  local state_dir="$1" pr_number="$2" checked_head_sha="$3" status="$4" reason="$5" raw_result="${6:-}"
+  local result_file="$state_dir/.ready-result.json"
+  local now tmp
+
+  now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  mkdir -p "$state_dir"
+  tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || return 0
+
+  jq -cn \
+    --arg now "$now" \
+    --argjson pr_number "$pr_number" \
+    --arg checked_head_sha "$checked_head_sha" \
+    --arg status "$status" \
+    --arg reason "$reason" \
+    --arg raw_result "$raw_result" '
+      ($raw_result | fromjson? // {}) as $parsed
+      | {
+          stage: "ready",
+          status: "failed",
+          startedAt: $now,
+          finishedAt: $now,
+          agent: "",
+          model: "",
+          notes: $reason,
+          failureReason: $reason,
+          artifacts: {
+            type: "ready",
+            verdict: "fail",
+            prNumber: $pr_number,
+            readyHeadSha: $checked_head_sha,
+            crossPrGuard: {
+              source: "cross-pr-revert-guard",
+              status: $status,
+              checkedHeadSha: $checked_head_sha,
+              reason: $reason,
+              result: $parsed,
+              toolError: ($parsed.toolError // null)
+            }
+          }
+        }
+      | .artifacts.crossPrGuard |= with_entries(select(.value != null))
+    ' > "$tmp" 2>/dev/null && mv "$tmp" "$result_file"
+  rm -f "$tmp"
+}
+
+clear_cross_pr_guard_ready_evidence() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  local tmp
+
+  if [[ -f "$result_file" ]] && jq -e '.artifacts.crossPrGuard or .crossPrDiagnostic' "$result_file" >/dev/null 2>&1; then
+    tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || tmp=""
+    if [[ -n "$tmp" ]]; then
+      jq 'del(.artifacts.crossPrGuard, .crossPrDiagnostic)' "$result_file" > "$tmp" 2>/dev/null && mv "$tmp" "$result_file"
+      rm -f "$tmp"
+    fi
+  fi
+
+  if [[ -f "$state_dir/.needs-attention" ]] \
+    && { grep -Fq 'Cross-PR revert guard' "$state_dir/.needs-attention" \
+      || grep -Fq 'without explicit acknowledgement' "$state_dir/.needs-attention"; }; then
+    rm -f "$state_dir/.needs-attention"
+  fi
+}
+
 cross_pr_revert_gate_allows_merge() {
   local issue="$1" state_dir="$2" wt_dir="$3" pr_number="$4" base_branch="${5-}"
-  local result rc prs files message stderr_file raw_error classification
+  local result rc prs files message stderr_file raw_error classification checked_head_sha
   local tool_stderr=""
   local extra_args=()
   raw_error=""
+  checked_head_sha=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
 
   [[ -n "$base_branch" ]] && extra_args+=(--base-ref "$base_branch" --integration-ref "$base_branch")
   stderr_file=$(mktemp 2>/dev/null) || stderr_file=""
@@ -8908,6 +9149,7 @@ cross_pr_revert_gate_allows_merge() {
   fi
 
   if [[ "$rc" -eq 0 ]]; then
+    clear_cross_pr_guard_ready_evidence "$state_dir"
     return 0
   fi
   tool_stderr="$raw_error"
@@ -8920,6 +9162,7 @@ cross_pr_revert_gate_allows_merge() {
     if [[ -n "$files" ]]; then
       message="$message Affected files: $files."
     fi
+    write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "blocked" "$message" "$result"
     write_ready_attention_file "$state_dir" "$message"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
       --state-dir "$state_dir" \
@@ -8948,6 +9191,7 @@ cross_pr_revert_gate_allows_merge() {
       message="$message Diagnostic: $diag_stderr"
     fi
 
+    write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "tool-error" "$message" "$result"
     write_ready_attention_file "$state_dir" "$message"
     _write_cross_pr_diagnostic "$state_dir" "$ref_name" "$cmd_class" "$diag_stderr"
     npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
@@ -8967,13 +9211,15 @@ cross_pr_revert_gate_allows_merge() {
     classification="ref-missing"
   fi
 
-  write_ready_attention_file "$state_dir" "Cross-PR revert guard failed for PR #$pr_number."
+  message="Cross-PR revert guard failed for PR #$pr_number."
+  write_cross_pr_guard_ready_result "$state_dir" "$pr_number" "$checked_head_sha" "tool-error" "$message" "$result"
+  write_ready_attention_file "$state_dir" "$message"
   npx tsx "$TOOLS_DIR/ready-preflight-diagnostic.ts" \
     --state-dir "$state_dir" \
     --stage "cross-pr-guard" \
     --tool "check-cross-pr-reverts" \
     --classification "$classification" \
-    --reason "Cross-PR revert guard failed for PR #$pr_number." \
+    --reason "$message" \
     --raw-error "$raw_error" \
     --exit-code "$rc" >/dev/null 2>&1 || true
   log_error "  Cross-PR revert guard failed for $issue (PR #$pr_number)"
@@ -9135,6 +9381,100 @@ review_result_passes_ready_gate() {
   ' "$review_file" >/dev/null 2>&1
 }
 
+review_result_infra_failure() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (
+      (($review.failureCategory // "") == "native-runtime-unavailable") or
+      (($review.failureCategory // "") == "native-review-prompt-missing") or
+      ((($review.verdict // "") == "error") and ((($review.reviewToolError // "") | tostring | length) > 0))
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_infra_retry_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.review-infra-retries"
+  if [[ -f "$count_file" ]] && [[ "$(cat "$count_file" 2>/dev/null || echo "")" =~ ^[0-9]+$ ]]; then
+    cat "$count_file"
+    return 0
+  fi
+  echo "0"
+}
+
+increment_review_infra_retry_count() {
+  local state_dir="$1"
+  local count
+  count=$(review_infra_retry_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.review-infra-retries"
+  echo "$count"
+}
+
+clear_review_infra_retry_state() {
+  local state_dir="$1"
+  rm -f "$state_dir/.review-infra-retries"
+}
+
+relaunch_review_after_infra_recovery() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6" pr_number="$7" state_dir="$8"
+  local review_file="$state_dir/.review-result.json"
+  local retry_count retry_max reviewer_agent reviewer_model review_mode contract_payload retry_number rc=0
+
+  retry_count=$(review_infra_retry_count "$state_dir")
+  retry_max="${WAVEMILL_REVIEW_INFRA_RETRY_MAX:-2}"
+  [[ "$retry_max" =~ ^[0-9]+$ ]] || retry_max=2
+  if (( retry_count >= retry_max )); then
+    write_ready_attention_file "$state_dir" "Review failed on infrastructure ${retry_count}/${retry_max} times for PR #$pr_number, manual re-review required."
+    log_error "  $issue: review infrastructure retry cap reached for PR #$pr_number (${retry_count}/${retry_max})"
+    return 1
+  fi
+
+  reviewer_agent="$(jq -r '.agent // empty' "$review_file" 2>/dev/null || echo "")"
+  reviewer_model="$(jq -r '.model // empty' "$review_file" 2>/dev/null || echo "")"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$AGENT_CMD"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
+
+  if ! agent_validate_phase_launch "$reviewer_agent" "review" "$reviewer_model" "$REPO_DIR"; then
+    write_ready_attention_file "$state_dir" "Review infrastructure is still unavailable for PR #$pr_number; waiting for reviewer runtime recovery."
+    log_error "  $issue: waiting for reviewer runtime recovery before re-reviewing PR #$pr_number"
+    return 1
+  fi
+
+  retry_number=$(increment_review_infra_retry_count "$state_dir")
+  review_mode="static"
+  if declare -F read_phase_config >/dev/null 2>&1; then
+    review_mode=$(read_phase_config "$state_dir" "review" "mode")
+    [[ -n "$review_mode" ]] || review_mode="static"
+  fi
+  contract_payload="$(jq -cn --arg agent "$reviewer_agent" --arg model "$reviewer_model" '{stageRole:"review",agent:$agent,model:$model}')"
+
+  if ! _prepare_recovery_phase_launch "$issue" "$slug" "review" "$state_dir" "$wt_dir" "$reviewer_agent" "$reviewer_model" "$contract_payload" "review"; then
+    write_ready_attention_file "$state_dir" "Could not prepare infrastructure re-review for PR #$pr_number."
+    return 1
+  fi
+
+  launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" \
+    "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$state_dir/.needs-attention"
+    log "status" "♻ $issue → review relaunched after infrastructure recovery (attempt ${retry_number}/${retry_max})"
+    return 6
+  fi
+  if [[ "$rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    return 2
+  fi
+  write_ready_attention_file "$state_dir" "Could not relaunch infrastructure re-review for PR #$pr_number (rc=$rc)."
+  return 1
+}
+
 review_result_summary() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
@@ -9208,10 +9548,29 @@ _launch_ready_remediation_attempt() {
   local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
   local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
+  local resolved_model
 
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+
+  resolved_model="$current_model"
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+
+  if [[ -z "$resolved_model" ]]; then
+    local no_model_artifacts_json
+    no_model_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
+      "candidate-progress")
+    write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$resolved_model" \
+      "No model configured for ready remediation" \
+      "$no_model_artifacts_json"
+    write_ready_attention_file "$state_dir" "Ready remediation cannot proceed without a configured model for PR #$pr_number."
+    log_error "  Failed to launch ready remediation agent for $issue (no model configured)"
+    return 1
+  fi
 
   prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
   build_ready_remediation_prompt \
@@ -9225,7 +9584,7 @@ _launch_ready_remediation_attempt() {
     "$failed_check_summary" \
     "$ready_result_file" > "$prompt_file"
 
-  _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$remediation_agent" "$resolved_model" "$prompt_file" "$slug" "$issue" "coding"
   launch_rc=$?
 
   if [[ "$launch_rc" -eq 0 ]]; then
@@ -9249,7 +9608,7 @@ _launch_ready_remediation_attempt() {
         remediationFailures: $remediation_failures
       }')
     remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
-    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
+    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$resolved_model" \
       "Ready remediation in progress for PR #$pr_number" \
       "$remediation_artifacts_json"
     rm -f "$state_dir/.needs-attention"
@@ -9262,9 +9621,9 @@ _launch_ready_remediation_attempt() {
   fi
 
   remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":$(( remediation_attempt_number - 1 )),\"remediationFailures\":${failed_check_names_json}}" \
+    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
     "candidate-progress")
-  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$resolved_model" \
     "Could not launch ready remediation agent" \
     "$remediation_failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
@@ -9276,7 +9635,7 @@ launch_ready_watchdog_remediation() {
   local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
   local failed_check_summary="$7" attempt_number="$8" max_attempts="$9" failed_check_names_json="${10}"
   local win state_dir status_file current_agent current_model current_head remediation_attempts remediation_launch_head
-  local ready_status checks_run checks_passed merge_status ready_result_file helper_rc
+  local ready_status checks_run checks_passed merge_status ready_result_file helper_rc resolved_model
 
   : "${SESSION:=wavemill}"
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
@@ -9286,6 +9645,12 @@ launch_ready_watchdog_remediation() {
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
   [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+
+  resolved_model="$current_model"
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
   remediation_attempts=$(ready_remediation_attempts "$state_dir")
   remediation_launch_head=$(ready_remediation_launch_head "$state_dir")
@@ -9348,6 +9713,11 @@ launch_ready_phase() {
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
   [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+  if [[ -z "$current_model" ]]; then
+    current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+    [[ -z "$current_model" ]] && current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+    [[ -z "$current_model" ]] && current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+  fi
   prior_ready_status=$(read_stage_status "$state_dir" "ready")
   prior_ready_verdict=$(ready_stage_pending_verdict "$state_dir")
   if [[ "$prior_ready_status" == "running" && "$prior_ready_verdict" == "pending" ]]; then
@@ -9359,12 +9729,17 @@ launch_ready_phase() {
   if ! review_result_passes_ready_gate "$state_dir"; then
     local review_summary
     review_summary="$(review_result_summary "$state_dir")"
+    if review_result_infra_failure "$state_dir"; then
+      relaunch_review_after_infra_recovery "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" "$state_dir"
+      return $?
+    fi
     strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
     write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
     log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
     return 1
   fi
 
+  clear_review_infra_retry_state "$state_dir"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -9433,7 +9808,7 @@ launch_ready_phase() {
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
-    _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+    _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue" "coding"
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
@@ -9566,7 +9941,7 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
-    log "debug" "  $issue: Restored ready labels for PR #$pr_number"
+    log "debug" "  $issue: Canonicalized ready labels for PR #$pr_number"
     log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
   fi
@@ -10562,6 +10937,82 @@ maybe_resolve_unresolvable_challenge_pair() {
   esac
 }
 
+resolve_pair_on_primary_merge() {
+  local issue="$1"
+  local pr="$2"
+  local role pair_id resolve_output resolve_status resolve_reason
+
+  role=$(get_task_meta "$issue" "challengeRole")
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  [[ "$role" == "primary" && -n "$pair_id" && -n "$pr" ]] || return 0
+
+  resolve_output=$(npx tsx "$TOOLS_DIR/resolve-primary-merged-pair.ts" \
+    --pair-id "$pair_id" \
+    --primary-pr "$pr" \
+    --repo-dir "$REPO_DIR" 2>/dev/null || true)
+  resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+
+  case "$resolve_status" in
+    resolved)
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      mark_challenge_compared "$pair_id" >/dev/null || true
+      log_warn "challenge pair $pair_id resolved automatically via $resolve_reason"
+      ;;
+    already-resolved)
+      mark_challenge_compared "$pair_id" "record" >/dev/null || true
+      log "status" "challenge pair $pair_id already resolved, primary merge cleanup continuing"
+      ;;
+    skipped|"")
+      resolve_reason=$(jq -r '.reason // "unknown"' <<<"$resolve_output" 2>/dev/null || echo "unknown")
+      log_warn "challenge pair $pair_id primary-merge resolver skipped: $resolve_reason"
+      ;;
+  esac
+}
+
+cleanup_merged_primary_challenge_task() {
+  local issue="$1" slug="$2" completion_reason="${3:-}"
+  local pr="${4:-}" role pair_id preserved
+
+  role=$(get_task_meta "$issue" "challengeRole")
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  if [[ "$role" != "primary" || -z "$pair_id" ]]; then
+    cleanup_completed_task "$issue" "$slug" "$completion_reason"
+    return $?
+  fi
+
+  preserved=$(jq -c \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg pr "$pr" \
+    --arg pair_id "$pair_id" \
+    '
+    (.tasks[$issue] // {}) as $task
+    | ($pr | tonumber? // $task.pr // $task.prNumber // null) as $merged_pr
+    | {
+        pr: $merged_pr,
+        prNumber: ($task.prNumber // $merged_pr),
+        branch: $task.branch,
+        slug: ($task.slug // $slug),
+        challengePairId: ($task.challengePairId // $pair_id),
+        challengeRole: ($task.challengeRole // "primary"),
+        challengeModel: $task.challengeModel,
+        evalCompleted: ($task.evalCompleted // true),
+        status: "merged",
+        phase: "merged"
+      }
+    | with_entries(select(.value != null))
+    ' "$STATE_FILE" 2>/dev/null || printf '{}')
+
+  cleanup_completed_task "$issue" "$slug" "$completion_reason" || return $?
+
+  if ! state_mutate "$STATE_FILE" \
+    '.tasks[$issue] = ($preserved + {updated: (now | todate)}) | .updated = (now | todate)' \
+    --arg issue "$issue" \
+    --argjson preserved "$preserved"; then
+    log_warn "cleanup_merged_primary_challenge_task: failed to preserve $issue challenge metadata"
+  fi
+}
+
 # Archive stage artifacts from worktree before cleanup.
 # Copies plan.md, task-packet.md, and routing decision to a durable location
 # so post-merge eval can still access them after the worktree is removed.
@@ -10759,6 +11210,26 @@ mark_task_aborted_for_cleanup() {
   return 0
 }
 
+cleanup_quarantined_no_pr_challenge_arm() {
+  local issue="$1" feature_dir="${2:-}" stage="${3:-challenge}" reason="${4:-challenge quarantined}"
+  local is_challenge pr slug
+
+  [[ -n "$issue" ]] || return 1
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+
+  pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+  [[ -z "$pr" ]] || return 1
+
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  if [[ -z "$slug" && -n "$feature_dir" ]]; then
+    slug="$(basename "$feature_dir")"
+  fi
+  [[ -n "$slug" ]] || return 1
+
+  cleanup_aborted_challenge_arm "$issue" "$slug" "quarantined ${stage}: ${reason}"
+}
+
 cleanup_aborted_challenge_arm() {
   local issue="$1" slug="${2:-}" reason="${3:-challenge aborted}"
   local win target target_gone wt_dir task_branch state_branch pr
@@ -10801,6 +11272,17 @@ cleanup_aborted_challenge_arm() {
 
   log "debug" "Closed window: $win"
 
+  if [[ -n "$pr" ]]; then
+    log_warn "  $issue: PR #$pr exists - preserving worktree and local branch (aborted task)"
+    set_window_attention_state "$win" "needs-user"
+    rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+    reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+    remove_task_state "$issue"
+    CLEANED["$issue"]=1
+    log "$issue: Complete (aborted cleanup, worktree preserved due to PR #$pr)"
+    return 0
+  fi
+
   if [[ -d "$wt_dir" ]]; then
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
     log "debug" "Removed worktree: $wt_dir"
@@ -10833,6 +11315,7 @@ cleanup_aborted_challenge_arm() {
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  remove_task_state "$issue"
   CLEANED["$issue"]=1
   log "$issue: Complete (aborted challenge cleanup)"
 }
@@ -11520,6 +12003,10 @@ refresh_backlog_cache() {
     return 0
   fi
 
+  # Filter out parent issues (epics) - HOK-2867
+  # Warnings go to stderr, filtered JSON goes to stdout
+  backlog_json="$(filter_parent_issues "$backlog_json")"
+
   BACKLOG_JSON_CACHE="$backlog_json"
   QUEUE_PLAN_CACHE=""
   LAST_QUEUE_PLAN_FETCH=0
@@ -11736,7 +12223,7 @@ run_queue_planner_with_policy() {
   # diagnostics file rather than shell variables; without the real stderr and
   # exit code the reason classifier degrades every planner failure to a
   # generic dependency_planning_failed.
-  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code"
+  record_fetch_queue_plan_failure "$step" "$stderr_excerpt" "$exit_code" "$cancellation_owner"
 
   queue_health_record_failure "$reason" "$step" \
     "$pid" "$pgid" "$timeout_secs" "$exit_code" "" "$cancellation_owner" \
@@ -11769,7 +12256,7 @@ fetch_queue_plan() {
 
 # fetch_queue_plan runs in command substitution, so diagnostics use a caller-owned file.
 record_fetch_queue_plan_failure() {
-  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
+  local step="$1" stderr_text="${2-}" exit_code="${3:-1}" cancellation_owner="${4:-}" diagnostics_file="${FETCH_QUEUE_PLAN_DIAGNOSTICS_FILE:-}"
   [[ -n "$diagnostics_file" ]] || return 0
 
   local bounded
@@ -11780,7 +12267,11 @@ record_fetch_queue_plan_failure() {
     bounded="(no stderr captured)"
   fi
 
-  printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  if [[ -n "$cancellation_owner" ]]; then
+    printf 'step=%s exit=%s cancellationOwner=%s stderr=%s\n' "$step" "$exit_code" "$cancellation_owner" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  else
+    printf 'step=%s exit=%s stderr=%s\n' "$step" "$exit_code" "$bounded" > "$diagnostics_file" 2>/dev/null || true
+  fi
 }
 
 log_fetch_queue_plan_failure() {
@@ -11795,7 +12286,19 @@ log_fetch_queue_plan_failure() {
 }
 
 classify_queue_failure_reason() {
-  local step="$1" details="${2:-}" lowered
+  local step="$1" details="${2:-}" lowered exit_code cancellation_owner
+  exit_code="$(printf '%s' "$details" | sed -n 's/.*exit=\([0-9][0-9]*\).*/\1/p')"
+  cancellation_owner="$(printf '%s' "$details" | sed -n 's/.*cancellationOwner=\([^ ]*\).*/\1/p')"
+
+  if [[ "$cancellation_owner" == "queue_plan_timeout" ]]; then
+    echo "timeout"
+    return 0
+  fi
+  if [[ "$exit_code" == "143" || "$exit_code" == "137" ]]; then
+    echo "external_cancellation"
+    return 0
+  fi
+
   case "$step" in
     cache_empty|empty_queue)   echo "empty_queue" ;;
     jq_massage_failed)         echo "invalid_input" ;;
@@ -11882,7 +12385,11 @@ build_queue_plan_once() {
   # Determine timeout and build planner command
   if [[ -n "${PROJECT_NAME:-}" ]]; then
     timeout_secs=60
-    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache"
+    local now_ms classifier_deadline_ms classifier_grace_secs=8
+    now_ms="$(date +%s%3N 2>/dev/null || true)"
+    [[ "$now_ms" =~ ^[0-9]+$ ]] || now_ms="$(date +%s)000"
+    classifier_deadline_ms=$(( now_ms + ((timeout_secs - classifier_grace_secs) * 1000) ))
+    planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json --cache-key \"$cache_key\" --refresh-missing-cache --queue-classifier-deadline-ms \"$classifier_deadline_ms\""
   else
     timeout_secs=15
     planner_cmd="npx tsx \"$TOOLS_DIR/plan-queue.ts\" --stdin --json"
@@ -14000,7 +14507,7 @@ monitor_issue_state() {
 	  local challenge_aborted pair_id_for_cleanup
 	  challenge_aborted=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengeAborted // empty')
 	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
-	  if [[ "$task_status" == "aborted" && -n "$challenge_aborted" ]]; then
+	  if [[ "$task_status" == "aborted" ]]; then
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
 	    return 0
 	  fi
@@ -14025,7 +14532,8 @@ monitor_issue_state() {
 
     set_window_attention_state "$WIN" "clear"
     if [[ "$task_status" == "merged" && "$merged_before_ready" == "true" ]]; then
-      cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
       return 0
     fi
@@ -14038,7 +14546,12 @@ monitor_issue_state() {
       return 0
     fi
 
-    cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+    if [[ "$task_status" == "merged" ]]; then
+      resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
+    else
+      cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
+    fi
 
     # Prune worktrees after cleanup
     execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
@@ -14134,7 +14647,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -14922,7 +15435,7 @@ monitor_issue_state() {
               active_count=$((active_count + 1))
               return 0
             fi
-            if [[ "$launch_rc" -eq 4 ]]; then
+            if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
               set_window_attention_state "$WIN" "clear"
               active_count=$((active_count + 1))
               return 0
@@ -15017,7 +15530,7 @@ monitor_issue_state() {
                 active_count=$((active_count + 1))
                 return 0
               fi
-              if [[ "$launch_rc" -eq 4 ]]; then
+              if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
                 set_window_attention_state "$WIN" "clear"
                 active_count=$((active_count + 1))
                 return 0
@@ -15193,7 +15706,8 @@ monitor_issue_state() {
     elif should_update_linear_state "$ISSUE"; then
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
-    cleanup_completed_task "$ISSUE" "$SLUG"
+    resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+    cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "" "$PR"
     if [[ "$_eval_needed" == "true" ]]; then
       log_task "info" "$ISSUE" "📊 Eval queued in background"
       launch_background_post_merge_eval "$ISSUE" "$PR" "$BRANCH" "$SLUG" "$ISSUE" "post-merge" "$_eval_agent"
@@ -15305,7 +15819,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15394,7 +15908,7 @@ monitor_issue_state() {
           active_count=$((active_count + 1))
           return 0
         fi
-        if [[ "$launch_rc" -eq 4 ]]; then
+        if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15488,7 +16002,7 @@ monitor_issue_state() {
           set_window_attention_state "$WIN" "needs-user"
           return 0
         fi
-        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+        if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
           set_window_attention_state "$WIN" "clear"
           active_count=$((active_count + 1))
           return 0
@@ -15545,7 +16059,7 @@ monitor_issue_state() {
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
-      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 ]]; then
+      if [[ "$launch_rc" -eq 3 || "$launch_rc" -eq 4 || "$launch_rc" -eq 5 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
@@ -15594,7 +16108,7 @@ monitor_issue_state() {
         active_count=$((active_count + 1))
         return 0
       fi
-      if [[ "$launch_rc" -eq 4 ]]; then
+      if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0

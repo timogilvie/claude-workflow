@@ -21,6 +21,7 @@ import {
   getFamilyCapabilities,
   type FamilyCapabilities,
 } from './openrouter-capabilities.ts';
+import { loadModelRegistryCatalog } from './model-registry-loader.ts';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -165,12 +166,26 @@ export function defaultLaunchPriorityFixturePath(): string {
  * @returns Parsed fixture contents.
  */
 export function loadLaunchPriorityFixture(fixturePath?: string): LaunchPriorityFixture {
+  if (!fixturePath) {
+    const catalog = loadModelRegistryCatalog();
+    const models = catalog.openrouterMappings;
+    if (!Array.isArray(models)) {
+      throw new Error('Invalid model registry catalog: missing "openrouterMappings" array');
+    }
+    return {
+      schemaVersion: CATALOG_SCHEMA_VERSION,
+      description: 'OpenRouter launch-priority projection from model-registry.v1 catalog.',
+      models: models.map((entry) => validateLaunchPriorityModel(entry)),
+    };
+  }
+
   const path = fixturePath ?? defaultLaunchPriorityFixturePath();
   const raw = readFileSync(path, 'utf-8');
   const parsed = JSON.parse(raw) as LaunchPriorityFixture;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.models)) {
     throw new Error(`Invalid launch-priority fixture at ${path}: missing "models" array`);
   }
+  parsed.models.forEach(validateLaunchPriorityModel);
   return parsed;
 }
 
@@ -179,6 +194,31 @@ export function loadLaunchPriorityFixture(fixturePath?: string): LaunchPriorityF
  */
 export function loadLaunchPriorityList(fixturePath?: string): LaunchPriorityModel[] {
   return loadLaunchPriorityFixture(fixturePath).models;
+}
+
+function validateLaunchPriorityModel(entry: unknown): LaunchPriorityModel {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new Error('Invalid launch-priority model entry: expected object');
+  }
+  const candidate = entry as Partial<LaunchPriorityModel>;
+  if (
+    typeof candidate.wavemillAlias !== 'string'
+    || typeof candidate.openrouterId !== 'string'
+    || typeof candidate.family !== 'string'
+    || typeof candidate.status !== 'string'
+    || typeof candidate.priorityTier !== 'number'
+    || !Array.isArray(candidate.roleEligibility)
+  ) {
+    throw new Error('Invalid launch-priority model entry: missing required identity fields');
+  }
+  return {
+    wavemillAlias: candidate.wavemillAlias,
+    openrouterId: candidate.openrouterId,
+    family: candidate.family as ModelFamily,
+    status: candidate.status as ModelStatus,
+    priorityTier: candidate.priorityTier,
+    roleEligibility: [...candidate.roleEligibility] as RoleEligibility[],
+  };
 }
 
 function splitOpenRouterId(openrouterId: string): { provider: string; providerModel: string } | null {

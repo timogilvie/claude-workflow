@@ -264,7 +264,7 @@ export function computeModelCost(
 export interface NormalizedEvaluationCost {
   costUsd: number | null;
   basis: 'explicit_pricing' | 'incomplete';
-  coverage: 'complete' | 'missing_cache_usage' | 'missing_cache_pricing';
+  coverage: 'complete' | 'missing_token_usage' | 'missing_cache_usage' | 'missing_cache_pricing';
   pricingRevision?: string;
 }
 
@@ -273,6 +273,16 @@ export function computeNormalizedEvaluationCost(
   pricing: ModelPricing,
   options: { requireExplicitCache?: boolean; pricingRevision?: string } = {},
 ): NormalizedEvaluationCost {
+  const hasBaseUsage = typeof usage.inputTokens === 'number'
+    && typeof usage.outputTokens === 'number';
+  if (!hasBaseUsage) {
+    return {
+      costUsd: null,
+      basis: 'incomplete',
+      coverage: 'missing_token_usage',
+      pricingRevision: options.pricingRevision,
+    };
+  }
   const hasCacheUsage = typeof usage.cacheCreationTokens === 'number'
     && typeof usage.cacheReadTokens === 'number';
   if (!hasCacheUsage) {
@@ -294,11 +304,9 @@ export function computeNormalizedEvaluationCost(
       pricingRevision: options.pricingRevision,
     };
   }
-  const inputTokens = usage.inputTokens ?? 0;
-  const outputTokens = usage.outputTokens ?? 0;
   if (
-    !isFiniteNonNegative(inputTokens)
-    || !isFiniteNonNegative(outputTokens)
+    !isFiniteNonNegative(usage.inputTokens)
+    || !isFiniteNonNegative(usage.outputTokens)
     || !isFiniteNonNegative(usage.cacheCreationTokens)
     || !isFiniteNonNegative(usage.cacheReadTokens)
   ) {
@@ -311,8 +319,8 @@ export function computeNormalizedEvaluationCost(
   }
   return {
     costUsd: computeModelCost({
-      inputTokens,
-      outputTokens,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
       cacheCreationTokens: usage.cacheCreationTokens,
       cacheReadTokens: usage.cacheReadTokens,
     }, pricing),

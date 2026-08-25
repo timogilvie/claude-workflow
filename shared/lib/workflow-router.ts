@@ -14,7 +14,7 @@ import { filterDeepSeekModels, type DeepSeekPoolFilterResult } from './deepseek-
 import { filterOpenRouterModels, type OpenRouterPoolFilterResult } from './openrouter-provider.ts';
 import { routeViaHokusai } from './hokusai-router.ts';
 import { analyzePrompt, loadRouterConfig, recommendModel, resolveAgent, type PromptCharacteristics, type TaskType } from './model-router.ts';
-import { compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
+import { CLASS_RANK, compareLatencyTier, getEffectiveRegistry, getLadder, hasCapabilityConstraints, isCodexChatgptLaunchEligible, isModelEnabled, type CapabilityConstraints, type LatencyTier, type RegistryTaskType } from './model-registry.ts';
 import { readQuotaSnapshot, type QuotaSnapshot } from './quota-state.ts';
 import {
   formatExplorationReasoning,
@@ -39,14 +39,17 @@ import { policyAdjustmentLog, routerLog } from './router-log.ts';
 import { registerAgentConfig } from './resource-adapters/agent-config-adapter.ts';
 import { getHarnessId, recordUse } from './resource-manifest.ts';
 import type { RuntimeResourceSelection } from './resource-selection.ts';
-import type { RouteProvenance } from './route-artifact.ts';
+import type { RouteEscalationProvenance, RouteEscalationTrigger, RouteProvenance } from './route-artifact.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
 import { filterNativeModels, type RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 import { applyModelExclusions, type ModelExclusionDiagnostic } from './model-exclusions.ts';
 import { getGlobalModelRegistry, listEffectiveModelsForStage, resolveEffectiveAgent } from './effective-models.ts';
+import { classifyTaskPacket, type TaskPacketClassification } from './task-packet-classifier.ts';
 
 export type { RouterCertificationRejection } from './native-agent/certification/router-filter.ts';
 export { STAGE_PHASE_REQUIREMENT } from './native-agent/certification/router-filter.ts';
+
+const FILE_TYPE_PATTERN = /\.\b(ts|tsx|js|jsx|py|sh|json|yaml|yml|md|css|html|sql|go|rs|rb)\b/gi;
 
 export type PlanDepth = 'light' | 'medium' | 'deep';
 export type CodeDepth = 'light' | 'medium' | 'deep';
@@ -82,6 +85,10 @@ export interface WorkflowRouteDecision {
     taskType: TaskType;
     promptLength: PromptCharacteristics['length'];
     complexityScore: number;
+    complexityBand?: string;
+    riskFlags?: string[];
+    suspiciousZero?: boolean;
+    suspiciousZeroReason?: string;
     fileTypes: string[];
     riskScore: number;
     taskDifficulty?: RoutingDifficulty;
@@ -126,20 +133,12 @@ function withSignals(
   prompt: string,
   taskDifficulty?: RoutingDifficulty,
 ): WorkflowRouteDecision {
-  const characteristics = analyzePrompt(prompt);
-  const riskScore = computeRiskScore(prompt, characteristics);
+  const signalContext = buildRoutingSignalContext(prompt, taskDifficulty);
 
-  return {
+  return attachSignalProvenance({
     ...decision,
-    signals: {
-      taskType: characteristics.taskType,
-      promptLength: characteristics.length,
-      complexityScore: characteristics.complexityScore,
-      fileTypes: characteristics.fileTypes,
-      riskScore,
-      ...(taskDifficulty ? { taskDifficulty } : {}),
-    },
-  };
+    signals: signalContext.signals,
+  }, signalContext.classification);
 }
 
 function withChallengeRecommendation<T extends WorkflowRouteDecision>(decision: T, repoDir?: string): T {
@@ -181,6 +180,132 @@ function registryStageModelPool(role: 'planner' | 'coder' | 'reviewer', repoDir?
   const registry = getGlobalModelRegistry();
   return listEffectiveModelsForStage(role, { repoDir, registry }).models
     .filter((modelId) => isModelEnabled(registry.models[modelId]));
+}
+
+function buildRoutingSignalContext(
+  prompt: string,
+  taskDifficulty?: RoutingDifficulty,
+): {
+  characteristics: PromptCharacteristics;
+  classification: TaskPacketClassification;
+  riskScore: number;
+  signals: WorkflowRouteDecision['signals'];
+} {
+  const classification = classifyTaskPacket(prompt);
+  const fileTypeMatches = prompt.match(FILE_TYPE_PATTERN) || [];
+  const fileTypes = [...new Set(fileTypeMatches.map((m) => m.toLowerCase()))];
+  const characteristics: PromptCharacteristics = {
+    length: classification.evidence.promptLength,
+    charCount: classification.evidence.charCount,
+    complexityScore: classification.complexityScore,
+    complexityBand: classification.complexityBand,
+    riskFlags: classification.riskFlags,
+    fileTypes: fileTypes.length > 0 ? fileTypes : classification.evidence.fileTypes,
+    taskType: classification.taskType,
+  };
+  const riskScore = Math.max(computeRiskScore(prompt, characteristics), classification.riskScore);
+
+  return {
+    characteristics,
+    classification,
+    riskScore,
+    signals: {
+      taskType: classification.taskType,
+      promptLength: characteristics.length,
+      complexityScore: classification.complexityScore,
+      complexityBand: classification.complexityBand,
+      riskFlags: classification.riskFlags,
+      ...(classification.suspiciousZero ? {
+        suspiciousZero: true,
+        suspiciousZeroReason: classification.suspiciousZeroReason,
+      } : {}),
+      fileTypes: characteristics.fileTypes,
+      riskScore,
+      ...(taskDifficulty ? { taskDifficulty } : {}),
+    },
+  };
+}
+
+function signalVectorForProvenance(classification: TaskPacketClassification): Record<string, unknown> {
+  return {
+    taskType: classification.taskType,
+    complexity: classification.complexity,
+    complexityScore: classification.complexityScore,
+    complexityBand: classification.complexityBand,
+    riskFlags: classification.riskFlags,
+    riskScore: classification.riskScore,
+    suspiciousZero: classification.suspiciousZero,
+    evidence: classification.evidence,
+  };
+}
+
+function attachSignalProvenance<T extends WorkflowRouteDecision>(
+  decision: T,
+  classification: TaskPacketClassification,
+): T {
+  return {
+    ...decision,
+    provenance: {
+      ...(decision.provenance ?? {}),
+      signalVector: signalVectorForProvenance(classification),
+    } as T['provenance'],
+  };
+}
+
+function logRoutingSignalVector(decision: WorkflowRouteDecision): void {
+  const flags = decision.signals.riskFlags?.length ? decision.signals.riskFlags.join('|') : 'none';
+  const zero = decision.signals.suspiciousZero ? ` suspiciousZero=${decision.signals.suspiciousZeroReason ?? 'true'}` : '';
+  routerLog(
+    `signals task=${decision.signals.taskType} complexity=${decision.signals.complexityScore}` +
+      ` band=${decision.signals.complexityBand ?? 'unknown'} risk=${decision.signals.riskScore}` +
+      ` flags=${flags}${zero}`,
+    'debug',
+  );
+}
+
+function applySuspiciousZeroEscalation<T extends WorkflowRouteDecision>(
+  decision: T,
+  pools: {
+    plannerPool?: string[];
+    coderPool?: string[];
+    reviewerPool?: string[];
+  } = {},
+  repoDir?: string,
+): T {
+  if (!decision.signals.suspiciousZero) {
+    return decision;
+  }
+
+  const fallbackPool = getModelPool(repoDir).models;
+  const floor: DifficultyFloor = {
+    allowHaiku: false,
+    preferSonnet: true,
+    preferOpus: false,
+    neverHaikuAlone: true,
+  };
+  const planner = applyDifficultyFloor(decision.planner, floor, pools.plannerPool ?? fallbackPool, 'planner', repoDir);
+  const coder = applyDifficultyFloor(decision.coder, floor, pools.coderPool ?? fallbackPool, 'coder', repoDir);
+  const reviewer = applyDifficultyFloor(decision.reviewer, floor, pools.reviewerPool ?? fallbackPool, 'reviewer', repoDir);
+
+  if (planner === decision.planner && coder === decision.coder && reviewer === decision.reviewer) {
+    return decision;
+  }
+
+  return {
+    ...decision,
+    planner,
+    coder,
+    reviewer,
+    expectedCostPlan: estimateStageCost(planner, PLAN_TOKENS[decision.planDepth], repoDir),
+    expectedCostCode: estimateStageCost(coder, CODE_TOKENS[decision.codeDepth], repoDir),
+    expectedCostReview: decision.reviewRecommended === 'none'
+      ? 0
+      : estimateStageCost(reviewer, REVIEW_TOKENS[decision.reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir),
+    reasoning: [
+      ...decision.reasoning,
+      `Suspicious zero complexity (${decision.signals.suspiciousZeroReason ?? 'structural evidence'}); fast-economy models rejected for routing safety.`,
+    ],
+  };
 }
 
 /**
@@ -271,6 +396,17 @@ interface StageCapabilityConstraintSet {
   reviewer?: CapabilityConstraints;
 }
 
+interface ResolvedEscalationConfig {
+  enabled: boolean;
+  expectedSuccessFloor: number;
+  confidenceFloor: number;
+  minCoderClassRankIncrease: number;
+}
+
+interface EscalationRetryContext {
+  stageAwareContext?: StageAwareRouterContext;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -299,6 +435,451 @@ function computeHeuristicConfidence(
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function totalExpectedCost(decision: Pick<WorkflowRouteDecision, 'expectedCostPlan' | 'expectedCostCode' | 'expectedCostReview'>): number {
+  return roundMoney(decision.expectedCostPlan + decision.expectedCostCode + decision.expectedCostReview);
+}
+
+function normalizeEscalationConfig(repoDir?: string): ResolvedEscalationConfig {
+  const config = getRouterConfig(repoDir).escalation;
+  const bounded = (value: unknown, fallback: number): number =>
+    typeof value === 'number' && Number.isFinite(value)
+      ? clamp(value, 0, 1)
+      : fallback;
+
+  return {
+    enabled: config?.enabled !== false,
+    expectedSuccessFloor: bounded(config?.expectedSuccessFloor, 0.5),
+    confidenceFloor: bounded(config?.confidenceFloor, 0.4),
+    minCoderClassRankIncrease: typeof config?.minCoderClassRankIncrease === 'number' && Number.isFinite(config.minCoderClassRankIncrease)
+      ? Math.max(0, Math.floor(config.minCoderClassRankIncrease))
+      : 1,
+  };
+}
+
+function routeEscalationTriggers(
+  decision: WorkflowRouteDecision,
+  config: ResolvedEscalationConfig,
+): RouteEscalationTrigger[] {
+  const triggers: RouteEscalationTrigger[] = [];
+  if (decision.expectedSuccess < config.expectedSuccessFloor) {
+    triggers.push({
+      metric: 'expectedSuccess',
+      value: decision.expectedSuccess,
+      threshold: config.expectedSuccessFloor,
+    });
+  }
+  if (decision.confidence < config.confidenceFloor) {
+    triggers.push({
+      metric: 'confidence',
+      value: decision.confidence,
+      threshold: config.confidenceFloor,
+    });
+  }
+  return triggers;
+}
+
+function routeSummary(decision: WorkflowRouteDecision): RouteEscalationProvenance['initialRoute'] {
+  return {
+    planner: decision.planner,
+    coder: decision.coder,
+    reviewer: decision.reviewer,
+    cost: totalExpectedCost(decision),
+    expectedSuccess: decision.expectedSuccess,
+    confidence: decision.confidence,
+  };
+}
+
+function modelClassRank(modelId: string, repoDir?: string): number {
+  const modelClass = getEffectiveRegistry(repoDir).models[modelId]?.class ?? 'strong_generalist';
+  return CLASS_RANK[modelClass];
+}
+
+function codingLadderPosition(modelId: string, repoDir?: string): number {
+  const index = getLadder(getEffectiveRegistry(repoDir), 'coding').indexOf(modelId);
+  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
+
+function codingQualityScore(modelId: string, repoDir?: string): number {
+  return getEffectiveRegistry(repoDir).models[modelId]?.qualityScores.coding ?? 0;
+}
+
+function isStrongerCoder(candidate: string, current: string, repoDir?: string): boolean {
+  if (!candidate || candidate === current) {
+    return false;
+  }
+
+  const candidateRank = modelClassRank(candidate, repoDir);
+  const currentRank = modelClassRank(current, repoDir);
+  if (candidateRank > currentRank) {
+    return true;
+  }
+  if (candidateRank < currentRank) {
+    return false;
+  }
+
+  const candidatePosition = codingLadderPosition(candidate, repoDir);
+  const currentPosition = codingLadderPosition(current, repoDir);
+  if (candidatePosition !== currentPosition) {
+    return candidatePosition < currentPosition;
+  }
+
+  return codingQualityScore(candidate, repoDir) > codingQualityScore(current, repoDir);
+}
+
+function isEscalationEligibleCoder(
+  candidate: string,
+  current: string,
+  config: Pick<ResolvedEscalationConfig, 'minCoderClassRankIncrease'>,
+  repoDir?: string,
+): boolean {
+  if (!candidate || candidate === current) {
+    return false;
+  }
+  const candidateRank = modelClassRank(candidate, repoDir);
+  const currentRank = modelClassRank(current, repoDir);
+  if (candidateRank > currentRank) {
+    return candidateRank - currentRank >= config.minCoderClassRankIncrease;
+  }
+  if (candidateRank < currentRank) {
+    return false;
+  }
+  return isStrongerCoder(candidate, current, repoDir);
+}
+
+function resolveEscalationBudget(
+  decision: WorkflowRouteDecision,
+  options: RouteWorkflowOptions | undefined,
+  operatingMode?: OperatingMode,
+): number | null {
+  const finiteBudget = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+  if (finiteBudget(options?.maxCostUsd)) {
+    return options.maxCostUsd;
+  }
+  if (finiteBudget(decision.constraints?.maxCostUsd)) {
+    return decision.constraints.maxCostUsd;
+  }
+  if (finiteBudget(decision.maxCostUsd)) {
+    return decision.maxCostUsd;
+  }
+
+  const budget = getBudgetConfig(options?.repoDir);
+  const mode = operatingMode ?? getCurrentOperatingMode(options?.repoDir);
+  return mode === 'survival'
+    ? budget.survivalMode
+    : mode === 'constrained'
+      ? budget.constrainedMode
+      : budget.normalMode;
+}
+
+function routeWithEscalationProvenance<T extends WorkflowRouteDecision>(
+  decision: T,
+  escalation: RouteEscalationProvenance,
+  repoDir?: string,
+): T {
+  const mode = getCurrentOperatingMode(repoDir);
+  return {
+    ...decision,
+    provenance: {
+      source: 'live',
+      inputKind: 'issue',
+      inputPath: '',
+      inputHash: '',
+      routedAt: new Date().toISOString(),
+      routerMode: mode === 'constrained' || mode === 'survival' ? mode : 'normal',
+      ...(decision.provenance ?? {}),
+      escalation,
+    },
+  };
+}
+
+function reasonedDecision<T extends WorkflowRouteDecision>(decision: T, reason: string): T {
+  return {
+    ...decision,
+    reasoning: [...decision.reasoning, reason],
+  };
+}
+
+function routeLikeAlternativeValue(source: Record<string, unknown>, keys: string[]): unknown {
+  for (const key of keys) {
+    if (source[key] !== undefined) {
+      return source[key];
+    }
+  }
+  return undefined;
+}
+
+function routeLikeString(source: Record<string, unknown>, keys: string[], fallback: string): string {
+  const value = routeLikeAlternativeValue(source, keys);
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function routeLikeNumber(source: Record<string, unknown>, keys: string[], fallback: number): number {
+  const value = routeLikeAlternativeValue(source, keys);
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function routeLikePlanDepth(source: Record<string, unknown>, fallback: PlanDepth): PlanDepth {
+  const value = routeLikeAlternativeValue(source, ['planDepth', 'plan_depth']);
+  if (value === 'light' || value === 'medium' || value === 'deep') return value;
+  if (value === 'low') return 'light';
+  if (value === 'high') return 'deep';
+  return fallback;
+}
+
+function routeLikeCodeDepth(source: Record<string, unknown>, fallback: CodeDepth): CodeDepth {
+  const value = routeLikeAlternativeValue(source, ['codeDepth', 'code_depth']);
+  if (value === 'light' || value === 'medium' || value === 'deep') return value;
+  if (value === 'low') return 'light';
+  if (value === 'high') return 'deep';
+  return fallback;
+}
+
+function routeLikeReviewMode(source: Record<string, unknown>, fallback: ReviewMode): ReviewMode {
+  const value = routeLikeAlternativeValue(source, ['reviewRecommended', 'review_mode', 'reviewMode']);
+  if (value === 'none' || value === 'static' || value === 'llm' || value === 'static+llm') return value;
+  if (value === 'light') return 'static';
+  if (value === 'standard') return 'llm';
+  if (value === 'deep') return 'static+llm';
+  return fallback;
+}
+
+function decisionFromRouteLikeAlternative(
+  initial: StageAwareDecision,
+  alternative: unknown,
+  config: Pick<ResolvedEscalationConfig, 'minCoderClassRankIncrease'>,
+  repoDir?: string,
+): StageAwareDecision | null {
+  if (!alternative || typeof alternative !== 'object' || Array.isArray(alternative)) {
+    return null;
+  }
+  const source = alternative as Record<string, unknown>;
+  const coder = routeLikeString(source, ['coder', 'coder_model', 'coderModel'], initial.coder);
+  if (!isEscalationEligibleCoder(coder, initial.coder, config, repoDir)) {
+    return null;
+  }
+
+  const planner = routeLikeString(source, ['planner', 'planner_model', 'plannerModel'], initial.planner);
+  const reviewer = routeLikeString(source, ['reviewer', 'reviewer_model', 'reviewerModel'], initial.reviewer);
+  const planDepth = routeLikePlanDepth(source, initial.planDepth);
+  const codeDepth = routeLikeCodeDepth(source, initial.codeDepth);
+  const reviewRecommended = routeLikeReviewMode(source, initial.reviewRecommended);
+  const fallbackPlan = estimateStageCost(planner, PLAN_TOKENS[planDepth], repoDir);
+  const fallbackCode = estimateStageCost(coder, CODE_TOKENS[codeDepth], repoDir);
+  const fallbackReview = reviewRecommended === 'none'
+    ? 0
+    : estimateStageCost(reviewer, REVIEW_TOKENS[reviewRecommended], repoDir);
+  const totalCost = routeLikeNumber(source, ['expectedCost', 'expected_cost_usd', 'estimated_cost_usd', 'cost'], fallbackPlan + fallbackCode + fallbackReview);
+  const fallbackTotal = fallbackPlan + fallbackCode + fallbackReview;
+  const costScale = fallbackTotal > 0 ? totalCost / fallbackTotal : 1;
+  const expectedCostPlan = roundMoney(fallbackPlan * costScale);
+  const expectedCostCode = roundMoney(fallbackCode * costScale);
+
+  return {
+    ...initial,
+    planner,
+    coder,
+    reviewer,
+    planDepth,
+    codeDepth,
+    reviewRecommended,
+    expectedSuccess: clamp(routeLikeNumber(source, ['expectedSuccess', 'expected_success', 'estimated_success_under_budget'], initial.expectedSuccess), 0, 1),
+    confidence: clamp(routeLikeNumber(source, ['confidence'], initial.confidence), 0, 1),
+    expectedCostPlan,
+    expectedCostCode,
+    expectedCostReview: roundMoney(totalCost - expectedCostPlan - expectedCostCode),
+    expectedCost: roundMoney(totalCost),
+    reasoning: [
+      ...initial.reasoning,
+      `Router escalation selected stronger Hokusai alternative coder ${coder}.`,
+    ],
+  };
+}
+
+function bestAffordableRouteLikeAlternative(
+  initial: StageAwareDecision,
+  config: Pick<ResolvedEscalationConfig, 'minCoderClassRankIncrease'>,
+  budget: number | null,
+  repoDir?: string,
+): StageAwareDecision | null {
+  const candidates = [
+    ...(Array.isArray(initial.provenance?.alternatives) ? initial.provenance.alternatives : []),
+    ...(Array.isArray(initial.provenance?.tradeoffs) ? initial.provenance.tradeoffs : []),
+  ]
+    .map((candidate) => decisionFromRouteLikeAlternative(initial, candidate, config, repoDir))
+    .filter((candidate): candidate is StageAwareDecision => {
+      if (!candidate) return false;
+      return budget === null || totalExpectedCost(candidate) <= budget;
+    });
+
+  candidates.sort((left, right) => {
+    if (right.expectedSuccess !== left.expectedSuccess) return right.expectedSuccess - left.expectedSuccess;
+    return totalExpectedCost(left) - totalExpectedCost(right);
+  });
+  return candidates[0] ?? null;
+}
+
+function strictStagePool(policyPool: string[] | undefined, explicitPool: string[] | undefined): string[] | undefined {
+  if (explicitPool && explicitPool.length > 0) {
+    if (policyPool && policyPool.length > 0) {
+      const explicit = new Set(explicitPool);
+      const intersection = policyPool.filter((modelId) => explicit.has(modelId));
+      return intersection.length > 0 ? intersection : explicitPool;
+    }
+    return explicitPool;
+  }
+  return policyPool;
+}
+
+function strongerCoderCandidates(
+  prompt: string,
+  initialCoder: string,
+  config: Pick<ResolvedEscalationConfig, 'minCoderClassRankIncrease'>,
+  options?: RouteWorkflowOptions,
+): string[] {
+  const repoDir = options?.repoDir;
+  const policyResolution = resolvePolicyStagePools(prompt, options ?? {});
+  const poolResolution = getEffectiveModelPool(options);
+  const routerConfig = getRouterConfig(repoDir);
+  const coderPool = resolveStagePool(
+    'coder',
+    poolResolution.models,
+    routerConfig,
+    options,
+    policyResolution?.policyStagePools.coderModels,
+  ).models;
+
+  return coderPool
+    .filter((modelId) => isEscalationEligibleCoder(modelId, initialCoder, config, repoDir))
+    .sort((left, right) => {
+      const rankDelta = modelClassRank(right, repoDir) - modelClassRank(left, repoDir);
+      if (rankDelta !== 0) return rankDelta;
+      const qualityDelta = codingQualityScore(right, repoDir) - codingQualityScore(left, repoDir);
+      if (qualityDelta !== 0) return qualityDelta;
+      return codingLadderPosition(left, repoDir) - codingLadderPosition(right, repoDir);
+    });
+}
+
+function canCandidateFitBudget(
+  candidateCoder: string,
+  initial: WorkflowRouteDecision,
+  budget: number | null,
+  repoDir?: string,
+): boolean {
+  if (budget === null) {
+    return true;
+  }
+  const cost =
+    initial.expectedCostPlan +
+    estimateStageCost(candidateCoder, CODE_TOKENS[initial.codeDepth], repoDir) +
+    initial.expectedCostReview;
+  return cost <= budget;
+}
+
+function buildRetryOptions(
+  options: RouteWorkflowOptions | undefined,
+  initial: WorkflowRouteDecision,
+  strongerCoders: string[],
+): RouteWorkflowOptions {
+  return {
+    ...(options ?? {}),
+    modelsAvailable: undefined,
+    plannerModelsAvailable: initial.planner ? [initial.planner] : (options?.plannerModelsAvailable ?? options?.modelsAvailable),
+    coderModelsAvailable: strongerCoders,
+    reviewerModelsAvailable: initial.reviewer ? [initial.reviewer] : (options?.reviewerModelsAvailable ?? options?.modelsAvailable),
+    skipDifficultyClassification: true,
+  };
+}
+
+function applyRouteEscalation(
+  prompt: string,
+  initial: StageAwareDecision,
+  options?: RouteWorkflowOptions,
+  retryContext: EscalationRetryContext = {},
+): StageAwareDecision {
+  const repoDir = options?.repoDir;
+  const config = normalizeEscalationConfig(repoDir);
+  if (!config.enabled) {
+    return initial;
+  }
+
+  const triggers = routeEscalationTriggers(initial, config);
+  if (triggers.length === 0) {
+    return initial;
+  }
+
+  const budget = resolveEscalationBudget(initial, options);
+  const candidates = strongerCoderCandidates(prompt, initial.coder, config, options);
+  const baseEscalation = (
+    finalDecision: WorkflowRouteDecision,
+    outcome: RouteEscalationProvenance['outcome'],
+    reason?: string,
+  ): RouteEscalationProvenance => ({
+    enabled: true,
+    triggered: true,
+    triggers,
+    outcome,
+    initialRoute: routeSummary(initial),
+    finalRoute: routeSummary(finalDecision),
+    candidateCount: candidates.length,
+    thresholds: {
+      expectedSuccessFloor: config.expectedSuccessFloor,
+      confidenceFloor: config.confidenceFloor,
+      minCoderClassRankIncrease: config.minCoderClassRankIncrease,
+    },
+    budget,
+    ...(reason ? { reason } : {}),
+  });
+
+  const alternative = bestAffordableRouteLikeAlternative(initial, config, budget, repoDir);
+  if (alternative) {
+    const escalation = baseEscalation(alternative, 'escalated', 'selected_affordable_hokusai_alternative');
+    return routeWithEscalationProvenance(alternative, escalation, repoDir);
+  }
+
+  if (candidates.length === 0) {
+    const reason = 'no eligible coder candidate is stronger than the initial route';
+    const escalation = baseEscalation(initial, 'no_stronger_candidate', reason);
+    return routeWithEscalationProvenance(reasonedDecision(initial, `Router escalation retained ${initial.coder}: ${reason}.`), escalation, repoDir);
+  }
+
+  const anyAffordable = candidates.some((candidate) => canCandidateFitBudget(candidate, initial, budget, repoDir));
+  if (!anyAffordable) {
+    const reason = 'all stronger coder candidates exceed the route budget';
+    const escalation = baseEscalation(initial, 'no_affordable_stronger_candidate', reason);
+    return routeWithEscalationProvenance(reasonedDecision(initial, `Router escalation retained ${initial.coder}: ${reason}.`), escalation, repoDir);
+  }
+
+  const retry = routeWorkflowStageAwareInternal(
+    prompt,
+    buildRetryOptions(options, initial, candidates),
+    retryContext.stageAwareContext,
+    true,
+  );
+  if (
+    retry &&
+    isEscalationEligibleCoder(retry.coder, initial.coder, config, repoDir) &&
+    (budget === null || totalExpectedCost(retry) <= budget)
+  ) {
+    const finalDecision = reasonedDecision(
+      retry,
+      `Router escalation selected stronger coder ${retry.coder} after ${triggers.map((trigger) => trigger.metric).join(' and ')} trigger.`,
+    );
+    const escalation = baseEscalation(finalDecision, 'escalated', 'selected_affordable_retry_route');
+    return routeWithEscalationProvenance(finalDecision, escalation, repoDir);
+  }
+
+  const outcome = retry && !isEscalationEligibleCoder(retry.coder, initial.coder, config, repoDir)
+    ? 'no_stronger_candidate'
+    : 'retry_failed';
+  const reason = retry
+    ? 'retry did not return a qualifying stronger coder route'
+    : 'retry could not produce a route from stronger coder candidates';
+  const escalation = baseEscalation(initial, outcome, reason);
+  return routeWithEscalationProvenance(reasonedDecision(initial, `Router escalation retained ${initial.coder}: ${reason}.`), escalation, repoDir);
 }
 
 function countMatches(prompt: string, patterns: RegExp[]): number {
@@ -667,8 +1248,9 @@ function resolvePolicyStagePools(
   }
 
   const pool = getModelPool(repoDir).models;
-  const characteristics = analyzePrompt(prompt);
-  const riskScore = computeRiskScore(prompt, characteristics);
+  const signalContext = buildRoutingSignalContext(prompt, taskDifficulty);
+  const characteristics = signalContext.characteristics;
+  const riskScore = signalContext.riskScore;
   const stageCapabilityConstraints = buildStageCapabilityConstraints(
     prompt,
     options,
@@ -1117,8 +1699,9 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
   const repoDir = options?.repoDir;
   const poolResolution = getEffectiveModelPool(options);
   const pool = poolResolution.models;
-  const characteristics = analyzePrompt(prompt);
-  const riskScore = computeRiskScore(prompt, characteristics);
+  const initialSignalContext = buildRoutingSignalContext(prompt);
+  const characteristics = initialSignalContext.characteristics;
+  const riskScore = initialSignalContext.riskScore;
   const planDepth = choosePlanDepth(characteristics, riskScore);
   const codeDepth = chooseCodeDepth(characteristics, riskScore);
   const reviewRecommended = chooseReviewMode(characteristics, riskScore);
@@ -1157,6 +1740,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
 
   // Enforce difficulty floor
   const taskDifficulty = resolveTaskDifficulty(options || {}, repoDir);
+  const signalContext = buildRoutingSignalContext(prompt, taskDifficulty);
   let finalPlanner = planner;
   let finalCoder = coder;
   let finalReviewer = reviewer;
@@ -1334,7 +1918,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
     finalReviewer = '';
   }
 
-  const decision: WorkflowRouteDecision = {
+  const decision: WorkflowRouteDecision = applySuspiciousZeroEscalation(attachSignalProvenance({
     planner: finalPlanner,
     coder: finalCoder,
     reviewer: finalReviewer,
@@ -1349,14 +1933,7 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       ? 0
       : estimateStageCost(finalReviewer, REVIEW_TOKENS[reviewRecommended as Exclude<ReviewMode, 'none'>], repoDir),
     reasoning,
-    signals: {
-      taskType: characteristics.taskType,
-      promptLength: characteristics.length,
-      complexityScore: characteristics.complexityScore,
-      fileTypes: characteristics.fileTypes,
-      riskScore,
-      ...(taskDifficulty ? { taskDifficulty } : {}),
-    },
+    signals: signalContext.signals,
     constraints: { maxCostUsd: effectiveBudget },
     routingMode: 'heuristic',
     ...(budgetViolation ? { budgetViolation } : {}),
@@ -1365,7 +1942,8 @@ export function routeWorkflow(prompt: string, options?: RouteWorkflowOptions): W
       : {}),
     ...(nativeCertificationRejections.length > 0 ? { nativeCertificationRejections } : {}),
     ...(modelExclusions.length > 0 ? { modelExclusions } : {}),
-  };
+  }, signalContext.classification), { plannerPool, coderPool, reviewerPool }, repoDir);
+  logRoutingSignalVector(decision);
   registerWorkflowDecisionResources(decision, repoDir);
   return decision;
 }
@@ -1374,24 +1952,36 @@ function routeWorkflowStageAwareInternal(
   prompt: string,
   options?: RouteWorkflowOptions,
   stageAwareContext?: StageAwareRouterContext,
+  skipEscalation = false,
 ): StageAwareDecision {
   const repoDir = options?.repoDir;
-  const characteristics = analyzePrompt(prompt);
-  const riskScore = computeRiskScore(prompt, characteristics);
+  const initialSignalContext = buildRoutingSignalContext(prompt);
+  const characteristics = initialSignalContext.characteristics;
+  const riskScore = initialSignalContext.riskScore;
 
   // Resolve difficulty and policy pools before stage-aware routing
   // so both KNN selection and difficulty floor application respect frontier substitution
   const policyResolution = resolvePolicyStagePools(prompt, options || {});
   const taskDifficulty = policyResolution?.taskDifficulty || resolveTaskDifficulty(options || {}, repoDir);
+  const signalContext = buildRoutingSignalContext(prompt, taskDifficulty);
 
   let stageAwareDecision;
   try {
     const stageAwareOptions = {
       repoDir,
       modelsAvailable: options?.modelsAvailable,
-      plannerModelsAvailable: policyResolution?.policyStagePools.plannerModels,
-      coderModelsAvailable: policyResolution?.policyStagePools.coderModels,
-      reviewerModelsAvailable: policyResolution?.policyStagePools.reviewerModels,
+      plannerModelsAvailable: strictStagePool(
+        policyResolution?.policyStagePools.plannerModels,
+        options?.plannerModelsAvailable,
+      ),
+      coderModelsAvailable: strictStagePool(
+        policyResolution?.policyStagePools.coderModels,
+        options?.coderModelsAvailable,
+      ),
+      reviewerModelsAvailable: strictStagePool(
+        policyResolution?.policyStagePools.reviewerModels,
+        options?.reviewerModelsAvailable,
+      ),
       plannerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.planner,
       coderCapabilityConstraints: policyResolution?.stageCapabilityConstraints.coder,
       reviewerCapabilityConstraints: policyResolution?.stageCapabilityConstraints.reviewer,
@@ -1410,14 +2000,7 @@ function routeWorkflowStageAwareInternal(
     stageAwareDecision = null;
   }
 
-  const baseSignals = {
-    taskType: characteristics.taskType,
-    promptLength: characteristics.length,
-    complexityScore: characteristics.complexityScore,
-    fileTypes: characteristics.fileTypes,
-    riskScore,
-    ...(taskDifficulty ? { taskDifficulty } : {}),
-  } as const;
+  const baseSignals = signalContext.signals;
 
   let decision: StageAwareDecision;
   if (!stageAwareDecision) {
@@ -1498,7 +2081,25 @@ function routeWorkflowStageAwareInternal(
     };
   }
 
-  const finalDecision = withChallengeRecommendation(decision, repoDir);
+  const signalFloorPool = policyResolution?.policyStagePools
+    ? filterProviderPool([
+        ...new Set([
+          ...policyResolution.policyStagePools.plannerModels,
+          ...policyResolution.policyStagePools.coderModels,
+          ...policyResolution.policyStagePools.reviewerModels,
+        ]),
+      ], repoDir).models
+    : getModelPool(repoDir).models;
+  const signalDecision = applySuspiciousZeroEscalation(
+    attachSignalProvenance(decision, signalContext.classification),
+    { plannerPool: signalFloorPool, coderPool: signalFloorPool, reviewerPool: signalFloorPool },
+    repoDir,
+  );
+  const escalatedDecision = skipEscalation
+    ? signalDecision
+    : applyRouteEscalation(prompt, signalDecision, options, { stageAwareContext });
+  const finalDecision = withChallengeRecommendation(escalatedDecision, repoDir);
+  logRoutingSignalVector(finalDecision);
   registerWorkflowDecisionResources(finalDecision, repoDir);
   return finalDecision;
 }
@@ -1667,8 +2268,9 @@ export function tryPolicyResolution(
   }
 
   const pool = getModelPool(repoDir).models;
-  const characteristics = analyzePrompt(prompt);
-  const riskScore = computeRiskScore(prompt, characteristics);
+  const signalContext = buildRoutingSignalContext(prompt, taskDifficulty);
+  const characteristics = signalContext.characteristics;
+  const riskScore = signalContext.riskScore;
   const planDepth = choosePlanDepth(characteristics, riskScore);
   const codeDepth = chooseCodeDepth(characteristics, riskScore);
   const reviewRecommended = chooseReviewMode(characteristics, riskScore);
@@ -1773,7 +2375,7 @@ export function tryPolicyResolution(
     riskScore,
   });
 
-  return {
+  const decision: StageAwareDecision = applySuspiciousZeroEscalation(attachSignalProvenance({
     planner: plannerModel,
     coder: coderModel,
     reviewer: reviewerModel,
@@ -1797,14 +2399,7 @@ export function tryPolicyResolution(
         : []),
       `Risk score ${riskScore} from complexity, scope, and repo-surface keywords.`,
     ],
-    signals: {
-      taskType: characteristics.taskType,
-      promptLength: characteristics.length,
-      complexityScore: characteristics.complexityScore,
-      fileTypes: characteristics.fileTypes,
-      riskScore,
-      taskDifficulty,
-    },
+    signals: signalContext.signals,
     routingMode: 'policy',
     neighborCount: 0,
     neighborSimilarityRange: [0, 0],
@@ -1813,7 +2408,9 @@ export function tryPolicyResolution(
       ? undefined
       : { maxCostUsd: options.maxCostUsd },
     ...(explorationAttribution ? { exploration: explorationAttribution } : {}),
-  };
+  }, signalContext.classification), { plannerPool: pool, coderPool: pool, reviewerPool: pool }, repoDir);
+  logRoutingSignalVector(decision);
+  return decision;
 }
 
 export async function routeWorkflowHokusai(
@@ -1838,7 +2435,7 @@ export async function routeWorkflowHokusai(
   }
 
   const enriched = withSignals(decision, prompt, taskDifficulty);
-  const finalDecision = withChallengeRecommendation({
+  const baseDecision: StageAwareDecision = {
     ...enriched,
     reasoning: policyResolution
       ? [
@@ -1856,7 +2453,24 @@ export async function routeWorkflowHokusai(
     expectedCost: Number(
       (enriched.expectedCostPlan + enriched.expectedCostCode + enriched.expectedCostReview).toFixed(2)
     ),
-  }, repoDir);
+  };
+  const floorPool = policyResolution?.policyStagePools
+    ? filterProviderPool([
+        ...new Set([
+          ...policyResolution.policyStagePools.plannerModels,
+          ...policyResolution.policyStagePools.coderModels,
+          ...policyResolution.policyStagePools.reviewerModels,
+        ]),
+      ], repoDir).models
+    : getModelPool(repoDir).models;
+  const signalDecision = applySuspiciousZeroEscalation(
+    baseDecision,
+    { plannerPool: floorPool, coderPool: floorPool, reviewerPool: floorPool },
+    repoDir,
+  );
+  const escalatedDecision = applyRouteEscalation(prompt, signalDecision, options);
+  const finalDecision = withChallengeRecommendation(escalatedDecision, repoDir);
+  logRoutingSignalVector(finalDecision);
   registerWorkflowDecisionResources(finalDecision, repoDir);
   return finalDecision;
 }
@@ -1897,7 +2511,8 @@ export async function routeWorkflowAutoWithContext(
 
   const policyDecision = tryPolicyResolution(prompt, options);
   if (policyDecision) {
-    const finalDecision = withChallengeRecommendation(policyDecision, options?.repoDir);
+    const escalatedDecision = applyRouteEscalation(prompt, policyDecision, options, context);
+    const finalDecision = withChallengeRecommendation(escalatedDecision, options?.repoDir);
     registerWorkflowDecisionResources(finalDecision, options?.repoDir);
     return finalDecision;
   }

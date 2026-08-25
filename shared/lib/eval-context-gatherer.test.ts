@@ -2,11 +2,12 @@
  * Tests for eval-context-gatherer module.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, test as it } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as nodePath from 'node:path';
-import * as shellUtils from './shell-utils.ts';
+import { expect } from './test-assertions.ts';
+import { POLICY_RESOLVER_VERSION, ROUTE_ARTIFACT_SCHEMA_VERSION } from './route-artifact.ts';
 import {
   computePhaseDurations,
   computeWallClockSeconds,
@@ -18,17 +19,67 @@ import {
   convertToRoutingDecision,
   fetchRoutingDecision,
   fetchRoutingCompleteRawWithArchive,
+  resetEvalContextGathererShellDependenciesForTest,
+  setEvalContextGathererShellDependenciesForTest,
 } from './eval-context-gatherer.ts';
 
-// Mock shell-utils
-vi.mock('./shell-utils.ts', () => ({
-  escapeShellArg: (arg: string) => `'${arg}'`,
-  execShellCommand: vi.fn(),
-}));
+type ShellCall = [string, { encoding: string; cwd: string }];
+
+const shellMock = {
+  calls: [] as ShellCall[],
+  queuedImplementations: [] as Array<(command: string, options: ShellCall[1]) => string>,
+  implementation: (() => '') as (command: string, options: ShellCall[1]) => string,
+  reset() {
+    this.calls = [];
+    this.queuedImplementations = [];
+    this.implementation = (_command: string, _options: ShellCall[1]) => '';
+  },
+  mockReturnValue(value: string) {
+    this.implementation = (_command: string, _options: ShellCall[1]) => value;
+    return this;
+  },
+  mockImplementation(implementation: (command: string, options: ShellCall[1]) => string) {
+    this.implementation = implementation;
+    return this;
+  },
+  mockReturnValueOnce(value: string) {
+    this.queuedImplementations.push(() => value);
+    return this;
+  },
+  mockImplementationOnce(implementation: (command: string, options: ShellCall[1]) => string) {
+    this.queuedImplementations.push(implementation);
+    return this;
+  },
+  exec(command: string, options: ShellCall[1]) {
+    this.calls.push([command, options]);
+    return (this.queuedImplementations.shift() ?? this.implementation)(command, options);
+  },
+};
 
 describe('eval-context-gatherer', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    shellMock.reset();
+    setEvalContextGathererShellDependenciesForTest({
+      escapeShellArg: (arg) => `'${arg}'`,
+      execShellCommand: shellMock.exec.bind(shellMock),
+      fetchPrDiff: (prNumber, repoDir) => {
+        try {
+          const text = shellMock.exec(`gh pr diff ${prNumber}`, { encoding: 'utf-8', cwd: repoDir });
+          return { kind: 'diff', text, source: 'gh-pr-diff', bytes: Buffer.byteLength(text), attempts: [] };
+        } catch (error) {
+          return {
+            kind: 'unavailable',
+            reason: 'gh_error',
+            detail: error instanceof Error ? error.message : String(error),
+            attempts: [],
+          };
+        }
+      },
+    });
+  });
+
+  afterEach(() => {
+    resetEvalContextGathererShellDependenciesForTest();
   });
 
   describe('fetchIssueData', () => {
@@ -39,21 +90,20 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
+      shellMock.mockReturnValue(
         JSON.stringify(mockIssue)
       );
 
       const result = fetchIssueData('HOK-870', '/repo');
 
       expect(result).toEqual(mockIssue);
-      expect(shellUtils.execShellCommand).toHaveBeenCalledWith(
-        expect.stringContaining('HOK-870'),
-        expect.objectContaining({ cwd: '/repo' })
-      );
+      expect(shellMock.calls.length).toBeGreaterThan(0);
+      expect(shellMock.calls[0][0]).toContain('HOK-870');
+      expect(shellMock.calls[0][1]).toEqual({ encoding: 'utf-8', cwd: '/repo' });
     });
 
     it('should return null on fetch failure', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      shellMock.mockImplementation(() => {
         throw new Error('fetch failed');
       });
 
@@ -63,7 +113,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should return null on JSON parse failure', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('invalid json');
+      shellMock.mockReturnValue('invalid json');
 
       const result = fetchIssueData('HOK-870', '/repo');
 
@@ -105,7 +155,7 @@ describe('eval-context-gatherer', () => {
 
   describe('fetchPrContext', () => {
     it('should fetch PR URL and diff', () => {
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce('https://github.com/user/repo/pull/123')
         .mockReturnValueOnce('diff --git a/file.ts b/file.ts\n...');
 
@@ -116,7 +166,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should handle URL fetch failure gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockImplementationOnce(() => { throw new Error('failed'); })
         .mockReturnValueOnce('diff content');
 
@@ -127,7 +177,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should handle diff fetch failure gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce('https://github.com/user/repo/pull/123')
         .mockImplementationOnce(() => { throw new Error('failed'); });
 
@@ -139,7 +189,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should handle both fetch failures gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      shellMock.mockImplementation(() => {
         throw new Error('failed');
       });
 
@@ -159,7 +209,7 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce(JSON.stringify(mockIssue)) // issue fetch
         .mockReturnValueOnce('https://github.com/user/repo/pull/123') // PR URL
         .mockReturnValueOnce('diff content'); // PR diff
@@ -177,7 +227,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should use provided prUrl if given', () => {
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce('https://github.com/user/repo/pull/123') // PR URL (ignored)
         .mockReturnValueOnce('diff content'); // PR diff
 
@@ -191,7 +241,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should handle missing issueId', () => {
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce('https://github.com/user/repo/pull/123')
         .mockReturnValueOnce('diff content');
 
@@ -211,7 +261,7 @@ describe('eval-context-gatherer', () => {
         description: 'Test description',
       };
 
-      vi.mocked(shellUtils.execShellCommand)
+      shellMock
         .mockReturnValueOnce(JSON.stringify(mockIssue));
 
       const result = gatherEvalContext({
@@ -224,7 +274,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should handle all fetch failures gracefully', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      shellMock.mockImplementation(() => {
         throw new Error('failed');
       });
 
@@ -244,19 +294,17 @@ describe('eval-context-gatherer', () => {
 
   describe('computeWallClockSeconds', () => {
     it('should return null when git log is empty', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('');
+      shellMock.mockReturnValue('');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
       expect(result).toBeNull();
-      expect(shellUtils.execShellCommand).toHaveBeenCalledWith(
-        expect.stringContaining("git log 'main'..'task/test' --format=\"%ct\" --reverse"),
-        expect.objectContaining({ cwd: '/repo' })
-      );
+      expect(shellMock.calls[0][0]).toContain("git log 'main'..'task/test' --format=\"%ct\" --reverse");
+      expect(shellMock.calls[0][1]).toEqual({ encoding: 'utf-8', cwd: '/repo' });
     });
 
     it('should return null for a single commit timestamp', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue('1710000000');
+      shellMock.mockReturnValue('1710000000');
 
       const result = computeWallClockSeconds('/repo', 'task/test');
 
@@ -264,7 +312,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should return the elapsed seconds for multiple commits', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
+      shellMock.mockReturnValue(
         '1710000000\n1710000015\n1710000120'
       );
 
@@ -274,7 +322,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should ignore malformed timestamps when valid endpoints remain', () => {
-      vi.mocked(shellUtils.execShellCommand).mockReturnValue(
+      shellMock.mockReturnValue(
         '1710000000\nnot-a-number\n1710000060\n0'
       );
 
@@ -284,7 +332,7 @@ describe('eval-context-gatherer', () => {
     });
 
     it('should return null on git errors', () => {
-      vi.mocked(shellUtils.execShellCommand).mockImplementation(() => {
+      shellMock.mockImplementation(() => {
         throw new Error('git failed');
       });
 
@@ -429,8 +477,8 @@ describe('eval-context-gatherer', () => {
       });
 
       expect(result.decisionPolicyVersion).toBe('baseline');
-      expect(result.routeArtifactSchemaVersion).toBe('1.0');
-      expect(result.policyResolverVersion).toBe('1.0.0');
+      expect(result.routeArtifactSchemaVersion).toBe(ROUTE_ARTIFACT_SCHEMA_VERSION);
+      expect(result.policyResolverVersion).toBe(POLICY_RESOLVER_VERSION);
     });
 
     it('maps stage-aware routing metadata into structured policy fields', () => {
@@ -538,8 +586,8 @@ describe('eval-context-gatherer', () => {
       expect(result).not.toBeNull();
       expect(result!.candidates).toHaveLength(3);
       expect(result!.decisionPolicyVersion).toBe('baseline');
-      expect(result!.routeArtifactSchemaVersion).toBe('1.0');
-      expect(result!.policyResolverVersion).toBe('1.0.0');
+      expect(result!.routeArtifactSchemaVersion).toBe(ROUTE_ARTIFACT_SCHEMA_VERSION);
+      expect(result!.policyResolverVersion).toBe(POLICY_RESOLVER_VERSION);
       fs.rmSync(tmpDir, { recursive: true });
     });
 
@@ -765,8 +813,8 @@ describe('eval-context-gatherer', () => {
           decisionPolicyVersion: 'baseline',
           decisionRationale:
             'Routing: planner=model-a, coder=model-b, reviewer=model-c; codeDepth=deep, reviewMode=static+llm',
-          routeArtifactSchemaVersion: '1.0',
-          policyResolverVersion: '1.0.0',
+          routeArtifactSchemaVersion: ROUTE_ARTIFACT_SCHEMA_VERSION,
+          policyResolverVersion: POLICY_RESOLVER_VERSION,
         });
         expect(result.routePrediction).toEqual({
           expectedSuccess: 0.8,

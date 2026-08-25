@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import {
+  evaluateLaunchPriorityPersistence,
   getCertificationPersistBlockers,
   runCertifyLaunchPriorityModelCommand,
 } from './certify-launch-priority-model.ts';
@@ -86,5 +87,12 @@ describe('certify-launch-priority-model', () => {
       'dry-smoke blocked-model: not reachable',
       'live-smoke: live smoke skipped',
     ]);
+  });
+
+  it('uses provisional-observation-only to block launch-priority persistence for held aliases', () => {
+    const decision = evaluateLaunchPriorityPersistence('ox-alpha');
+
+    assert.equal(decision.eligible, false);
+    assert.deepEqual(decision.reasons, ['provisional-observation-only']);
   });
 });

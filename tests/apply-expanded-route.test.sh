@@ -629,6 +629,44 @@ EOF
   rm -rf "$root"
 }
 
+{
+  mapfile -t fixture < <(new_fixture "expanded-route-summary-signals")
+  root="${fixture[0]}"
+  wt_dir="${fixture[1]}"
+  state_file="${fixture[2]}"
+  feature_dir="$wt_dir/features/test-slug"
+  cat > "$feature_dir/.post-expansion-route.json" <<'EOF'
+{
+  "planner": "claude-sonnet-5",
+  "coder": "gpt-5.4",
+  "reviewer": "claude-sonnet-5",
+  "planDepth": "deep",
+  "codeDepth": "medium",
+  "reviewMode": "llm",
+  "signals": {
+    "taskType": "feature",
+    "complexityScore": 5,
+    "complexityBand": "xl",
+    "riskFlags": ["greenfield", "large-scope-refactor"]
+  }
+}
+EOF
+  set +e
+  output="$(run_apply "$feature_dir" "$state_file" 2>&1)"
+  status=$?
+  set -e
+
+  if [[ "$status" -eq 0 ]] \
+    && grep -q 'taskType=feature' <<< "$output" \
+    && grep -q 'complexity=5' <<< "$output" \
+    && grep -q 'riskFlags=greenfield|large-scope-refactor' <<< "$output"; then
+    pass "route summary includes signal vector"
+  else
+    fail "route summary should include signal vector"
+  fi
+  rm -rf "$root"
+}
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

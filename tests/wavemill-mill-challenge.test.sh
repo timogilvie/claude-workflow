@@ -185,6 +185,7 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   RUNTIME_STATE_FILE="$RUNTIME_STATE_TMP/state.json"
   printf '%s\n' '{"tasks":{"HOK-2724_c":{"slug":"native-review","branch":"task/native-review","worktree":"/tmp/native-review","status":"active","challenge":true,"challengePairId":"HOK-2724","challengeRole":"challenger","challengeStage":"review","challengeIntent":{"pairId":"HOK-2724","challengeStage":"review","challenger":{"expectedRoute":{"reviewer":"qwen-3-coder"}}}}}}' > "$RUNTIME_STATE_FILE"
   source "$REPO_DIR/shared/lib/wavemill-common.sh"
+  log_warn() { :; }
   STATE_FILE="$RUNTIME_STATE_FILE"
   eval "$SAVE_STATE_HELPER"
   save_task_state "HOK-2724_c" "native-review" "task/native-review" "/tmp/native-review" "" "coding" "codex" "HOK-2724_c" "true" "HOK-2724" "challenger" "qwen-3-coder" "bootstrap-planner" "bootstrap-coder" "qwen-3-coder" "light" "medium" "llm" "review"
@@ -206,6 +207,18 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     pass "runtime state update retains the varied stage model and agent"
   else
     fail "runtime state update discarded the varied stage model or agent"
+  fi
+
+  if save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
+    fail "runtime state should reject blank primary challenge role"
+  else
+    pass "runtime state rejects blank primary challenge role with error"
+  fi
+
+  if save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
+    fail "runtime state should reject blank challenger challenge role"
+  else
+    pass "runtime state rejects blank challenger challenge role with error"
   fi
 
   # challenge_varied_stage_model must only speak up for the stage the pair varies.

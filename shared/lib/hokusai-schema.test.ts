@@ -795,6 +795,37 @@ describe('hokusai-schema', () => {
       );
     });
 
+    it('rejects provisional execution before trainingEligible false diagnostics', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          attempted_model: 'ox-alpha',
+          trainingEligible: false,
+          eligibilityErrors: ['missing_cost'],
+        })),
+        ['registry_provisional_fallback'],
+      );
+    });
+
+    it('rejects provisional execution when trainingEligible is missing', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          attempted_model: 'ox-alpha',
+          trainingEligible: undefined,
+        })),
+        ['registry_provisional_fallback'],
+      );
+    });
+
+    it('rejects provisional execution when trainingEligible is stale true', () => {
+      expectFailure(
+        toHokusaiSubmission(makeRecord({
+          attempted_model: 'ox-alpha',
+          trainingEligible: true,
+        })),
+        ['registry_provisional_fallback'],
+      );
+    });
+
     it('falls back to nonRewardReason code for ineligible training records', () => {
       expectFailure(
         toHokusaiSubmission(makeRecord({

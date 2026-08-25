@@ -55,7 +55,12 @@
     },
     "artifacts": {
       "type": "object",
-      "additionalProperties": true
+      "additionalProperties": true,
+      "properties": {
+        "failureCategory": {
+          "type": "string"
+        }
+      }
     },
     "history": {
       "type": "array",

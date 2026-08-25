@@ -436,6 +436,7 @@ export interface ReviewChangesSuccess extends WorkflowToolResultBase {
   /** Alias used by stage-result readiness predicates. */
   blockerCount?: number;
   warningCount?: number;
+  failureCategory?: string;
 }
 
 export interface ReviewChangesError extends WorkflowToolResultBase {
@@ -449,6 +450,7 @@ export interface ReviewChangesError extends WorkflowToolResultBase {
   iterations?: number;
   blockerCount?: number;
   warningCount?: number;
+  failureCategory?: string;
   diagnostics?: Record<string, unknown>;
 }
 

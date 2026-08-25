@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -10,12 +10,12 @@ import {
 } from './pr-state-labels.ts';
 import { getIntegrationConfig, getIntegrationReadyPolicy } from './config.ts';
 import { readChallengeComparisons } from './challenge-comparison.ts';
-import { getPullRequest } from './github.ts';
+import { getPullRequest, removeLabelFromPullRequest } from './github.ts';
 import { getIssueCompletionState } from './linear.ts';
 import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-metadata.ts';
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
-import { escapeShellArg, execShellCommand } from './shell-utils.ts';
+import { escapeShellArg, execArgvCommand, execShellCommand } from './shell-utils.ts';
 import {
   applyChallengePairGates,
   evaluateAutoCloseEligibility,
@@ -82,6 +82,7 @@ export interface GhPrListEntry {
   number: number;
   title: string;
   headRefName: string;
+  headRefOid?: string;
   createdAt: string;
   isDraft: boolean;
   labels: { name: string }[];
@@ -99,10 +100,26 @@ export interface SelectNextCandidateOptions {
   repoDir: string;
   prFetcher?: PrFetcher;
   healthChecker?: HealthChecker;
+  crossPrGuardChecker?: CrossPrGuardChecker;
+  blockedLabelClearer?: BlockedLabelClearer;
   loserCleanup?: (candidate: ChallengeLoserCleanupCandidate, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
   challengeGateOptions?: ChallengeGateOptions;
 }
+
+export interface CrossPrGuardCheckResult {
+  status: 'pass' | 'blocked' | 'tool-error';
+  checkedHeadSha: string;
+  detail?: string;
+}
+
+export type CrossPrGuardChecker = (input: {
+  pr: GhPrListEntry;
+  integrationBranch: string;
+  repoDir: string;
+}) => Promise<CrossPrGuardCheckResult>;
+
+export type BlockedLabelClearer = (prNumber: number, repoDir: string) => void;
 
 interface EligibleWorkItem {
   pr: GhPrListEntry;
@@ -130,6 +147,12 @@ const GIT_COMMAND_TIMEOUT_MS = 180_000;
 const GIT_MUTATION_TIMEOUT_MS = 300_000;
 const MERGE_COMMAND_TIMEOUT_MS = 180_000;
 const DEFAULT_EXTERNAL_COMMAND_TIMEOUT_MS = 120_000;
+const CROSS_PR_GUARD_TOOL_TIMEOUT_MS = 180_000;
+const CROSS_PR_GUARD_PROVENANCE_TEXT = [
+  'Cross-PR revert guard',
+  'removes files from',
+  'without explicit acknowledgement',
+];
 
 interface PrMergeDiagnostics {
   mergeStateStatus?: string;
@@ -137,6 +160,20 @@ interface PrMergeDiagnostics {
   headRefOid?: string;
   baseRefOid?: string;
   unavailableReason?: string;
+}
+
+interface ReadyResultSnapshot {
+  status?: string;
+  artifacts?: Record<string, unknown>;
+  crossPrDiagnostic?: unknown;
+  attention?: string;
+}
+
+interface CrossPrGuardEvidence {
+  provenance: boolean;
+  checkedHeadSha?: string;
+  status?: string;
+  detail?: string;
 }
 
 export function createPrFetcher(deps: {
@@ -160,7 +197,7 @@ export function createPrFetcher(deps: {
             '--state',
             'open',
             '--json',
-            'number,title,headRefName,createdAt,isDraft,labels,body',
+            'number,title,headRefName,headRefOid,createdAt,isDraft,labels,body',
           ].join(' '),
           { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
         ));
@@ -304,10 +341,22 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   const openPrNumbers = new Set(wavemillPrs.map((pr) => pr.number));
   const blocked: BlockedCandidate[] = [];
   let eligibleWorkItems: EligibleWorkItem[] = [];
+  const crossPrGuardChecker = options.crossPrGuardChecker ?? defaultCrossPrGuardChecker;
+  const blockedLabelClearer = options.blockedLabelClearer ?? defaultBlockedLabelClearer;
 
   for (const pr of wavemillPrs) {
     const metadataResult = getValidMetadata(pr.body);
-    const reason = getInitialBlockReason(pr, metadataResult.metadata, openPrNumbers);
+    const reason = await getInitialBlockReason(
+      pr,
+      metadataResult.metadata,
+      openPrNumbers,
+      {
+        repoDir: options.repoDir,
+        integrationBranch,
+        crossPrGuardChecker,
+        blockedLabelClearer,
+      },
+    );
 
     if (reason) {
       blocked.push(toBlockedCandidate(pr, reason));
@@ -1157,6 +1206,105 @@ function defaultLoserCleanup(candidate: ChallengeLoserCleanupCandidate, repoDir:
   }
 }
 
+async function defaultCrossPrGuardChecker(input: {
+  pr: GhPrListEntry;
+  integrationBranch: string;
+  repoDir: string;
+}): Promise<CrossPrGuardCheckResult> {
+  if (!input.pr.headRefOid) {
+    return {
+      status: 'tool-error',
+      checkedHeadSha: '',
+      detail: 'missing PR head SHA',
+    };
+  }
+
+  const fetchResult = execArgvCommand(
+    'git',
+    ['fetch', 'origin', input.pr.headRefName],
+    { cwd: input.repoDir, encoding: 'utf-8', timeout: GIT_MUTATION_TIMEOUT_MS },
+  );
+  if (fetchResult.exitCode !== 0) {
+    return {
+      status: 'tool-error',
+      checkedHeadSha: input.pr.headRefOid,
+      detail: `git fetch failed: ${truncateReason(fetchResult.stderr || fetchResult.stdout || 'unknown error')}`,
+    };
+  }
+
+  const result = execArgvCommand(
+    'npx',
+    [
+      'tsx',
+      'tools/check-cross-pr-reverts.ts',
+      '--repo-dir',
+      input.repoDir,
+      '--head-ref',
+      input.pr.headRefOid,
+      '--integration-ref',
+      input.integrationBranch,
+    ],
+    { cwd: input.repoDir, encoding: 'utf-8', timeout: CROSS_PR_GUARD_TOOL_TIMEOUT_MS },
+  );
+  const parsed = parseCrossPrGuardToolOutput(result.stdout);
+
+  if (parsed.toolError) {
+    return {
+      status: 'tool-error',
+      checkedHeadSha: input.pr.headRefOid,
+      detail: summarizeCrossPrGuardToolError(parsed.toolError),
+    };
+  }
+
+  if (result.exitCode === 0 && parsed.blocked === false) {
+    return { status: 'pass', checkedHeadSha: input.pr.headRefOid };
+  }
+
+  if (result.exitCode === 1 || parsed.blocked === true) {
+    return { status: 'blocked', checkedHeadSha: input.pr.headRefOid };
+  }
+
+  return {
+    status: 'tool-error',
+    checkedHeadSha: input.pr.headRefOid,
+    detail: truncateReason(result.stderr || result.stdout || `exit ${result.exitCode}`),
+  };
+}
+
+function defaultBlockedLabelClearer(prNumber: number, repoDir: string): void {
+  let repo: string | undefined;
+  try {
+    repo = resolveOwnerRepoFromRemote(repoDir) ?? undefined;
+  } catch {
+    repo = undefined;
+  }
+  removeLabelFromPullRequest(prNumber, WM_LABELS.blocked, repo ? { repo } : {});
+}
+
+function parseCrossPrGuardToolOutput(output: string): {
+  blocked?: boolean;
+  toolError?: Record<string, unknown>;
+} {
+  try {
+    const parsed = JSON.parse(output) as unknown;
+    if (!isRecord(parsed)) {
+      return {};
+    }
+    return {
+      blocked: typeof parsed.blocked === 'boolean' ? parsed.blocked : undefined,
+      toolError: isRecord(parsed.toolError) ? parsed.toolError : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function summarizeCrossPrGuardToolError(toolError: Record<string, unknown>): string {
+  const commandClass = stringField(toolError, 'commandClass') ?? 'tool';
+  const ref = stringField(toolError, 'ref') ?? 'unknown ref';
+  return `${commandClass} failed on ${ref}`;
+}
+
 interface PrCheckRun {
   name?: string;
   state?: string | null;
@@ -1258,11 +1406,17 @@ function getValidMetadata(body: string): { metadata: PrMetadata | null } {
   return { metadata: parsed.metadata };
 }
 
-function getInitialBlockReason(
+async function getInitialBlockReason(
   pr: GhPrListEntry,
   metadata: PrMetadata | null,
   openPrNumbers: Set<number>,
-): string | null {
+  options: {
+    repoDir: string;
+    integrationBranch: string;
+    crossPrGuardChecker: CrossPrGuardChecker;
+    blockedLabelClearer: BlockedLabelClearer;
+  },
+): Promise<string | null> {
   const labels = labelSet(pr);
 
   if (pr.isDraft) {
@@ -1270,7 +1424,10 @@ function getInitialBlockReason(
   }
 
   if (labels.has(WM_LABELS.blocked)) {
-    return 'blocked-label';
+    const blockedReason = await resolveBlockedLabelReason(pr, metadata, labels, options);
+    if (blockedReason) {
+      return blockedReason;
+    }
   }
 
   if (!metadata) {
@@ -1297,6 +1454,231 @@ function getInitialBlockReason(
   }
 
   return null;
+}
+
+async function resolveBlockedLabelReason(
+  pr: GhPrListEntry,
+  metadata: PrMetadata | null,
+  labels: Set<string>,
+  options: {
+    repoDir: string;
+    integrationBranch: string;
+    crossPrGuardChecker: CrossPrGuardChecker;
+    blockedLabelClearer: BlockedLabelClearer;
+  },
+): Promise<string | null> {
+  const readyResult = readReadyResultSnapshot(options.repoDir, pr, metadata);
+  const currentHeadSha = pr.headRefOid ?? '';
+
+  if (metadata && currentHeadSha && labels.has(WM_LABELS.ready) && readyResultIsCurrentPass(readyResult, currentHeadSha)) {
+    return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+  }
+
+  const evidence = extractCrossPrGuardEvidence(readyResult);
+  if (!evidence.provenance) {
+    return 'blocked-label';
+  }
+
+  if (!currentHeadSha) {
+    return 'blocked-label:cross-pr-guard-missing-head';
+  }
+
+  if (
+    evidence.checkedHeadSha === currentHeadSha
+    && (evidence.status === 'blocked' || evidence.status === 'tool-error')
+  ) {
+    return evidence.status === 'tool-error'
+      ? 'blocked-label:cross-pr-guard-tool-error'
+      : 'blocked-label:cross-pr-guard';
+  }
+
+  let recheck: CrossPrGuardCheckResult;
+  try {
+    recheck = await options.crossPrGuardChecker({
+      pr,
+      integrationBranch: options.integrationBranch,
+      repoDir: options.repoDir,
+    });
+  } catch (error) {
+    return `blocked-label:cross-pr-guard-recheck-error:${truncateReason(errorMessage(error))}`;
+  }
+
+  if (recheck.status === 'blocked') {
+    return 'blocked-label:cross-pr-guard';
+  }
+  if (recheck.status === 'tool-error') {
+    return 'blocked-label:cross-pr-guard-tool-error';
+  }
+
+  return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+}
+
+function clearGuardBlockedLabel(
+  pr: GhPrListEntry,
+  blockedLabelClearer: BlockedLabelClearer,
+  repoDir: string,
+  failureReason: string,
+): string | null {
+  try {
+    blockedLabelClearer(pr.number, repoDir);
+    return null;
+  } catch (error) {
+    return `${failureReason}:${truncateReason(errorMessage(error))}`;
+  }
+}
+
+function readReadyResultSnapshot(
+  repoDir: string,
+  pr: GhPrListEntry,
+  metadata: PrMetadata | null,
+): ReadyResultSnapshot | null {
+  const readyDir = resolveReadyStateDir(repoDir, pr, metadata);
+  if (!readyDir) {
+    return null;
+  }
+
+  const resultFile = join(readyDir, '.ready-result.json');
+  let snapshot: ReadyResultSnapshot = {};
+  if (existsSync(resultFile)) {
+    try {
+      const parsed = JSON.parse(readFileSync(resultFile, 'utf-8')) as unknown;
+      if (parsed && typeof parsed === 'object') {
+        const record = parsed as Record<string, unknown>;
+        snapshot = {
+          status: typeof record.status === 'string' ? record.status : undefined,
+          artifacts: isRecord(record.artifacts) ? record.artifacts : undefined,
+          crossPrDiagnostic: record.crossPrDiagnostic,
+        };
+      }
+    } catch {
+      snapshot = {};
+    }
+  }
+
+  const attentionFile = join(readyDir, '.needs-attention');
+  if (existsSync(attentionFile)) {
+    try {
+      snapshot.attention = readFileSync(attentionFile, 'utf-8');
+    } catch {
+      // Missing attention text just means we rely on structured evidence.
+    }
+  }
+
+  return Object.keys(snapshot).length > 0 ? snapshot : null;
+}
+
+function resolveReadyStateDir(
+  repoDir: string,
+  pr: GhPrListEntry,
+  metadata: PrMetadata | null,
+): string | null {
+  const candidates: string[] = [];
+  const workflowEntries = readWorkflowTaskEntries(repoDir);
+  const task = metadata?.task;
+
+  for (const [key, value] of workflowEntries) {
+    const prNumber = typeof value.pr === 'number' ? value.pr : Number(value.pr);
+    const matchesPr = Number.isFinite(prNumber) && prNumber === pr.number;
+    const matchesTask = typeof task === 'string' && task.length > 0 && key === task;
+    if (!matchesPr && !matchesTask) {
+      continue;
+    }
+
+    const slug = typeof value.slug === 'string' ? value.slug : '';
+    const worktree = typeof value.worktree === 'string' ? value.worktree : '';
+    if (worktree && slug) {
+      candidates.push(join(worktree, 'features', slug), join(worktree, 'bugs', slug), join(worktree, 'features', slug, 'ready'));
+    }
+    if (slug) {
+      candidates.push(join(repoDir, 'features', slug), join(repoDir, 'bugs', slug));
+    }
+  }
+
+  if (task) {
+    candidates.push(join(repoDir, 'features', task), join(repoDir, 'bugs', task), join(repoDir, 'features', normalizeTaskSlug(task)));
+  }
+
+  for (const candidate of uniqueStrings(candidates)) {
+    if (existsSync(join(candidate, '.ready-result.json')) || existsSync(join(candidate, '.needs-attention'))) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function readWorkflowTaskEntries(repoDir: string): Array<[string, Record<string, unknown>]> {
+  const stateFile = join(repoDir, '.wavemill', 'workflow-state.json');
+  if (!existsSync(stateFile)) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(stateFile, 'utf-8')) as unknown;
+    if (!isRecord(parsed) || !isRecord(parsed.tasks)) {
+      return [];
+    }
+    return Object.entries(parsed.tasks).filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeTaskSlug(task: string): string {
+  return task.toLowerCase().replace(/[^a-z0-9._-]+/g, '-');
+}
+
+function readyResultIsCurrentPass(snapshot: ReadyResultSnapshot | null, currentHeadSha: string): boolean {
+  const artifacts = snapshot?.artifacts;
+  if (!artifacts) {
+    return false;
+  }
+
+  const verdict = artifacts.verdict;
+  const readyHeadSha = artifacts.readyHeadSha;
+  return (
+    snapshot?.status === 'completed'
+    && (verdict === 'pass' || verdict === 'warn')
+    && readyHeadSha === currentHeadSha
+    && artifacts.readyLabelsUpdated === true
+  );
+}
+
+function extractCrossPrGuardEvidence(snapshot: ReadyResultSnapshot | null): CrossPrGuardEvidence {
+  if (!snapshot) {
+    return { provenance: false };
+  }
+
+  const guard = isRecord(snapshot.artifacts?.crossPrGuard) ? snapshot.artifacts.crossPrGuard : null;
+  if (guard) {
+    return {
+      provenance: true,
+      checkedHeadSha: stringField(guard, 'checkedHeadSha') ?? stringField(guard, 'headSha') ?? undefined,
+      status: stringField(guard, 'status') ?? undefined,
+      detail: stringField(guard, 'detail') ?? stringField(guard, 'reason') ?? undefined,
+    };
+  }
+
+  if (snapshot.crossPrDiagnostic !== undefined || attentionHasCrossPrGuardProvenance(snapshot.attention)) {
+    return { provenance: true };
+  }
+
+  return { provenance: false };
+}
+
+function attentionHasCrossPrGuardProvenance(attention: string | undefined): boolean {
+  if (!attention) {
+    return false;
+  }
+  return CROSS_PR_GUARD_PROVENANCE_TEXT.some((text) => attention.includes(text));
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.length > 0))];
+}
+
+function truncateReason(reason: string, max = 100): string {
+  return reason.length <= max ? reason : `${reason.slice(0, max)}...`;
 }
 
 function removeCandidatesWithBlockedDependencies(eligible: EligibleWorkItem[]): {

@@ -4,6 +4,10 @@ import {
   type RemovedModelSettingInventoryItem,
   scanForbiddenModelSettings,
 } from './model-settings-migrator.ts';
+import {
+  evaluateSuiteCoverage,
+  type SuiteCoverageResult,
+} from './native-agent/certification/coverage.ts';
 
 export const MILL_CONFIG_MIGRATION_COMMAND = 'wavemill config migrate-model-settings';
 
@@ -12,6 +16,7 @@ export interface MillConfigPreflightReport {
   removedFields: RemovedModelSettingInventoryItem[];
   validationError: string | null;
   migrationCommand: string;
+  certificationCoverage?: SuiteCoverageResult;
 }
 
 export interface MillConfigPreflightResult {
@@ -51,22 +56,28 @@ export function runMillConfigPreflight(
     validationError = message;
   }
 
+  const certificationCoverage = process.env.WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD === '1'
+    ? undefined
+    : evaluateSuiteCoverage({ repoDir: absRepoDir });
+  const certificationCoverageBlocked = certificationCoverage?.status === 'bump-without-publish';
+
   const report: MillConfigPreflightReport = {
     repoDir: absRepoDir,
     removedFields,
     validationError,
     migrationCommand: MILL_CONFIG_MIGRATION_COMMAND,
+    ...(certificationCoverage ? { certificationCoverage } : {}),
   };
 
   return {
-    ok: removedFields.length === 0 && validationError === null,
+    ok: removedFields.length === 0 && validationError === null && !certificationCoverageBlocked,
     report,
   };
 }
 
 export function formatMillConfigPreflightReport(report: MillConfigPreflightReport): string {
   const lines = [
-    'Mill preflight failed - repo-local model configuration still present.',
+    'Mill preflight failed.',
     '',
     `Repository: ${report.repoDir}`,
   ];
@@ -83,14 +94,31 @@ export function formatMillConfigPreflightReport(report: MillConfigPreflightRepor
     lines.push('', 'TypeScript config validation error:', report.validationError);
   }
 
-  lines.push(
-    '',
-    'Run the migration once from the repository root:',
-    `  ${report.migrationCommand}`,
-    '',
-    'Preview first with:',
-    `  ${report.migrationCommand} --dry-run`,
-  );
+  if (report.certificationCoverage?.status === 'bump-without-publish') {
+    const coverage = report.certificationCoverage;
+    const otherSuites = Object.entries(coverage.artifactCountByOtherSuite)
+      .map(([suiteVersion, count]) => `${count} ${suiteVersion}`)
+      .join(', ');
+    lines.push(
+      '',
+      'Native certification suite coverage:',
+      `  ERROR: certificationSuiteVersion is '${coverage.requiredSuiteVersion}' but the global store (${coverage.root}) has 0 matching artifacts${otherSuites ? ` (${otherSuites} found)` : ''}.`,
+      '  The suite version was bumped without republishing the matrix.',
+      `  Run: ${coverage.remediationCommand}`,
+      '  To skip only this guard, set WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1.',
+    );
+  }
+
+  if (report.removedFields.length > 0 || report.validationError) {
+    lines.push(
+      '',
+      'Run the migration once from the repository root:',
+      `  ${report.migrationCommand}`,
+      '',
+      'Preview first with:',
+      `  ${report.migrationCommand} --dry-run`,
+    );
+  }
 
   return lines.join('\n');
 }

@@ -61,6 +61,39 @@ describe('unresolvable reason helpers', () => {
 });
 
 describe('workflow state challenge data', () => {
+  it('derives missing challenge roles from canonical task keys', () => {
+    const { repoDir, cleanup } = setupRepoDir();
+    try {
+      writeWorkflowState(repoDir, {
+        HOK_2870: {
+          pr: 1226,
+          branch: 'task/eight-test-files',
+          challengePairId: 'HOK-2870',
+          challengeRole: '',
+          challengeModel: 'gpt-5',
+          evalCompleted: true,
+        },
+        HOK_2870_c: {
+          pr: 1225,
+          branch: 'task/eight-test-files-challenger',
+          challengePairId: 'HOK-2870',
+          challengeRole: 'challenger',
+          challengeModel: 'claude-sonnet-4',
+          evalCompleted: true,
+        },
+      });
+
+      const state = loadWorkflowStateChallengeData(repoDir);
+      const pair = state.taskStateByPair.get('HOK-2870');
+      assert.equal(pair?.primary?.role, 'primary');
+      assert.equal(pair?.primary?.prNumber, 1226);
+      assert.equal(pair?.challenger?.role, 'challenger');
+      assert.equal(pair?.challenger?.prNumber, 1225);
+    } finally {
+      cleanup();
+    }
+  });
+
   it('preserves challenge abort detail, next action, and stage', () => {
     const { repoDir, cleanup } = setupRepoDir();
     try {

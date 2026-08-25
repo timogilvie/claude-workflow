@@ -49,6 +49,23 @@ Flags:
 
 - `--repo-dir <path>`: inspect a repository other than the current working directory
 
+### `wavemill abort`
+
+Marks an active mill task as aborted so the mill can clean it up on the next poll cycle.
+
+```bash
+wavemill abort HOK-2878
+wavemill abort HOK-2878_c --reason "wrong repo"
+```
+
+Flags:
+
+- `--reason <text>`: record an operator-facing abort reason
+- `--repo-dir <path>`: inspect a repository other than the current working directory
+- `--state-file <path>`: override the workflow state file
+
+If the task has no recorded PR, cleanup closes the pane, removes the worktree and local branch, and clears the state entry. If the task has a recorded PR, cleanup closes the pane and clears the state entry while preserving the worktree and local branch.
+
 ### `wavemill intervention`
 
 Records and inspects operator recovery artifacts that eval scoring reads even when there is no commit, PR comment, or Claude transcript.
