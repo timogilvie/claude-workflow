@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { fileURLToPath } from 'node:url';
-import { setWavemillReady } from '../shared/lib/pr-state-labels.ts';
+import { WM_LABELS, setWavemillReady } from '../shared/lib/pr-state-labels.ts';
 import { runTool } from '../shared/lib/tool-runner.ts';
 
 export const setPrReadyLabelDeps = {
@@ -15,6 +15,31 @@ export function setPrReadyLabel(prNumber: string, repo?: string): void {
   }
 
   const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, { repo });
+
+  // Verify the write actually landed before claiming success.
+  //
+  // A label mutation can report success while changing nothing -- `gh pr edit
+  // --add-label` fails on a Projects-classic GraphQL deprecation, and the mill
+  // has logged "Restored ready labels for PR #N" on consecutive polls while the
+  // PR stayed wm:blocked. A log line that lies about the outcome turns a
+  // one-line fix into a long diagnosis, so fail loudly instead.
+  //
+  // setWavemillReady re-fetches after mutating, so these labels are post-write
+  // state rather than the values we asked for.
+  const labels = new Set(pr.labels.map((label) => label.name));
+  const missing = labels.has(WM_LABELS.ready) ? [] : [`missing ${WM_LABELS.ready}`];
+  const lingering = [WM_LABELS.blocked, WM_LABELS.merging]
+    .filter((label) => labels.has(label))
+    .map((label) => `still has ${label}`);
+  const problems = [...missing, ...lingering];
+
+  if (problems.length > 0) {
+    const observed = [...labels].sort().join(', ') || '(none)';
+    throw new Error(
+      `Ready label reconciliation failed for PR #${pr.number}: ${problems.join('; ')}. Observed labels: [${observed}]`,
+    );
+  }
+
   setPrReadyLabelDeps.log(`Canonicalized ready labels for PR #${pr.number}`);
 }
 
