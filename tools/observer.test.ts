@@ -321,12 +321,84 @@ test('degraded queue health returns structured finding without throwing', () => 
   }
 });
 
+test('structured log scanning aggregates repeated errors and ignores prose false positives', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-log-scanner-'));
+  const fixtureLogPath = join(process.cwd(), 'tests', 'fixtures', 'observer', 'test-log.txt');
+  const variantLogPath = join(repoDir, 'variant.log');
+  writeFileSync(variantLogPath, '12:45:01 [error] Monitor command failed pid=42 tmp=/tmp/wavemill-plan-c stderr=Error: EAGAIN\n');
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-24T12:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: fixtureLogPath,
+        queueHealth: {
+          status: 'degraded',
+          degradationReason: 'dependency_planning_failed',
+          episodeStartedAt: '2026-08-24T00:00:00Z',
+          failureCount: 4,
+        },
+        tasks: [{
+          issue: 'HOK-1892',
+          phase: 'ready',
+          status: 'running',
+          pr: '437',
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const errorFindings = findings.filter((finding) => finding.id.startsWith('log-error-'));
+    assert.equal(errorFindings.length, 1);
+    const error = errorFindings[0];
+    assert.equal(error.severity, 'high');
+    assert.equal(error.confidence, 'high');
+    assert.equal(error.occurrenceCount, 2);
+    assert.ok(error.evidence.includes('occurrences=2'));
+    assert.ok(error.evidence.includes('normalizedMessage=Monitor command failed pid=<pid> tmp=<tmp> stderr=Error: EAGAIN'));
+    assert.equal(error.evidence.some((line) => /error detection|error handling/.test(line)), false);
+
+    const variantFindings = buildFindings({
+      timestamp: '2026-08-24T12:01:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: variantLogPath,
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+    const variantError = variantFindings.find((finding) => finding.id.startsWith('log-error-'));
+    assert.ok(variantError);
+    assert.equal(variantError.id, error.id);
+
+    const warningFindings = findings.filter((finding) => finding.id.startsWith('log-warning-'));
+    assert.equal(warningFindings.length, 1);
+    const warning = warningFindings[0];
+    assert.equal(warning.severity, 'low');
+    assert.equal(warning.confidence, 'high');
+    assert.equal(warning.occurrenceCount, 1);
+    assert.ok(warning.evidence.some((line) => /task handoff timed out/.test(line)));
+    assert.equal(warning.evidence.some((line) => /queue analysis unavailable|ready watchdog/.test(line)), false);
+    assert.ok(findings.some((finding) => finding.id.startsWith('queue-health-degraded-')));
+    assert.ok(findings.some((finding) => finding.id.startsWith('repeated-ready-watchdog-')));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('degraded queue health suppresses only generic queue analysis warning', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-warning-suppressed-'));
   const logPath = join(repoDir, 'mill-wavemill.log');
   writeFileSync(logPath, [
-    '12:01:02 [status] WARN queue analysis unavailable; using flat fallback',
-    '12:02:03 [status] WARN task handoff timed out',
+    '12:01:02 [warn] queue analysis unavailable; using flat fallback',
+    '12:02:03 [warn] task handoff timed out',
   ].join('\n'));
 
   try {
@@ -366,7 +438,7 @@ test('degraded queue health suppresses only generic queue analysis warning', () 
 test('healthy queue health keeps generic queue analysis warning', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-warning-healthy-'));
   const logPath = join(repoDir, 'mill-wavemill.log');
-  writeFileSync(logPath, '12:01:02 [status] WARN queue analysis unavailable; using flat fallback\n');
+  writeFileSync(logPath, '12:01:02 [warn] queue analysis unavailable; using flat fallback\n');
 
   try {
     const findings = buildFindings({
