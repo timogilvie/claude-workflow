@@ -32,6 +32,7 @@ function pr(overrides: Partial<GhPrListEntry> = {}): GhPrListEntry {
     number: 1,
     title: 'Test PR',
     headRefName: 'task/test-pr',
+    headRefOid: 'head-current',
     createdAt: '2026-04-01T00:00:00Z',
     isDraft: false,
     labels: [{ name: WM_LABELS.wavemill }, { name: WM_LABELS.ready }],
@@ -82,6 +83,12 @@ function writeChallengeComparisons(repoDir: string, records: object[]): void {
     join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl'),
     records.map((record) => JSON.stringify(record)).join('\n'),
   );
+}
+
+function writeReadyResult(repoDir: string, task: string, result: object): void {
+  const featureDir = join(repoDir, 'features', task);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, '.ready-result.json'), `${JSON.stringify(result)}\n`);
 }
 
 function candidate(overrides: Partial<TendCandidate> = {}): TendCandidate {
@@ -329,6 +336,215 @@ describe('selectNextCandidate filtering', () => {
     ], (decision) => {
       assert.equal(decision.blocked[0]?.reason, 'blocked-label');
     });
+  });
+
+  it('keeps a current cross-PR guard block parked without rechecking', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    let recheckCalls = 0;
+    options.crossPrGuardChecker = async () => {
+      recheckCalls += 1;
+      return { status: 'pass', checkedHeadSha: 'head-current' };
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        readyHeadSha: 'head-current',
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-current',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:cross-pr-guard');
+      assert.equal(recheckCalls, 0);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('rechecks stale cross-PR guard evidence, clears the label, and keeps the PR eligible in the same cycle', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    const cleared: number[] = [];
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'pass',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+    });
+    options.blockedLabelClearer = (prNumber) => {
+      cleared.push(prNumber);
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        readyHeadSha: 'head-old',
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [1]);
+      assert.deepEqual(decision.blocked, []);
+      assert.equal(decision.nextPR, 1);
+      assert.deepEqual(cleared, [1]);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('keeps a stale guard block when the current-head recheck still blocks', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'blocked',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+    });
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:cross-pr-guard');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed with a distinct reason when stale guard evidence recheck hits a tool error', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'tool-error',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+      detail: 'git merge-base failed',
+    });
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:cross-pr-guard-tool-error');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed when stale guard evidence rechecks clean but blocked-label removal fails', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'pass',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+    });
+    options.blockedLabelClearer = () => {
+      throw new Error('GitHub label API unavailable');
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.match(decision.blocked[0]?.reason ?? '', /^blocked-label:clear-failed:GitHub label API unavailable/);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('clears a contradictory blocked label when current ready-pass evidence already supersedes it', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    let recheckCalls = 0;
+    const cleared: number[] = [];
+    options.crossPrGuardChecker = async () => {
+      recheckCalls += 1;
+      return { status: 'blocked', checkedHeadSha: 'head-current' };
+    };
+    options.blockedLabelClearer = (prNumber) => {
+      cleared.push(prNumber);
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'completed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'pass',
+        prNumber: 1,
+        readyHeadSha: 'head-current',
+        readyLabelsUpdated: true,
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [1]);
+      assert.deepEqual(cleared, [1]);
+      assert.equal(recheckCalls, 0);
+    } finally {
+      options.cleanup();
+    }
   });
 
   it('blocks PRs missing metadata', async () => {

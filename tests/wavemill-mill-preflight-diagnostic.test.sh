@@ -46,7 +46,7 @@ assert_contains() {
 
 FUNCS_FILE="$TMP_DIR/cross-pr-funcs.sh"
 : > "$FUNCS_FILE"
-for fn in write_ready_attention_file cross_pr_revert_gate_allows_merge; do
+for fn in write_ready_attention_file write_cross_pr_guard_ready_result clear_cross_pr_guard_ready_evidence cross_pr_revert_gate_allows_merge; do
   extracted="$(extract_function "$MILL_SCRIPT" "$fn")"
   if [[ -z "$extracted" ]]; then
     echo "FAIL: missing extracted function $fn"
