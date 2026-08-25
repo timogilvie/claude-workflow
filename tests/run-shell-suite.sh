@@ -53,6 +53,7 @@ TESTS=(
   wavemill-status.test.sh
   backstage-tend-watchdog.test.sh
   backstage-observer-watchdog.test.sh
+  backstage-observer-pane-promotion.test.sh
   control-layout.test.sh
   challenge-comparison-state.test.sh
   challenge-running-state.test.sh

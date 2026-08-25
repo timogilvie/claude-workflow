@@ -186,6 +186,148 @@ describe('model-router resolveAgent', () => {
     assert.equal(stats[0]?.successRate, 0.5);
   });
 
+  it('counts terminal arm failures as attempts in successRate', () => {
+    // Two completed successes and five terminal stalls: 2/7, not 2/2. Without
+    // this the failures are absent from the denominator entirely, so a model
+    // that stalls more is sampled more selectively and scores higher.
+    const evalRecord = (id: string, score: number) => ({
+      id,
+      schemaVersion: '1.15.0',
+      originalPrompt: 'Fix a bug in routing',
+      modelId: 'llama-4-maverick',
+      modelVersion: 'llama-4-maverick',
+      score,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 10,
+      timestamp: '2026-05-01T00:00:00.000Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'completed',
+    });
+
+    const failure = (n: number) => ({
+      schemaVersion: '1.0.0' as const,
+      id: `fail-${n}`,
+      timestamp: '2026-05-01T00:00:00.000Z',
+      issueId: `HOK-100${n}_c`,
+      challengePairId: `HOK-100${n}`,
+      challengeRole: 'challenger' as const,
+      stage: 'implementation',
+      model: 'llama-4-maverick',
+      completed: false,
+      abortReason: 'terminal_stage_failure:native-provider-error',
+      failureKind: 'native-provider-error',
+      faultClass: 'unknown-fault' as const,
+      qualitySignalEligible: false,
+      source: 'challenge_abort_pair' as const,
+    });
+
+    const stats = aggregateEvalHistory(
+      [evalRecord('ok-1', 0.9), evalRecord('ok-2', 0.9)],
+      'bugfix',
+      { terminalFailures: [1, 2, 3, 4, 5].map(failure) as never },
+    );
+
+    assert.equal(stats[0]?.successRate, 2 / 7);
+  });
+
+  it('ranks a model whose every attempt failed, rather than omitting it', () => {
+    // With no eval records at all, such a model would otherwise be absent from
+    // the stats entirely and get scored on its optimistic registry prior --
+    // rewarded for never having succeeded.
+    const stats = aggregateEvalHistory([], 'bugfix', {
+      terminalFailures: [{
+        schemaVersion: '1.0.0',
+        id: 'fail-1',
+        timestamp: '2026-05-01T00:00:00.000Z',
+        issueId: 'HOK-1001_c',
+        challengePairId: 'HOK-1001',
+        challengeRole: 'challenger',
+        stage: 'implementation',
+        model: 'llama-4-maverick',
+        completed: false,
+        abortReason: 'terminal_stage_failure:native-provider-error',
+        failureKind: 'native-provider-error',
+        faultClass: 'unknown-fault',
+        qualitySignalEligible: false,
+        source: 'challenge_abort_pair',
+      }] as never,
+    });
+
+    const entry = stats.find((s) => s.modelId === 'llama-4-maverick');
+    assert.ok(entry, 'failure-only model should appear in stats');
+    assert.equal(entry?.successRate, 0);
+    assert.equal(entry?.totalRecords, 0);
+  });
+
+  it('keeps avgScore free of terminal failures', () => {
+    // A provider stall says nothing about output quality, so it must not drag
+    // the quality average down the way a genuinely poor run would.
+    const record = {
+      id: 'ok-1',
+      schemaVersion: '1.15.0',
+      originalPrompt: 'Fix a bug in routing',
+      modelId: 'llama-4-maverick',
+      modelVersion: 'llama-4-maverick',
+      score: 0.9,
+      scoreBand: 'Minor Feedback',
+      timeSeconds: 10,
+      timestamp: '2026-05-01T00:00:00.000Z',
+      interventionRequired: false,
+      interventionCount: 0,
+      interventionDetails: [],
+      rationale: 'completed',
+    };
+
+    const withFailures = aggregateEvalHistory([record], 'bugfix', {
+      terminalFailures: [{
+        schemaVersion: '1.0.0',
+        id: 'fail-1',
+        timestamp: '2026-05-01T00:00:00.000Z',
+        issueId: 'HOK-1001_c',
+        challengePairId: 'HOK-1001',
+        challengeRole: 'challenger',
+        stage: 'implementation',
+        model: 'llama-4-maverick',
+        completed: false,
+        abortReason: 'terminal_stage_failure:native-provider-error',
+        failureKind: 'native-provider-error',
+        faultClass: 'unknown-fault',
+        qualitySignalEligible: false,
+        source: 'challenge_abort_pair',
+      }] as never,
+    });
+
+    assert.equal(withFailures[0]?.avgScore, 0.9);
+    assert.equal(withFailures[0]?.successRate, 0.5);
+  });
+
+  it('never produces a NaN average from a non-numeric score', () => {
+    // score is required by the schema, but a malformed or legacy line can still
+    // reach here. NaN would poison the sort silently, since NaN comparisons are
+    // always false.
+    const stats = aggregateEvalHistory([
+      {
+        id: 'bad',
+        schemaVersion: '1.15.0',
+        originalPrompt: 'Fix a bug in routing',
+        modelId: 'gpt-5.4',
+        modelVersion: 'gpt-5.4',
+        score: undefined as never,
+        scoreBand: 'Minor Feedback',
+        timeSeconds: 10,
+        timestamp: '2026-05-01T00:00:00.000Z',
+        interventionRequired: false,
+        interventionCount: 0,
+        interventionDetails: [],
+        rationale: 'malformed',
+      },
+    ], 'bugfix');
+
+    assert.ok(Number.isFinite(stats[0]?.avgScore), `avgScore was ${stats[0]?.avgScore}`);
+  });
+
   it('excludes held records from aggregate router history stats', () => {
     const stats = aggregateEvalHistory([
       {

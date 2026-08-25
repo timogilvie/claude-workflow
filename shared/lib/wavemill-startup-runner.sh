@@ -631,6 +631,11 @@ spawn_integration_window() {
   if [[ "$backstage_exists" == "true" && "$created_layout" == "true" ]]; then
     tmux select-layout -t "$SESSION:$WAVEMILL_WINDOW_BACKSTAGE" tiled >/dev/null 2>&1 || true
   fi
+  # Findings deserve more room than a repeated one-line poll status, so give the
+  # observer the larger pane. No-ops once the observer already holds it.
+  if [[ "$observer_enabled" == "true" ]]; then
+    wavemill_promote_observer_pane "${observer_pane:-}" "${tend_pane:-}" || true
+  fi
   backstage_health_file="$(wavemill_backstage_health_file "$STATE_DIR" 2>/dev/null || true)"
   if [[ -n "$backstage_health_file" ]]; then
     wavemill_write_backstage_health "$backstage_health_file" "healthy" "backstage tend loop is running" 0 "" "$tend_pane" 1
