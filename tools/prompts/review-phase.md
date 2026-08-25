@@ -39,6 +39,9 @@ The implementation is complete. Your job is to review and create a PR.
    - Read the review JSON output carefully
    - Fix all blockers (severity: blocker) and straightforward warnings
    - Make targeted fixes only — do not refactor unrelated code
+   - Before staging or committing, run:
+     `npx tsx {{TOOLS_DIR}}/check-review-scope.ts --repo-dir . --feature-dir "{{FEATURE_DIR}}"`
+     If it fails, stop the iteration and correct the out-of-scope changes instead of committing them.
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
    - Re-run the review tool (step 1)
 

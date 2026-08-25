@@ -163,13 +163,16 @@ describe('review-runner', () => {
       });
 
       assert.equal(result.verdict, 'not_ready');
-      assert.equal(result.codeReviewFindings.length, 1);
-      assert.equal(result.codeReviewFindings[0].severity, 'blocker');
-      assert.equal(result.codeReviewFindings[0].category, 'cross-pr-revert');
-      assert.match(result.codeReviewFindings[0].description, /Reverts #437/);
+      // Assert on the cross-pr-revert finding specifically. The scope guard also
+      // reports here (this fixture supplies neither sinceCommit nor featureDir),
+      // so a total-length assertion couples this test to an unrelated check.
+      const revertFindings = result.codeReviewFindings.filter((f) => f.category === 'cross-pr-revert');
+      assert.equal(revertFindings.length, 1);
+      assert.equal(revertFindings[0].severity, 'blocker');
+      assert.match(revertFindings[0].description, /Reverts #437/);
     });
 
-    it('skips cross-PR revert detection when the integration branch is missing', async () => {
+    it('fails closed when cross-PR revert evidence cannot be collected', async () => {
       mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/no-integration-branch');
       mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b/app.ts');
       mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
@@ -195,7 +198,7 @@ describe('review-runner', () => {
         throw new Error('detectCrossPrReverts should not run when integration ref is missing');
       });
       mock.method(reviewRunnerDeps, 'runReview', async (context) => {
-        assert.doesNotMatch(context.diff, /Cross-PR revert detector findings/);
+        assert.match(context.diff, /Cross-PR revert detector findings/);
         return {
           verdict: 'ready',
           codeReviewFindings: [],
@@ -213,8 +216,10 @@ describe('review-runner', () => {
         repoDir: TEST_DIR,
       });
 
-      assert.equal(result.verdict, 'ready');
-      assert.equal(result.codeReviewFindings.length, 0);
+      assert.equal(result.verdict, 'not_ready');
+      const evidenceFindings = result.codeReviewFindings.filter((f) => f.category === 'cross-pr-revert');
+      assert.equal(evidenceFindings.length, 1);
+      assert.match(evidenceFindings[0].description, /Unable to prove/);
     });
   });
 

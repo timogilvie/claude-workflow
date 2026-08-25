@@ -11,6 +11,10 @@ import { mkdirSync, appendFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { execSync as childExecSync } from 'node:child_process';
 import { writeArtifactAtomicSync } from './artifact-utils.ts';
+import {
+  formatReviewScopeGuardResult,
+  validateReviewScope,
+} from './review-scope-guard.ts';
 import type {
   PrePrVerificationRecipe,
   PrePrVerificationResult,
@@ -305,6 +309,68 @@ export function runVerificationRecipe(
     commands,
     startTime: runStart,
     endTime: Date.now(),
+  };
+}
+
+/**
+ * Run the review scope guard as a pre-PR safety check.
+ *
+ * The guard needs a resolvable feature directory to know which files a task
+ * owns. When it cannot resolve one it reports `featureDir: null` and blocks on
+ * "review scope cannot be proven" -- which, for a caller that never supplies a
+ * featureDir, means blocking unconditionally.
+ *
+ * So an indeterminate scope fails **open**: the guard reports what it could not
+ * evaluate rather than rejecting every caller. It does not fail open on a
+ * concrete violation. Cross-PR reverts and deletion-budget findings are derived
+ * from baseRef, not from the feature directory, so they remain enforced even
+ * when scope itself is unknowable -- and those are the findings that actually
+ * protect merged work.
+ *
+ * `skipped` is set when the guard failed open, so callers can log a real check
+ * having been bypassed instead of mistaking it for a pass.
+ */
+export function runPrePrSafetyGuard(options: {
+  stateDir: string;
+  baseSha: string;
+  headSha?: string;
+  featureDir?: string;
+}): { passed: boolean; reason?: string; skipped?: boolean } {
+  const result = validateReviewScope({
+    repoDir: options.stateDir,
+    featureDir: options.featureDir,
+    baseRef: options.baseSha,
+    headRef: options.headSha ?? 'HEAD',
+    includeWorkingTree: false,
+    writeBaseline: false,
+  });
+
+  if (result.ok) {
+    return { passed: true };
+  }
+
+  // Without a feature directory no scope evaluation happened at all: declared
+  // scope and the baseline both derive from it, so every 'review-scope' finding
+  // is a consequence of that, not evidence of a violation.
+  const scopeIndeterminate = result.featureDir === null;
+  const concreteViolations = result.findings.filter(
+    (finding) => finding.severity === 'blocker' && finding.category !== 'review-scope',
+  );
+
+  if (scopeIndeterminate && concreteViolations.length === 0 && result.crossPrReverts.length === 0) {
+    return {
+      passed: true,
+      skipped: true,
+      reason:
+        'Review scope guard skipped: no task feature directory could be resolved, ' +
+        'so in-scope files could not be determined. Cross-PR revert and deletion ' +
+        'checks still ran and found nothing.',
+    };
+  }
+
+  return {
+    passed: false,
+    reason: formatReviewScopeGuardResult(result),
   };
 }
 

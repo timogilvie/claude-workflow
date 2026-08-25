@@ -3,6 +3,7 @@ import { getContributionConsentStatus } from './hokusai-consent.ts';
 import { errorMessage } from './error-utils.ts';
 import { resolveHokusaiRewardLedgerPaths } from './hokusai-reward-ledger-paths.ts';
 import { mutateJsonState, StateParseError } from './state-mutex.ts';
+import type { HokusaiQueueProvenance } from './hokusai-queue.ts';
 
 const LEDGER_SCHEMA_VERSION = '1.0';
 const MAX_REASON_LENGTH = 240;
@@ -22,6 +23,7 @@ export interface HokusaiRewardLedgerEntry {
   hokusaiJobIds: string[];
   rewardMetadata?: Record<string, string | number | boolean | null>;
   rejectionReason?: string;
+  queueProvenance?: HokusaiQueueProvenance[];
 }
 
 interface HokusaiRewardLedgerState {
@@ -42,6 +44,7 @@ export interface PendingAcceptedBatchInput {
   submittedAt: string;
   acceptedAt: string;
   hokusaiJobIds?: string[];
+  queueProvenance?: HokusaiQueueProvenance[];
 }
 
 export interface RewardLedgerUpdateInput {
@@ -253,6 +256,10 @@ export async function recordPendingAcceptedBatch(
         ...(existing?.hokusaiJobIds ?? []),
         ...(input.hokusaiJobIds ?? []),
       ]),
+      queueProvenance: [
+        ...(existing?.queueProvenance ?? []),
+        ...(input.queueProvenance ?? []),
+      ],
       ...(existing?.rewardMetadata ? { rewardMetadata: existing.rewardMetadata } : {}),
       ...(existing?.rejectionReason ? { rejectionReason: existing.rejectionReason } : {}),
     };

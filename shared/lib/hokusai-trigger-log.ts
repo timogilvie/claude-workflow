@@ -10,6 +10,10 @@ export interface HokusaiTriggerLogEntry {
   evalId?: string;
   issueId?: string;
   status: HokusaiTriggerLogStatus;
+  entryId?: string;
+  idempotencyKey?: string;
+  promotionManifestId?: string;
+  reconciliationReportHash?: string;
   reasons?: string[];
   source?: string;
   detail?: string;

@@ -96,6 +96,7 @@ TESTS=(
   shared/lib/context-analyzer.test.ts
   shared/lib/review-engine.test.ts
   shared/lib/review-runner.test.ts
+  shared/lib/review-scope-guard.test.ts
   shared/lib/review-progress.test.ts
   shared/lib/review-formatter.test.ts
   shared/lib/pr-comparison.test.ts
@@ -230,6 +231,7 @@ TESTS=(
   tools/abort-task.test.ts
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
+  tools/backfill-hokusai-submissions.test.ts
   tools/certify-patch-coding.test.ts
   tools/promote-provisional-model.test.ts
   tools/generate-skip-report.test.ts
