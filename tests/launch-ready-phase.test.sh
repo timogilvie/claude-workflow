@@ -184,8 +184,34 @@ EOF
     _ensure_window_exists() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
     read_state_value() {
-      if [[ "${4:-}" == *".tasks["*".model"* ]]; then
-        printf "%s\n" "gpt-5.4"
+      local filter="${5:-}${4:-}"
+      if [[ "$filter" == *".tasks["*".model"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "%s\n" "gpt-5.4" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".coderModel"* ]]; then
+        case "$TEST_CASE" in
+          native_route_coder_model) printf "%s\n" "kimi-k2-thinking" ;;
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".reviewerModel"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
+        return 0
+      fi
+      if [[ "$filter" == *".tasks["*".plannerModel"* ]]; then
+        case "$TEST_CASE" in
+          no_model_available) printf "\n" ;;
+          *) printf "\n" ;;
+        esac
         return 0
       fi
       printf "\n"
@@ -208,6 +234,8 @@ EOF
         second_remediation_launch) printf "%s\n" "1" ;;
         remediation_exhausted) printf "%s\n" "3" ;;
         pass_after_remediation) printf "%s\n" "2" ;;
+        sequential_failing_launch_2) printf "%s\n" "1" ;;
+        sequential_failing_launch_3) printf "%s\n" "2" ;;
         *) printf "%s\n" "0" ;;
       esac
     }
@@ -234,10 +262,13 @@ EOF
       READY_PROMPT_SUMMARY="${8-}"
       printf "prompt\n"
     }
+    LAUNCH_AGENT_PHASE=""
     _launch_agent_in_pane() {
       LAUNCH_AGENT_CALLS=$((LAUNCH_AGENT_CALLS + 1))
+      LAUNCH_AGENT_PHASE="${7:-}"
       case "$TEST_CASE" in
         remediation_launch_failure) return 1 ;;
+        sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3) return 1 ;;
         *) return 0 ;;
       esac
     }
@@ -364,7 +395,7 @@ EOF
           printf "%s\n" "TypeError: ready crashed" >&2
           return 1
           ;;
-        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head)
+        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
@@ -431,6 +462,7 @@ EOF
       "$rc" "$stage_summary" "$attention_summary" "$attention_count" "$LAUNCH_AGENT_CALLS" "$REVIEW_LAUNCH_CALLS" "$PREPARE_RECOVERY_CALLS" "$AGENT_VALIDATE_CALLS" "$READY_PROMPT_CALLS" "$error_count" "$LOG_OUTPUT" "$LOG_WARN_OUTPUT" "$LOG_ERROR_OUTPUT" "$DEBUG_FILE" "$debug_line_count" "$debug_payload" "$conflict_attention_head" "$conflict_attention_reported" "$conflict_detected" "$needs_attention" "$transient_attention" "$transient_count" "$infra_retry_count" "$ready_result_payload"
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
+    printf "phase_used=%s\n" "$LAUNCH_AGENT_PHASE"
   ' 2>&1
 }
 
@@ -460,10 +492,13 @@ run_watchdog_launch_case() {
     persist_task_window_id() { :; }
     ready_state_dir() { printf "%s\n" "$STATE_DIR"; }
     read_state_value() {
-      if [[ "${4:-}" == *".agent"* ]]; then
+      local filter="${5:-}${4:-}"
+      if [[ "$filter" == *".agent"* ]]; then
         printf "%s\n" "codex"
-      elif [[ "${4:-}" == *".model"* ]]; then
+      elif [[ "$filter" == *".model"* ]]; then
         printf "%s\n" "gpt-5.5"
+      elif [[ "$filter" == *".coderModel"* ]]; then
+        printf "%s\n" "kimi-k2-thinking"
       else
         printf "\n"
       fi
@@ -737,7 +772,7 @@ output="$(run_launch_case remediation_launch_failure)"
 check_contains "launch failure returns failure" "$output" "rc=1"
 check_contains "launch failure records failed stage" "$output" "|ready|failed|"
 check_contains "launch failure writes operator message" "$output" "Could not launch remediation agent for PR #304."
-check_contains "launch failure does not pollute attempts" "$output" "\"remediationAttempts\":0"
+check_contains "launch failure records attempt 1" "$output" "\"remediationAttempts\":1"
 
 output="$(run_launch_case already_inflight_same_head)"
 check_contains "inflight same head returns rc 5" "$output" "rc=5"
@@ -836,6 +871,43 @@ output="$(run_watchdog_launch_case inflight_same_head)"
 check_contains "watchdog inflight skips launch" "$output" '"status":"skipped-in-flight"'
 check_contains "watchdog inflight does not relaunch agent" "$output" "launch_calls=0"
 check_contains "watchdog inflight does not rewrite stage" "$output" "stage_calls="
+
+echo "=== Sequential Failing Launch Scenario ==="
+
+output="$(run_launch_case sequential_failing_launch_1)"
+check_contains "sequential attempt 1 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 1 records attempt 1" "$output" "\"remediationAttempts\":1"
+check_contains "sequential attempt 1 invokes agent once" "$output" "launch_calls=1"
+
+output="$(run_launch_case sequential_failing_launch_2)"
+check_contains "sequential attempt 2 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 2 records attempt 2" "$output" "\"remediationAttempts\":2"
+check_contains "sequential attempt 2 invokes agent once" "$output" "launch_calls=1"
+
+output="$(run_launch_case sequential_failing_launch_3)"
+check_contains "sequential attempt 3 returns failure" "$output" "rc=1"
+check_contains "sequential attempt 3 records attempt 3" "$output" "\"remediationAttempts\":3"
+check_contains "sequential attempt 3 invokes agent once" "$output" "launch_calls=1"
+
+echo "=== Native Route Scenario ==="
+
+output="$(run_launch_case native_route_coder_model)"
+check_contains "native route uses coder model" "$output" "launch_calls=1"
+check_contains "native route passes model to launch" "$output" "rc=5"
+check_contains "native route records attempt 1" "$output" "\"remediationAttempts\":1"
+
+echo "=== No Model Scenario ==="
+
+output="$(run_launch_case no_model_available)"
+check_contains "no model scenario fails" "$output" "rc=1"
+check_contains "no model scenario records attempt 1" "$output" "\"remediationAttempts\":1"
+check_contains "no model scenario does not invoke agent" "$output" "launch_calls=0"
+check_contains "no model scenario writes clear reason" "$output" "No model configured for ready remediation"
+
+echo "=== Launch Phase Propagation ==="
+
+output="$(run_launch_case remediation_launch)"
+check_contains "remediation passes explicit phase" "$output" "phase_used=coding"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

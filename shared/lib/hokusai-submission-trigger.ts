@@ -1,7 +1,7 @@
 import { getHokusaiSubmissionConfig, getHokusaiSubmissionEnableSources } from './config.ts';
 import { buildSubmitDataContributionRow, type RedactedEvalContributionProjection } from './hokusai-contribution-builder.ts';
 import { drainContributionQueue } from './hokusai-queue-drain.ts';
-import { enqueueContribution } from './hokusai-queue.ts';
+import { enqueueContribution, type HokusaiQueueProvenance } from './hokusai-queue.ts';
 import { formatSubmissionSwitches, getSubmissionSwitchReport } from './hokusai-consent.ts';
 import { redactHokusaiSubmission } from './hokusai-redaction.ts';
 import { toHokusaiSubmission, type HokusaiSubmission } from './hokusai-schema.ts';
@@ -14,12 +14,21 @@ export interface TriggerHokusaiSubmissionOptions {
   configDir?: string;
   redactionSalt?: string;
   launchPriorityValidation?: LaunchPriorityValidationContext;
+  promotedBackfill?: PromotedBackfillContext;
+}
+
+export interface PromotedBackfillContext {
+  manifestId: string;
+  fromRevision: number;
+  toRevision: number;
+  finalFingerprint?: string;
+  reconciliationReportHash: string;
 }
 
 export type HokusaiSubmissionTriggerResult =
   | { status: 'disabled'; source: 'repo_config' | 'consent'; detail: string }
   | { status: 'not_eligible'; reasons: string[] }
-  | { status: 'enqueued'; entryId?: string; drainStarted: boolean }
+  | { status: 'enqueued'; entryId?: string; idempotencyKey?: string; drainStarted: boolean }
   | { status: 'duplicate'; drainStarted: false }
   | { status: 'failed'; error: string };
 
@@ -183,12 +192,19 @@ function consentDisabledDetail(options: TriggerHokusaiSubmissionOptions, blocker
 function triggerLogEntry(
   record: EvalRecord,
   result: HokusaiSubmissionTriggerResult,
+  options: TriggerHokusaiSubmissionOptions,
 ): Parameters<typeof appendTriggerLogEntry>[0] {
   return {
     at: new Date().toISOString(),
     ...(record.id ? { evalId: record.id } : {}),
     ...(record.issueId ? { issueId: record.issueId } : {}),
     status: result.status,
+    ...(result.status === 'enqueued' && result.entryId ? { entryId: result.entryId } : {}),
+    ...(result.status === 'enqueued' && result.idempotencyKey ? { idempotencyKey: result.idempotencyKey } : {}),
+    ...(options.promotedBackfill?.manifestId ? { promotionManifestId: options.promotedBackfill.manifestId } : {}),
+    ...(options.promotedBackfill?.reconciliationReportHash
+      ? { reconciliationReportHash: options.promotedBackfill.reconciliationReportHash }
+      : {}),
     ...(result.status === 'not_eligible' ? { reasons: result.reasons } : {}),
     ...(result.status === 'disabled' ? { source: result.source, detail: result.detail } : {}),
     ...(result.status === 'failed' ? { detail: result.error } : {}),
@@ -199,13 +215,45 @@ function recordTriggerResult(
   record: EvalRecord,
   repoDir: string,
   result: HokusaiSubmissionTriggerResult,
+  options: TriggerHokusaiSubmissionOptions,
 ): HokusaiSubmissionTriggerResult {
   try {
-    hokusaiSubmissionTriggerDeps.appendTriggerLogEntry(triggerLogEntry(record, result), repoDir);
+    hokusaiSubmissionTriggerDeps.appendTriggerLogEntry(triggerLogEntry(record, result, options), repoDir);
   } catch (error) {
     warnHokusai('failed to append trigger log', error);
   }
   return result;
+}
+
+function queueProvenanceFromRecord(
+  record: EvalRecord,
+  options: TriggerHokusaiSubmissionOptions,
+): HokusaiQueueProvenance | undefined {
+  if (!record.id) {
+    return undefined;
+  }
+  const coderIdentity = record.modelIdentityAttribution?.roles.coder;
+  const promotedBackfill = options.promotedBackfill;
+  if (!promotedBackfill) {
+    return {
+      evalId: record.id,
+      source: 'live',
+      ...(coderIdentity?.identityRevision !== undefined ? { identityRevision: coderIdentity.identityRevision } : {}),
+      ...(coderIdentity?.fingerprint ? { identityFingerprint: coderIdentity.fingerprint } : {}),
+    };
+  }
+  return {
+    evalId: record.id,
+    source: 'promoted_backfill',
+    identityRevision: promotedBackfill.toRevision,
+    ...(promotedBackfill.finalFingerprint ?? coderIdentity?.fingerprint
+      ? { identityFingerprint: promotedBackfill.finalFingerprint ?? coderIdentity?.fingerprint }
+      : {}),
+    promotionManifestId: promotedBackfill.manifestId,
+    promotionFromRevision: promotedBackfill.fromRevision,
+    promotionToRevision: promotedBackfill.toRevision,
+    reconciliationReportHash: promotedBackfill.reconciliationReportHash,
+  };
 }
 
 /**
@@ -226,12 +274,12 @@ export async function triggerHokusaiSubmission(
         status: 'disabled',
         source: 'repo_config',
         detail: repoConfigDisabledDetail(options.repoDir),
-      });
+      }, options);
     }
 
     const submissionResult = hokusaiSubmissionTriggerDeps.toHokusaiSubmission(record);
     if (!submissionResult.ok) {
-      return recordTriggerResult(record, options.repoDir, { status: 'not_eligible', reasons: submissionResult.reasons });
+      return recordTriggerResult(record, options.repoDir, { status: 'not_eligible', reasons: submissionResult.reasons }, options);
     }
 
     const redactedSubmission = hokusaiSubmissionTriggerDeps.redactHokusaiSubmission(submissionResult.submission, {
@@ -249,6 +297,7 @@ export async function triggerHokusaiSubmission(
     const enqueueResult = await hokusaiSubmissionTriggerDeps.enqueueContribution(row, {
       repoDir: options.repoDir,
       configDir: options.configDir,
+      provenance: queueProvenanceFromRecord(record, options),
     });
 
     if (enqueueResult.status === 'disabled') {
@@ -258,10 +307,10 @@ export async function triggerHokusaiSubmission(
         status: 'disabled',
         source: 'consent',
         detail,
-      });
+      }, options);
     }
     if (enqueueResult.status === 'duplicate') {
-      return recordTriggerResult(record, options.repoDir, { status: 'duplicate', drainStarted: false });
+      return recordTriggerResult(record, options.repoDir, { status: 'duplicate', drainStarted: false }, options);
     }
 
     void hokusaiSubmissionTriggerDeps.drainContributionQueue({
@@ -273,10 +322,11 @@ export async function triggerHokusaiSubmission(
     return recordTriggerResult(record, options.repoDir, {
       status: 'enqueued',
       entryId: enqueueResult.entry?.entryId,
+      idempotencyKey: enqueueResult.entry?.idempotencyKey,
       drainStarted: true,
-    });
+    }, options);
   } catch (error) {
     warnHokusai('submission trigger failed', error);
-    return recordTriggerResult(record, options.repoDir, { status: 'failed', error: errorMessage(error) });
+    return recordTriggerResult(record, options.repoDir, { status: 'failed', error: errorMessage(error) }, options);
   }
 }

@@ -8170,7 +8170,7 @@ _restore_inflight_task_window_if_missing() {
 #   $5 = slug (optional)
 #   $6 = issue ID (optional)
 _launch_agent_in_pane() {
-  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}"
+  local target="$1" agent_cmd="$2" model="$3" prompt_file="$4" slug="${5:-}" issue="${6:-}" semantic_phase="${7:-}"
   local session window
   if [[ "$target" == @* ]]; then
     session="$SESSION"
@@ -8191,12 +8191,14 @@ _launch_agent_in_pane() {
     feature_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
     abort_check_cmd="check_stage_aborted '$feature_dir'"
   fi
-  if declare -F agent_normalize_launch_phase >/dev/null 2>&1; then
+  launch_phase="$semantic_phase"
+  if [[ -z "$launch_phase" ]] && declare -F agent_normalize_launch_phase >/dev/null 2>&1; then
     launch_phase="$(agent_normalize_launch_phase "$window" "$prompt_file" 2>/dev/null || true)"
   fi
-  [[ -n "$launch_phase" ]] || launch_phase="$window"
-  varied_launch_stage="$(challenge_stage_for_launch_env "$launch_phase")"
-  varied_launch_model="$(challenge_varied_stage_model "$issue" "$varied_launch_stage" 2>/dev/null || true)"
+  if [[ -n "$launch_phase" ]]; then
+    varied_launch_stage="$(challenge_stage_for_launch_env "$launch_phase")"
+    varied_launch_model="$(challenge_varied_stage_model "$issue" "$varied_launch_stage" 2>/dev/null || true)"
+  fi
 
   # Export wavemill context environment variables for hook protocol
   if declare -F get_linear_issue_id >/dev/null 2>&1; then
@@ -9546,10 +9548,29 @@ _launch_ready_remediation_attempt() {
   local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
   local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
+  local resolved_model
 
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
+
+  resolved_model="$current_model"
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+
+  if [[ -z "$resolved_model" ]]; then
+    local no_model_artifacts_json
+    no_model_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
+      "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
+      "candidate-progress")
+    write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$resolved_model" \
+      "No model configured for ready remediation" \
+      "$no_model_artifacts_json"
+    write_ready_attention_file "$state_dir" "Ready remediation cannot proceed without a configured model for PR #$pr_number."
+    log_error "  Failed to launch ready remediation agent for $issue (no model configured)"
+    return 1
+  fi
 
   prompt_file="/tmp/${SESSION}-${issue}-ready-remediation-prompt.txt"
   build_ready_remediation_prompt \
@@ -9563,7 +9584,7 @@ _launch_ready_remediation_attempt() {
     "$failed_check_summary" \
     "$ready_result_file" > "$prompt_file"
 
-  _launch_agent_in_pane "$win" "$remediation_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+  _launch_agent_in_pane "$win" "$remediation_agent" "$resolved_model" "$prompt_file" "$slug" "$issue" "coding"
   launch_rc=$?
 
   if [[ "$launch_rc" -eq 0 ]]; then
@@ -9587,7 +9608,7 @@ _launch_ready_remediation_attempt() {
         remediationFailures: $remediation_failures
       }')
     remediation_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" "$remediation_artifacts_json" "candidate-progress")
-    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$current_model" \
+    write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$resolved_model" \
       "Ready remediation in progress for PR #$pr_number" \
       "$remediation_artifacts_json"
     rm -f "$state_dir/.needs-attention"
@@ -9600,9 +9621,9 @@ _launch_ready_remediation_attempt() {
   fi
 
   remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
-    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":$(( remediation_attempt_number - 1 )),\"remediationFailures\":${failed_check_names_json}}" \
+    "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
     "candidate-progress")
-  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$current_model" \
+  write_stage_result "$state_dir" "ready" "failed" "$current_agent" "$resolved_model" \
     "Could not launch ready remediation agent" \
     "$remediation_failed_artifacts_json"
   write_ready_attention_file "$state_dir" "Could not launch remediation agent for PR #$pr_number."
@@ -9614,7 +9635,7 @@ launch_ready_watchdog_remediation() {
   local issue="$1" slug="$2" wt_dir="$3" branch="$4" base_branch="$5" pr_number="$6"
   local failed_check_summary="$7" attempt_number="$8" max_attempts="$9" failed_check_names_json="${10}"
   local win state_dir status_file current_agent current_model current_head remediation_attempts remediation_launch_head
-  local ready_status checks_run checks_passed merge_status ready_result_file helper_rc
+  local ready_status checks_run checks_passed merge_status ready_result_file helper_rc resolved_model
 
   : "${SESSION:=wavemill}"
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
@@ -9624,6 +9645,12 @@ launch_ready_watchdog_remediation() {
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
   [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+
+  resolved_model="$current_model"
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+  [[ -z "$resolved_model" ]] && resolved_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+
   current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
   remediation_attempts=$(ready_remediation_attempts "$state_dir")
   remediation_launch_head=$(ready_remediation_launch_head "$state_dir")
@@ -9686,6 +9713,11 @@ launch_ready_phase() {
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
   current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')
   [[ -z "$current_agent" ]] && current_agent="$AGENT_CMD"
+  if [[ -z "$current_model" ]]; then
+    current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].coderModel // ""')
+    [[ -z "$current_model" ]] && current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // ""')
+    [[ -z "$current_model" ]] && current_model=$(read_state_value "" --arg i "$issue" '.tasks[$i].plannerModel // ""')
+  fi
   prior_ready_status=$(read_stage_status "$state_dir" "ready")
   prior_ready_verdict=$(ready_stage_pending_verdict "$state_dir")
   if [[ "$prior_ready_status" == "running" && "$prior_ready_verdict" == "pending" ]]; then
@@ -9776,7 +9808,7 @@ launch_ready_phase() {
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
-    _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue"
+    _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue" "coding"
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
