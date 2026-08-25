@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   explainEffectiveModelAvailability,
+  listChallengerEligibleModelsForStage,
   listEffectiveModelsForStage,
 } from './effective-models.ts';
+import { explainModelSupportExclusion } from './model-registry.ts';
 
 describe('effective-models', () => {
   it('excludes retired native-openrouter aliases from coding availability', () => {
@@ -61,5 +63,57 @@ describe('effective-models', () => {
     // But they should still be available for planning
     const { models: planningModels } = listEffectiveModelsForStage('planning');
     assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be available for planning');
+  });
+});
+
+describe('challenger eligibility', () => {
+  it('lists provisional models as challenger-eligible but never primary-eligible', () => {
+    // A challenge pair is how an unproven model earns evidence: the primary is
+    // always proven, the challenger is the experiment. ox-alpha is provisional
+    // (stealth identity, zero quality priors) so it must appear in the
+    // challenger pool while staying out of every routing/primary pool.
+    for (const stage of ['planning', 'coding', 'review'] as const) {
+      const primary = listEffectiveModelsForStage(stage, {}).models;
+      const challenger = listChallengerEligibleModelsForStage(stage, {}).models;
+
+      assert.equal(
+        primary.includes('ox-alpha'),
+        false,
+        `provisional model must never be primary-eligible for ${stage}`,
+      );
+      assert.equal(
+        challenger.includes('ox-alpha'),
+        true,
+        `provisional model should be challenger-eligible for ${stage}`,
+      );
+    }
+  });
+
+  it('permits only provisional identity, never any other exclusion', () => {
+    // Every other exclusion must still apply. A blocked, disabled or
+    // stage-incompatible model must not reach the challenger pool.
+    for (const stage of ['planning', 'coding', 'review'] as const) {
+      const primary = new Set(listEffectiveModelsForStage(stage, {}).models);
+      const extra = listChallengerEligibleModelsForStage(stage, {}).models
+        .filter((model) => !primary.has(model));
+
+      for (const model of extra) {
+        assert.equal(
+          explainModelSupportExclusion(model, stage),
+          'provisional-identity',
+          `${model} entered the challenger pool for a reason other than provisional identity`,
+        );
+      }
+    }
+  });
+
+  it('does not widen the primary pool at all', () => {
+    for (const stage of ['planning', 'coding', 'review'] as const) {
+      const primary = listEffectiveModelsForStage(stage, {}).models;
+      const challenger = listChallengerEligibleModelsForStage(stage, {}).models;
+      // Challenger is a strict superset; primary must lose nothing and gain nothing.
+      assert.ok(primary.every((model) => challenger.includes(model)));
+      assert.equal(primary.includes('ox-alpha'), false);
+    }
   });
 });
