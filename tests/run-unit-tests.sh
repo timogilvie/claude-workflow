@@ -119,6 +119,7 @@ TESTS=(
   shared/lib/arm-reliability.test.ts
   shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
+  shared/lib/observer-status-renderer.test.ts
   shared/lib/tend-status-renderer.test.ts
   shared/lib/tend-singleton.test.ts
   shared/lib/promotion-controller.test.ts
@@ -139,6 +140,7 @@ TESTS=(
   shared/lib/launch-validation.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
+  shared/lib/model-promotion.test.ts
   shared/lib/model-evidence-policy.test.ts
   shared/lib/effective-models.test.ts
   shared/lib/model-agent-resolution.test.ts
@@ -224,9 +226,11 @@ TESTS=(
   shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
+  tools/abort-task.test.ts
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
+  tools/promote-provisional-model.test.ts
   tools/generate-skip-report.test.ts
   tools/check-config-version.test.ts
   tools/check-pi-version.test.ts

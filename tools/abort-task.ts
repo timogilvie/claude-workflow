@@ -25,10 +25,17 @@ export interface AbortTaskResult {
     phase: string;
     status: string;
     abortedReason: string;
+    challengeAborted: string;
   };
 }
 
 const issuePattern = /^[A-Z][A-Z0-9]+-[0-9]+(_c)?$/;
+
+// Deliberately NOT a `terminal_stage_failure:`/`terminal_launch_failure:` value.
+// parseAbortFailureKind() returns null for this, so classifyArmFault() yields
+// 'unknown-fault' and an operator abort is never counted as a model or provider
+// quality signal in challenge eval attribution.
+const OPERATOR_ABORT_MARKER = 'operator_abort';
 
 const options = {
   reason: { type: 'string', description: 'Operator-facing reason for aborting the task' },
@@ -88,6 +95,7 @@ export async function abortTaskInState(
       phase: 'aborted',
       status: 'aborted',
       abortedReason: reason,
+      challengeAborted: OPERATOR_ABORT_MARKER,
     },
   };
 
@@ -99,6 +107,11 @@ export async function abortTaskInState(
     task.phase = 'aborted';
     task.status = 'aborted';
     task.abortedReason = reason;
+    // The mill's arm cleanup gate reads challengeAborted, not abortedReason.
+    // Without a non-empty value here the window, worktree and branch are never
+    // reaped, so an aborted arm lingers indefinitely.
+    task.challengeAborted = OPERATOR_ABORT_MARKER;
+    task.challengeAbortedDetail = reason;
     task.abortedAt = now;
     task.updated = now;
     return current;
@@ -111,6 +124,7 @@ function printResult(result: AbortTaskResult): void {
   console.log(`Aborting ${result.issue} (reason: ${result.reason})`);
   console.log(`Task state before:  phase=${result.before.phase}, status=${result.before.status}, pr=${formatPr(result.before.pr)}`);
   console.log(`Task state after:   phase=${result.after.phase}, status=${result.after.status}, abortedReason="${result.after.abortedReason}"`);
+  console.log(`Cleanup marker:     challengeAborted=${result.after.challengeAborted}`);
   if (result.before.pr) {
     console.log(`${formatPr(result.before.pr)} detected - worktree and local branch will be preserved. Only the pane and state entry will be cleaned up.`);
   } else {

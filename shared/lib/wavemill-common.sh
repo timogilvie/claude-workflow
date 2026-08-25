@@ -73,7 +73,7 @@ wavemill_build_observer_loop_command() {
   local max_log_lines="${5:-240}"
   local command
 
-  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE=%q WAVEMILL_OBSERVER_SERVICE=1 npx tsx %q --loop --json --dry-run --repo-dir %q --session %q --interval %q --max-log-lines %q' \
+  printf -v command 'exec env WAVEMILL_SESSION=%q WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE=%q WAVEMILL_OBSERVER_SERVICE=1 npx tsx %q --loop --compact --dry-run --repo-dir %q --session %q --interval %q --max-log-lines %q' \
     "$session_name" "$WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE" "$tools_dir/observer.ts" "$repo_dir" "$session_name" "$interval_seconds" "$max_log_lines"
   printf '%s\n' "$command"
 }
@@ -81,6 +81,41 @@ wavemill_build_observer_loop_command() {
 wavemill_set_tmux_pane_title() {
   local target="${1:?target required}" title="${2:?title required}"
   tmux select-pane -t "$target" -T "$title" >/dev/null 2>&1
+}
+
+# Area (width*height) of a tmux pane, or empty when it cannot be read.
+wavemill_pane_area() {
+  local pane="${1:?pane required}" dims width height
+  command -v tmux >/dev/null 2>&1 || return 1
+  dims="$(tmux display-message -p -t "$pane" '#{pane_width} #{pane_height}' 2>/dev/null)" || return 1
+  read -r width height <<< "$dims"
+  [[ "$width" =~ ^[0-9]+$ && "$height" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$(( width * height ))"
+}
+
+# The observer's findings are the highest-signal output in the backstage window,
+# while the tend loop prints a single repeated status line. Give the observer the
+# larger pane.
+#
+# Idempotent by construction: it swaps only when the observer is currently the
+# smaller pane, so repeated startup/reconcile passes converge instead of
+# flip-flopping the layout on every run.
+wavemill_promote_observer_pane() {
+  local observer_pane="${1:-}" tend_pane="${2:-}"
+  [[ -n "$observer_pane" && -n "$tend_pane" ]] || return 0
+  [[ "$observer_pane" != "$tend_pane" ]] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+
+  local observer_area tend_area
+  observer_area="$(wavemill_pane_area "$observer_pane")" || return 0
+  tend_area="$(wavemill_pane_area "$tend_pane")" || return 0
+
+  if (( observer_area < tend_area )); then
+    # -d here is the destination via -t; swap-pane's own -d flag is a boolean
+    # ("stay on the current pane"), so the target must be passed with -t.
+    tmux swap-pane -s "$observer_pane" -t "$tend_pane" >/dev/null 2>&1 || return 0
+  fi
+  return 0
 }
 
 wavemill_list_backstage_panes_by_title() {
@@ -2536,6 +2571,33 @@ issue_payload_is_complete() {
   ' 2>/dev/null) || return 1
 
   [[ "$ok" == "true" ]]
+}
+
+# ============================================================================
+# PARENT ISSUE FILTERING (HOK-2867)
+# ============================================================================
+
+# Filter parent issues from the backlog JSON.
+# Parents are identified by having children.nodes with at least one entry.
+# Args: $1 = backlog_json, $2 = optional log_dest (file descriptor for skip warnings)
+# Output: Filtered JSON (parents removed), one warning per skipped parent to stderr/log
+filter_parent_issues() {
+  local backlog_json="$1"
+  local log_dest="${2:-/dev/stderr}"
+
+  # Emit warnings for skipped parents first, then output filtered JSON
+  {
+    printf '%s\n' "$backlog_json" | jq -r '
+      .[]
+      | select((.children.nodes // []) | length > 0)
+      | "\(.identifier)|\(([.children.nodes[].identifier] | join(",")))"
+    '
+  } 2>/dev/null | while IFS='|' read -r parent_id child_ids; do
+    printf 'WARN: Skipping parent issue %s (has Linear children: %s)\n' "$parent_id" "$child_ids" >&"$log_dest"
+  done
+
+  # Output filtered JSON (remove parents)
+  printf '%s\n' "$backlog_json" | jq '[ .[] | select((.children.nodes // []) | length == 0) ]'
 }
 
 # ============================================================================
