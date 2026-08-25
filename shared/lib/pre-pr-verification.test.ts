@@ -21,6 +21,17 @@ import {
 // Test Harness
 // ────────────────────────────────────────────────────────────────
 
+// runPrePrSafetyGuard resolves the feature dir from WAVEMILL_* env vars, which
+// are exported for real inside mill worktrees. Clear them for the duration of
+// the run so fixture repos resolve scope only from their own state.
+const SCOPE_ENV_KEYS = ['WAVEMILL_FEATURE_DIR', 'WAVEMILL_FEATURE_SLUG', 'WAVEMILL_SLUG'] as const;
+const savedScopeEnv: Array<[string, string | undefined]> = SCOPE_ENV_KEYS.map(
+  (key) => [key, process.env[key]],
+);
+for (const key of SCOPE_ENV_KEYS) {
+  delete process.env[key];
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -430,6 +441,14 @@ test('runPrePrSafetyGuard: a resolvable scope still blocks an out-of-scope chang
 // ────────────────────────────────────────────────────────────────
 // Results
 // ────────────────────────────────────────────────────────────────
+
+for (const [key, value] of savedScopeEnv) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---\n`);
 if (failed > 0) {

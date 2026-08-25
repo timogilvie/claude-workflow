@@ -19,6 +19,17 @@ import {
 // Test Harness
 // ────────────────────────────────────────────────────────────────
 
+// These tests run inside mill worktrees where the WAVEMILL_* scope env vars
+// are exported for real. Clear them for the duration of the run so feature-dir
+// resolution is driven only by each test's fixture; restored before exit.
+const SCOPE_ENV_KEYS = ['WAVEMILL_FEATURE_DIR', 'WAVEMILL_FEATURE_SLUG', 'WAVEMILL_SLUG'] as const;
+const savedScopeEnv: Array<[string, string | undefined]> = SCOPE_ENV_KEYS.map(
+  (key) => [key, process.env[key]],
+);
+for (const key of SCOPE_ENV_KEYS) {
+  delete process.env[key];
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -69,6 +80,27 @@ function createGateRepo(): { tmpDir: string; repoDir: string; remoteDir: string;
   const headSha = writeAndCommit(repoDir, 'feature.txt', 'feature\n', 'feature');
 
   return { tmpDir, repoDir, remoteDir, baseSha, headSha };
+}
+
+function writeScopeFixture(featureDir: string, baseSha: string, scopedFile: string): void {
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(
+    join(featureDir, 'task-packet.md'),
+    `# Task\n\n## Files to Modify\n\n- \`${scopedFile}\`\n`,
+    'utf-8',
+  );
+  writeFileSync(
+    join(featureDir, '.review-scope-baseline.json'),
+    JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: [scopedFile],
+    }),
+    'utf-8',
+  );
 }
 
 function writeArtifact(repoDir: string, artifact: Record<string, unknown>): void {
@@ -411,6 +443,124 @@ test('gate: operator override cannot bypass a stale artifact', () => {
   }
 });
 
+test('gate: blocks out-of-scope change when the task feature dir is resolvable', () => {
+  const { tmpDir, repoDir, baseSha } = createGateRepo();
+  try {
+    // Branch is task/test, so features/test exercises automatic branch derivation.
+    writeScopeFixture(join(repoDir, 'features', 'test'), baseSha, 'feature.txt');
+    const headSha = writeAndCommit(repoDir, 'unrelated.txt', 'bad\n', 'out of scope fix');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, false);
+    assert.match(result.reason ?? '', /unrelated\.txt/);
+    assert(result.requiresRemediation);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: passes an ordinary in-scope change when scope is resolvable', () => {
+  const { tmpDir, repoDir, headSha, baseSha } = createGateRepo();
+  try {
+    // Only feature.txt (the declared scope) differs from base.
+    writeScopeFixture(join(repoDir, 'features', 'test'), baseSha, 'feature.txt');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, true);
+    assert(result.artifact);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: fails closed when a workspace has task roots but no dir matches the branch', () => {
+  const { tmpDir, repoDir, remoteDir, headSha, baseSha } = createGateRepo();
+  try {
+    // features/ root exists but nothing matches branch task/test.
+    mkdirSync(join(repoDir, 'features', 'other-task'), { recursive: true });
+    // The configuration error must be detected before any base fetch.
+    rmSync(remoteDir, { recursive: true, force: true });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, false);
+    assert.match(result.reason ?? '', /feature directory/i);
+    assert(!result.requiresRemediation);
+    assert(result.recommendation?.includes('WAVEMILL_FEATURE_SLUG'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: explicit featureDir parameter overrides derivation', () => {
+  const { tmpDir, repoDir, baseSha } = createGateRepo();
+  try {
+    // Scope fixture lives outside the features/<branch-slug> convention; the
+    // repo has no features/ root, so without the explicit parameter the guard
+    // would fail open and the fresh artifact below would let the gate pass.
+    const customDir = join(tmpDir, 'custom-scope');
+    writeScopeFixture(customDir, baseSha, 'feature.txt');
+    const headSha = writeAndCommit(repoDir, 'unrelated.txt', 'bad\n', 'out of scope fix');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+      customDir,
+    );
+
+    assert.equal(result.passed, false);
+    assert.match(result.reason ?? '', /unrelated\.txt/);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('getCompatibilityBehavior: allows unconfigured by default', () => {
   const behavior = getCompatibilityBehavior(undefined, false);
   assert.equal(behavior, 'allow');
@@ -462,6 +612,14 @@ test('isRemediable: false for passing gate', () => {
 // ────────────────────────────────────────────────────────────────
 // Results
 // ────────────────────────────────────────────────────────────────
+
+for (const [key, value] of savedScopeEnv) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
 
 console.log(`\n--- Results: ${passed} passed, ${failed} failed ---\n`);
 if (failed > 0) {

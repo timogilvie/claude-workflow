@@ -24,6 +24,7 @@ import {
   runPrePrSafetyGuard,
 } from '../shared/lib/pre-pr-verification.ts';
 import type { OperatorOverride } from '../shared/lib/pre-pr-verification-types.ts';
+import { hasTaskWorkspaceRoots, resolveTaskFeatureDir } from '../shared/lib/review-scope-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // CLI Arguments
@@ -36,6 +37,7 @@ interface CLIOptions {
   json: boolean;
   baseRef?: string;
   override?: string;
+  featureDir?: string;
 }
 
 function parseCLI(): CLIOptions {
@@ -46,6 +48,7 @@ function parseCLI(): CLIOptions {
   let json = false;
   let baseRef: string | undefined;
   let override: string | undefined;
+  let featureDir: string | undefined;
 
   // Env-var override (per task packet): WAVEMILL_PRE_PR_OVERRIDE=1 activates
   // the override; WAVEMILL_PRE_PR_OVERRIDE_REASON supplies the reason. The
@@ -68,6 +71,9 @@ function parseCLI(): CLIOptions {
           '  --dry-run            Print the recipe without executing commands',
           '  --json               Emit machine-readable output',
           '  --base-ref <branch>   Override the configured base branch',
+          '  --feature-dir <path>  Task feature directory for review scope enforcement',
+          '                        (default: derived from WAVEMILL_FEATURE_DIR,',
+          '                        WAVEMILL_FEATURE_SLUG, or the branch name)',
           '  --override <reason>   Record an operator override with the artifact',
           '  --help               Show this help',
           '',
@@ -88,6 +94,15 @@ function parseCLI(): CLIOptions {
       }
       baseRef = args[i + 1];
       i += 1;
+    } else if (arg.startsWith('--feature-dir=')) {
+      featureDir = arg.slice('--feature-dir='.length);
+    } else if (arg === '--feature-dir') {
+      if (i + 1 >= args.length) {
+        console.error('✗ --feature-dir requires a path.');
+        process.exit(1);
+      }
+      featureDir = args[i + 1];
+      i += 1;
     } else if (arg.startsWith('--override=')) {
       override = arg.slice('--override='.length);
     } else if (arg === '--override') {
@@ -103,7 +118,7 @@ function parseCLI(): CLIOptions {
     }
   }
 
-  return { stateDir, force, dryRun, json, baseRef, override };
+  return { stateDir, force, dryRun, json, baseRef, override, featureDir };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -208,11 +223,37 @@ async function main(): Promise<void> {
     console.log(`✓ Base refreshed to ${baseSha}`);
   }
 
+  // Resolve the task feature directory so the safety guard can enforce review
+  // scope. Mirrors the gate: in a wavemill-managed workspace (features/ or
+  // bugs/ root present) an unresolvable feature directory is a configuration
+  // error; scope-less repos degrade to the guard's logged fail-open skip.
+  const featureDir = resolveTaskFeatureDir(opts.stateDir, opts.featureDir);
+  if (featureDir === null && hasTaskWorkspaceRoots(opts.stateDir)) {
+    if (!opts.json) {
+      console.error(
+        '✗ Cannot resolve the task feature directory; review scope cannot be enforced.\n' +
+        '  Check the branch name matches task/<slug> with a corresponding features/<slug> directory,\n' +
+        '  pass --feature-dir <path>, or set WAVEMILL_FEATURE_SLUG / WAVEMILL_FEATURE_DIR.',
+      );
+    } else {
+      console.log(JSON.stringify({ error: 'feature_dir_unresolvable', stateDir: opts.stateDir }));
+    }
+    process.exit(1);
+  }
+
   const safetyGuard = runPrePrSafetyGuard({
     stateDir: opts.stateDir,
     baseSha,
     headSha,
+    featureDir: featureDir ?? undefined,
   });
+  if (safetyGuard.skipped && !opts.json) {
+    // Surface a bypassed check rather than letting it read as a pass.
+    console.warn(`⚠ ${safetyGuard.reason}`);
+  }
+  const safetyGuardStatus = safetyGuard.skipped
+    ? { skipped: true, reason: safetyGuard.reason }
+    : undefined;
   if (!safetyGuard.passed) {
     if (!opts.json) {
       console.error(`✗ ${safetyGuard.reason}`);
@@ -251,6 +292,7 @@ async function main(): Promise<void> {
               headSha,
               baseSha,
               baseRefresh: baseResolution,
+              ...(safetyGuardStatus ? { safetyGuard: safetyGuardStatus } : {}),
             }),
           );
         }
@@ -302,6 +344,7 @@ async function main(): Promise<void> {
         headSha,
         baseSha,
         baseRefresh: baseResolution,
+        ...(safetyGuardStatus ? { safetyGuard: safetyGuardStatus } : {}),
       }),
     );
   }

@@ -79,7 +79,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
   const shellRunner = options.shellRunner ?? reviewScopeGuardDeps.execShellCommand;
   const headRef = options.headRef ?? 'HEAD';
   const findings: ReviewScopeGuardFinding[] = [];
-  const featureDir = resolveFeatureDir(repoDir, options.featureDir, shellRunner);
+  const featureDir = resolveTaskFeatureDir(repoDir, options.featureDir, shellRunner);
   const declaredScope = featureDir ? loadDeclaredScope(featureDir, findings) : [];
 
   if (!featureDir) {
@@ -197,14 +197,59 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
   };
 }
 
-function resolveFeatureDir(repoDir: string, explicit: string | undefined, shellRunner: ShellRunner): string | null {
+/**
+ * Resolve the feature directory owning the current task.
+ *
+ * Resolution order:
+ * 1. `explicit` — returned as-is (resolved to an absolute path) with no
+ *    existence check, preserving the historical semantics for callers that
+ *    already know the directory.
+ * 2. `WAVEMILL_FEATURE_DIR` env var, when it points at an existing directory.
+ * 3. `WAVEMILL_FEATURE_SLUG` / `WAVEMILL_SLUG` env vars (exported by the mill
+ *    into every agent shell), joined under `features/` then `bugs/` in
+ *    `repoDir`; the first existing candidate wins. This keeps scope resolvable
+ *    on detached HEAD (e.g. mid-rebase) where branch derivation fails.
+ * 4. Branch-name derivation: `task|feature|bugfix|bug/<slug>` mapped to
+ *    `features/<slug>` then `bugs/<slug>` under `repoDir`.
+ *
+ * Every derived (non-explicit) candidate must exist on disk, so stale env vars
+ * from another task cannot resolve to a directory this worktree does not have.
+ *
+ * @returns Absolute path to the feature directory, or null when none resolves.
+ */
+export function resolveTaskFeatureDir(
+  repoDir: string,
+  explicit?: string,
+  shellRunner: ShellRunner = reviewScopeGuardDeps.execShellCommand,
+): string | null {
+  const resolvedRepoDir = resolve(repoDir);
   if (explicit) {
     return resolve(explicit);
   }
 
+  const envDir = process.env.WAVEMILL_FEATURE_DIR;
+  if (envDir) {
+    const candidate = resolve(envDir);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const slug of [process.env.WAVEMILL_FEATURE_SLUG, process.env.WAVEMILL_SLUG]) {
+    if (!slug) {
+      continue;
+    }
+    for (const root of ['features', 'bugs']) {
+      const candidate = join(resolvedRepoDir, root, slug);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
   let branch = '';
   try {
-    branch = runGit(shellRunner, repoDir, 'git rev-parse --abbrev-ref HEAD').trim();
+    branch = runGit(shellRunner, resolvedRepoDir, 'git rev-parse --abbrev-ref HEAD').trim();
   } catch {
     return null;
   }
@@ -214,12 +259,23 @@ function resolveFeatureDir(repoDir: string, explicit: string | undefined, shellR
   }
 
   for (const root of ['features', 'bugs']) {
-    const candidate = join(repoDir, root, match[1]);
+    const candidate = join(resolvedRepoDir, root, match[1]);
     if (existsSync(candidate)) {
       return candidate;
     }
   }
   return null;
+}
+
+/**
+ * Whether `repoDir` looks like a wavemill-managed task workspace: it has a
+ * `features/` or `bugs/` root. Callers use this to distinguish "scope-less
+ * repo, degrade gracefully" from "task workspace where an unresolvable feature
+ * directory is a configuration error".
+ */
+export function hasTaskWorkspaceRoots(repoDir: string): boolean {
+  const resolvedRepoDir = resolve(repoDir);
+  return ['features', 'bugs'].some((root) => existsSync(join(resolvedRepoDir, root)));
 }
 
 function loadDeclaredScope(featureDir: string, findings: ReviewScopeGuardFinding[]): string[] {

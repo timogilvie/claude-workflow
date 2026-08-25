@@ -16,6 +16,7 @@ import {
   runPrePrSafetyGuard,
 } from './pre-pr-verification.ts';
 import type { PrePrVerificationArtifact } from './pre-pr-verification-types.ts';
+import { hasTaskWorkspaceRoots, resolveTaskFeatureDir } from './review-scope-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -39,9 +40,17 @@ export interface GateCheckResult {
  *
  * Gate checks (in order):
  * 1. Is verification configured and required?
- * 2. Does artifact exist for current HEAD/base?
- * 3. Is artifact recent (< staleTtlSeconds)?
- * 4. Did all commands pass?
+ * 2. Can the task feature directory be resolved? In a wavemill-managed
+ *    workspace (a `features/` or `bugs/` root exists) an unresolvable feature
+ *    directory is a configuration error and fails closed before any network
+ *    access; in a scope-less repo the safety guard degrades to its logged
+ *    fail-open skip instead.
+ * 3. Does the branch pass the pre-PR safety guard (review scope, deletion
+ *    budget, cross-PR reverts)? Guard findings, including offending paths,
+ *    surface in the gate reason.
+ * 4. Does artifact exist for current HEAD/base?
+ * 5. Is artifact recent (< staleTtlSeconds)?
+ * 6. Did all commands pass?
  *
  * On failure, returns actionable recommendation for agent.
  *
@@ -49,6 +58,9 @@ export interface GateCheckResult {
  * @param config Pre-PR verification config
  * @param currentHeadSha Current HEAD SHA
  * @param currentBaseSha Current base SHA
+ * @param featureDir Task feature directory, when the caller knows it; omitted,
+ *   the gate derives one from env vars or the branch name via
+ *   resolveTaskFeatureDir
  * @returns Gate result with pass/fail and recommendations
  */
 export function checkPrePrVerificationGate(
@@ -56,6 +68,7 @@ export function checkPrePrVerificationGate(
   config: PrePrVerificationConfigSchema | undefined,
   currentHeadSha?: string,
   currentBaseSha?: string,
+  featureDir?: string,
 ): GateCheckResult {
   // Check 1: Is verification configured? Consult compatibility mode so that
   // unconfigured/disabled repos with strict compatibility fail closed.
@@ -87,6 +100,28 @@ export function checkPrePrVerificationGate(
     return { passed: true };
   }
 
+  // Check 3: Resolve the task feature directory so the safety guard can
+  // evaluate review scope. In a wavemill-managed workspace an unresolvable
+  // feature directory means scope enforcement would silently no-op on every
+  // run, so treat it as a configuration error and fail closed before touching
+  // the network. Repos without task workspace roots degrade to the guard's
+  // logged fail-open skip instead.
+  const resolvedFeatureDir = resolveTaskFeatureDir(stateDir, featureDir);
+  if (resolvedFeatureDir === null && hasTaskWorkspaceRoots(stateDir)) {
+    return {
+      passed: false,
+      reason:
+        'Cannot resolve the task feature directory; review scope cannot be enforced.',
+      recommendation:
+        'This workspace has a features/ or bugs/ root, but no task directory matches this checkout.\n' +
+        'Recommended action:\n' +
+        '  1. Check the branch name matches task/<slug> with a corresponding features/<slug> directory.\n' +
+        '  2. Or pass an explicit feature directory to the gate caller.\n' +
+        '  3. Or set WAVEMILL_FEATURE_SLUG (or WAVEMILL_FEATURE_DIR) to the task\'s feature directory.',
+      requiresRemediation: false,
+    };
+  }
+
   const configuredBaseBranch =
     process.env.WAVEMILL_BASE_BRANCH ||
     getIntegrationConfig(stateDir).integrationBranch ||
@@ -107,10 +142,13 @@ export function checkPrePrVerificationGate(
   }
 
   const latestBaseSha = baseResolution.baseSha;
+
+  // Check 4: Pre-PR safety guard (review scope, deletion budget, cross-PR reverts)
   const safetyGuard = runPrePrSafetyGuard({
     stateDir,
     baseSha: latestBaseSha,
     headSha: currentHeadSha,
+    featureDir: resolvedFeatureDir ?? undefined,
   });
   if (safetyGuard.skipped) {
     // Surface a bypassed check rather than letting it read as a pass.
@@ -119,7 +157,8 @@ export function checkPrePrVerificationGate(
   if (!safetyGuard.passed) {
     return {
       passed: false,
-      reason: 'Pre-PR safety guard failed',
+      // Include the findings so offending paths surface in the gate reason.
+      reason: `Pre-PR safety guard failed: ${safetyGuard.reason}`,
       recommendation:
         `${safetyGuard.reason}\n\n` +
         'Keep review fixes within the original task-owned files and re-run verification.',
@@ -127,7 +166,7 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 3: Locate artifact
+  // Check 5: Locate artifact
   const artifactPath = join(stateDir, '.wavemill/pre-pr-verification/artifact.json');
 
   const { artifact, isValid, shasMismatch } = readAndValidateArtifact(
@@ -136,7 +175,7 @@ export function checkPrePrVerificationGate(
     latestBaseSha,
   );
 
-  // Check 4: Artifact exists and is valid?
+  // Check 6: Artifact exists and is valid?
   if (!artifact) {
     return {
       passed: false,
@@ -148,7 +187,7 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 5: SHA mismatch?
+  // Check 7: SHA mismatch?
   if (shasMismatch) {
     return {
       passed: false,
@@ -162,7 +201,7 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 6: Is artifact stale (beyond TTL)?
+  // Check 8: Is artifact stale (beyond TTL)?
   const staleTtl = (config.staleTtlSeconds ?? 3600) * 1000;
   const artifactAge = Date.now() - new Date(artifact.timestamp).getTime();
 
@@ -177,7 +216,7 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 7: Operator override present? (takes precedence over pass/fail)
+  // Check 9: Operator override present? (takes precedence over pass/fail)
   if (artifact.overriddenBy) {
     return {
       passed: true,
@@ -187,7 +226,7 @@ export function checkPrePrVerificationGate(
     };
   }
 
-  // Check 8: Did verification pass?
+  // Check 10: Did verification pass?
   if (artifact.overallStatus !== 'pass') {
     const remediationGuidance = getRemediationGuidance({
       status: artifact.overallStatus,
