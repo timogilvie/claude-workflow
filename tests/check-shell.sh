@@ -103,6 +103,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-mill-router-fallback.test.sh \
   "$REPO_DIR"/tests/backstage-tend-watchdog.test.sh \
   "$REPO_DIR"/tests/backstage-observer-watchdog.test.sh \
+  "$REPO_DIR"/tests/backstage-observer-pane-promotion.test.sh \
   "$REPO_DIR"/tests/model-inheritance-chain.test.sh \
   "$REPO_DIR"/tests/wavemill-background-jobs-cleanup.test.sh \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
