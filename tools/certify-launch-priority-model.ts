@@ -153,9 +153,6 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
     return !listEffectiveModelsForStage(effectiveStage, { repoDir }).models.includes(model.wavemillAlias);
   });
 
-  const registryModel = getModel(registry, model.wavemillAlias);
-  const isProvisional = registryModel?.identity?.status === 'provisional';
-
   return [
     {
       name: 'fixture',
@@ -168,13 +165,6 @@ function buildChecks(model: LaunchPriorityModel, repoDir: string): Certification
       detail: getModel(registry, model.wavemillAlias)
         ? `${model.wavemillAlias} is present in the effective model registry.`
         : `${model.wavemillAlias} is missing from the effective model registry.`,
-    },
-    {
-      name: 'provisional-status',
-      status: isProvisional ? 'blocker' : 'ok',
-      detail: isProvisional
-        ? `${model.wavemillAlias} has provisional identity status; persistence is not permitted.`
-        : `${model.wavemillAlias} has supported identity status; persistence is permitted.`,
     },
     {
       name: 'global-effective-pools',

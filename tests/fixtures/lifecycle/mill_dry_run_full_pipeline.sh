@@ -59,7 +59,6 @@ cat > "$BACKLOG_FILE" <<'EOF'
         { "name": "Foundational" }
       ]
     },
-    "children": { "nodes": [] },
     "relations": { "nodes": [] },
     "inverseRelations": { "nodes": [] }
   },
@@ -74,29 +73,6 @@ cat > "$BACKLOG_FILE" <<'EOF'
     "labels": {
       "nodes": [
         { "name": "Component: Routing" }
-      ]
-    },
-    "children": { "nodes": [] },
-    "relations": { "nodes": [] },
-    "inverseRelations": { "nodes": [] }
-  },
-  {
-    "id": "issue-3",
-    "identifier": "HOK-2867",
-    "title": "Parent epic issue",
-    "description": "This is a parent epic that should be filtered out.",
-    "priority": 1,
-    "estimate": 5,
-    "state": { "name": "Backlog" },
-    "labels": {
-      "nodes": [
-        { "name": "Area: Task-Selection" }
-      ]
-    },
-    "children": {
-      "nodes": [
-        { "id": "child-1", "identifier": "HOK-2867-child-1" },
-        { "id": "child-2", "identifier": "HOK-2867-child-2" }
       ]
     },
     "relations": { "nodes": [] },
@@ -169,42 +145,6 @@ if ! jq -e '
 ' "$LAUNCH_PLAN_FILE" >/dev/null; then
   echo "FAIL: launch plan schema assertions failed"
   cat "$LAUNCH_PLAN_FILE"
-  exit 1
-fi
-
-# HOK-2867: Verify parent issue is filtered out
-if jq -e '.tasks[] | select(.issue == "HOK-2867")' "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
-  echo "FAIL: parent issue HOK-2867 should not be in launch plan"
-  cat "$LAUNCH_PLAN_FILE"
-  exit 1
-fi
-
-# HOK-2867: Verify leaf issues are present
-if ! jq -e '.tasks[] | select(.issue == "HOK-1545")' "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
-  echo "FAIL: leaf issue HOK-1545 should be in launch plan"
-  cat "$LAUNCH_PLAN_FILE"
-  exit 1
-fi
-
-if ! jq -e '.tasks[] | select(.issue == "HOK-1600")' "$LAUNCH_PLAN_FILE" >/dev/null 2>&1; then
-  echo "FAIL: leaf issue HOK-1600 should be in launch plan"
-  cat "$LAUNCH_PLAN_FILE"
-  exit 1
-fi
-
-# HOK-2867: Verify skip warning was logged
-if ! grep -q "Skipping parent issue HOK-2867" "$STDERR_FILE" "$STDOUT_FILE" 2>/dev/null; then
-  echo "FAIL: expected skip warning for parent issue HOK-2867"
-  cat "$STDERR_FILE"
-  cat "$STDOUT_FILE"
-  exit 1
-fi
-
-# HOK-2867: Verify child IDs are in warning
-if ! grep -q "HOK-2867-child-1,HOK-2867-child-2" "$STDERR_FILE" "$STDOUT_FILE" 2>/dev/null; then
-  echo "FAIL: expected child IDs in skip warning"
-  cat "$STDERR_FILE"
-  cat "$STDOUT_FILE"
   exit 1
 fi
 

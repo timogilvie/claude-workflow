@@ -2677,8 +2677,8 @@
           ],
           "requiredCertificationPhaseByStage": {
             "planning": "workflow",
-            "coding": "workflow",
-            "review": "workflow"
+            "coding": "patch",
+            "review": "read-only"
           },
           "certificationSuiteVersion": "v3",
           "certificationFreshnessDays": 60,
@@ -2703,7 +2703,7 @@
           "evidencePolicy": "held",
           "verification": {
             "source": "https://openrouter.ai/api/v1/models",
-            "observedAt": "2026-08-24T22:16:05.000Z",
+            "observedAt": "2026-08-22T15:22:39.700Z",
             "catalogHash": "45721528172e6489ce50462c3c5d6ff750c5cbc0dba8f315d23f81b84298579f"
           }
         }

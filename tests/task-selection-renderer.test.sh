@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
-COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -85,11 +84,6 @@ extract_monitor_heredoc > "$MONITOR_BODY"
 
 FUNCTIONS_FILE="$TEST_TMP/task-selection-renderer-funcs.sh"
 {
-  # refresh_backlog_cache calls filter_parent_issues, which the real monitor
-  # gets by sourcing wavemill-common.sh. Extract it so the isolated harness
-  # exercises the real implementation rather than a stub.
-  extract_function "$COMMON_SCRIPT" "filter_parent_issues"
-  echo
   extract_function "$MONITOR_BODY" "refresh_backlog_cache"
   echo
   extract_function "$MONITOR_BODY" "print_cached_candidates"

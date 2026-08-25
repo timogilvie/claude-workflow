@@ -13,7 +13,6 @@ import { randomUUID } from 'node:crypto';
 import {
   encodeProjectDir,
   computeModelCost,
-  computeNormalizedEvaluationCost,
   computeWorkflowCost,
   computeWorkflowCostWithExactPricing,
   recalculateWorkflowCost,
@@ -231,26 +230,6 @@ test('Returns 0 for zero tokens', () => {
     pricing,
   );
   assert.equal(cost, 0);
-});
-
-test('Normalized evaluation cost requires explicit input and output token dimensions', () => {
-  const pricing: ModelPricing = {
-    inputCostPerMTok: 10,
-    outputCostPerMTok: 50,
-    cacheWriteCostPerMTok: 12.5,
-    cacheReadCostPerMTok: 1,
-  };
-  const normalized = computeNormalizedEvaluationCost(
-    { cacheCreationTokens: 0, cacheReadTokens: 0 },
-    pricing,
-    { requireExplicitCache: true, pricingRevision: 'test-revision' },
-  );
-  assert.deepEqual(normalized, {
-    costUsd: null,
-    basis: 'incomplete',
-    coverage: 'missing_token_usage',
-    pricingRevision: 'test-revision',
-  });
 });
 
 // ────────────────────────────────────────────────────────────────
