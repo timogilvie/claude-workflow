@@ -54,18 +54,42 @@ describe('setWavemillReady', () => {
       buildPullRequest([prStateLabels.WM_LABELS.blocked]),
     );
     const addMock = mock.method(prStateLabels.prStateLabelDeps, 'addLabelsToPullRequest', () =>
-      buildPullRequest([prStateLabels.WM_LABELS.ready, prStateLabels.WM_LABELS.blocked]),
+      buildPullRequest([prStateLabels.WM_LABELS.ready]),
     );
     const removeMock = mock.method(prStateLabels.prStateLabelDeps, 'removeLabelFromPullRequest', () =>
-      buildPullRequest([prStateLabels.WM_LABELS.ready]),
+      buildPullRequest([]),
     );
 
     try {
       const result = prStateLabels.setWavemillReady(229, { repo: 'acme/widgets' });
       assert.equal(result.labels[0]?.name, prStateLabels.WM_LABELS.ready);
       assert.equal(getMock.mock.callCount(), 1);
-      assert.deepEqual(addMock.mock.calls[0]?.arguments, [229, [prStateLabels.WM_LABELS.ready], { repo: 'acme/widgets' }]);
       assert.deepEqual(removeMock.mock.calls[0]?.arguments, [229, prStateLabels.WM_LABELS.blocked, { repo: 'acme/widgets' }]);
+      assert.deepEqual(addMock.mock.calls[0]?.arguments, [229, [prStateLabels.WM_LABELS.ready], { repo: 'acme/widgets' }]);
+    } finally {
+      removeMock.mock.restore();
+      addMock.mock.restore();
+      getMock.mock.restore();
+    }
+  });
+
+  it('removes blocked when ready is already present', () => {
+    const getMock = mock.method(prStateLabels.prStateLabelDeps, 'getPullRequest', () =>
+      buildPullRequest([prStateLabels.WM_LABELS.ready, prStateLabels.WM_LABELS.blocked]),
+    );
+    const addMock = mock.method(prStateLabels.prStateLabelDeps, 'addLabelsToPullRequest', () => {
+      throw new Error('should not add existing ready label');
+    });
+    const removeMock = mock.method(prStateLabels.prStateLabelDeps, 'removeLabelFromPullRequest', () =>
+      buildPullRequest([prStateLabels.WM_LABELS.ready]),
+    );
+
+    try {
+      const result = prStateLabels.setWavemillReady(229);
+      assert.deepEqual(result.labels.map((label) => label.name), [prStateLabels.WM_LABELS.ready]);
+      assert.equal(getMock.mock.callCount(), 1);
+      assert.equal(addMock.mock.callCount(), 0);
+      assert.deepEqual(removeMock.mock.calls[0]?.arguments, [229, prStateLabels.WM_LABELS.blocked, {}]);
     } finally {
       removeMock.mock.restore();
       addMock.mock.restore();
@@ -107,12 +131,7 @@ describe('setWavemillMerged', () => {
       ]),
     );
     const addMock = mock.method(prStateLabels.prStateLabelDeps, 'addLabelsToPullRequest', () =>
-      buildPullRequest([
-        prStateLabels.WM_LABELS.ready,
-        prStateLabels.WM_LABELS.blocked,
-        prStateLabels.WM_LABELS.merging,
-        prStateLabels.WM_LABELS.merged,
-      ]),
+      buildPullRequest([prStateLabels.WM_LABELS.merged]),
     );
     const removed: string[] = [];
     const removeMock = mock.method(prStateLabels.prStateLabelDeps, 'removeLabelFromPullRequest', (_prNumber: number | string, label: string) => {

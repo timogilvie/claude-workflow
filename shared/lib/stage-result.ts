@@ -136,6 +136,7 @@ export interface ReadyArtifacts {
   checksPassed?: number;
   mergeConflict?: string;
   prNumber?: number;
+  readyLabelsUpdated?: boolean;
   launchHead?: string;
   remediationAttempts?: number;
   remediationLaunchHead?: string;
@@ -165,6 +166,14 @@ export interface ReadyArtifacts {
   changedFiles?: string[];
   unblocksCount?: number;
   transientMergeabilityAttempts?: number;
+  crossPrGuard?: {
+    source: 'cross-pr-revert-guard';
+    status: 'blocked' | 'tool-error' | 'passed';
+    checkedHeadSha?: string;
+    reason?: string;
+    result?: unknown;
+    toolError?: unknown;
+  };
   /** Per-edit-path guardrail decision for stale-base / merge-conflict remediation (HOK-2361). */
   remediationDecision?: ReadyRemediationDecision;
 }
