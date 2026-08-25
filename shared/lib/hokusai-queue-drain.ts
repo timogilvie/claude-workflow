@@ -118,6 +118,21 @@ function earliestQueuedAt(batch: PendingBatch): string | undefined {
   return new Date(Math.min(...timestamps)).toISOString();
 }
 
+function batchQueueProvenance(batch: PendingBatch) {
+  const seen = new Set<string>();
+  return batch.entries.flatMap((entry) => {
+    if (!entry.provenance) {
+      return [];
+    }
+    const key = `${entry.provenance.evalId}:${entry.idempotencyKey}`;
+    if (seen.has(key)) {
+      return [];
+    }
+    seen.add(key);
+    return [entry.provenance];
+  });
+}
+
 async function postBatch(
   batch: PendingBatch,
   opts: DrainQueueOptions,
@@ -242,6 +257,7 @@ export async function drainContributionQueue(
   if (posted.status === 'accepted') {
     await markBatchAccepted(batch, { jobIds: posted.jobIds }, opts);
     const acceptedAt = (opts.now ?? new Date()).toISOString();
+    const queueProvenance = batchQueueProvenance(batch);
     appendHokusaiLedgerEntry({
       schemaVersion: 1,
       eventType: 'accepted',
@@ -258,6 +274,7 @@ export async function drainContributionQueue(
       acceptedAt,
       rewardStatus: deriveRewardStatus(posted.tokenReward),
       ...(posted.tokenReward !== undefined ? { tokenReward: posted.tokenReward } : {}),
+      ...(queueProvenance.length > 0 ? { queueProvenance } : {}),
     }, opts);
     console.log(
       `[hokusai] contribution drain accepted rows=${batch.entries.length}` +
@@ -280,6 +297,7 @@ export async function drainContributionQueue(
   if (posted.status === 'permanent') {
     await markBatchPermanentFailure(batch, failure, opts);
     const rejectedAt = (opts.now ?? new Date()).toISOString();
+    const queueProvenance = batchQueueProvenance(batch);
     appendHokusaiLedgerEntry({
       schemaVersion: 1,
       eventType: 'rejected',
@@ -294,6 +312,7 @@ export async function drainContributionQueue(
       rewardStatus: 'unknown',
       errorCode: 'permanent_http_failure',
       summary: posted.error,
+      ...(queueProvenance.length > 0 ? { queueProvenance } : {}),
     }, opts);
     const endpointHint = posted.httpStatus === 404
       ? ` endpoint=${config.endpoint}` +
@@ -327,6 +346,7 @@ export async function drainContributionQueue(
   });
   if (retryStatus === 'dead_lettered') {
     const rejectedAt = (opts.now ?? new Date()).toISOString();
+    const queueProvenance = batchQueueProvenance(batch);
     appendHokusaiLedgerEntry({
       schemaVersion: 1,
       eventType: 'rejected',
@@ -341,6 +361,7 @@ export async function drainContributionQueue(
       rewardStatus: 'unknown',
       errorCode: 'transient_exhausted',
       summary: 'Contribution submission retries exhausted',
+      ...(queueProvenance.length > 0 ? { queueProvenance } : {}),
     }, opts);
     console.warn(
       `[hokusai] contribution drain rejected rows=${batch.entries.length} error=Contribution submission retries exhausted`,

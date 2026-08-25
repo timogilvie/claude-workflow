@@ -26,6 +26,18 @@ export interface HokusaiQueueEnvelope {
   enqueuedAt: string;
   attempts: number;
   nextAttemptAt: string;
+  provenance?: HokusaiQueueProvenance;
+}
+
+export interface HokusaiQueueProvenance {
+  evalId: string;
+  source: 'live' | 'promoted_backfill';
+  identityRevision?: number;
+  identityFingerprint?: string;
+  promotionManifestId?: string;
+  promotionFromRevision?: number;
+  promotionToRevision?: number;
+  reconciliationReportHash?: string;
 }
 
 export interface HokusaiQueueFailureDetail {
@@ -41,6 +53,13 @@ export interface AcceptedBatchRecord {
   acceptedAt: string;
   rowCount: number;
   jobIds: string[];
+  entries?: AcceptedBatchEntryRecord[];
+}
+
+export interface AcceptedBatchEntryRecord {
+  entryId: string;
+  idempotencyKey: string;
+  provenance?: HokusaiQueueProvenance;
 }
 
 export interface HokusaiQueueState {
@@ -56,6 +75,7 @@ export interface QueueAccessOptions {
   repoDir?: string;
   configDir?: string;
   now?: Date;
+  provenance?: HokusaiQueueProvenance;
 }
 
 export type EnqueueResult =
@@ -432,6 +452,7 @@ export async function enqueueContribution(
         enqueuedAt: now.toISOString(),
         attempts: 0,
         nextAttemptAt: now.toISOString(),
+        ...(opts.provenance ? { provenance: opts.provenance } : {}),
       };
       appendEnvelope(paths, entry);
 
@@ -568,6 +589,11 @@ export async function markBatchAccepted(
         acceptedAt: (opts.now ?? new Date()).toISOString(),
         rowCount: batch.entries.length,
         jobIds: result.jobIds ?? [],
+        entries: batch.entries.map((entry) => ({
+          entryId: entry.entryId,
+          idempotencyKey: entry.idempotencyKey,
+          ...(entry.provenance ? { provenance: entry.provenance } : {}),
+        })),
       },
     ],
     lastError: null,
