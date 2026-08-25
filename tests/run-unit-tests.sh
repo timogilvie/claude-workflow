@@ -225,6 +225,7 @@ TESTS=(
   shared/lib/parity-report.test.ts
   src/evaluation/scorers/wavemill/success-rate-under-budget.test.ts
   src/evaluation/adapters/wavemill-router-adapter.test.ts
+  tools/abort-task.test.ts
   tools/add-pr-label.test.ts
   tools/backfill-challenge-stage.test.ts
   tools/certify-patch-coding.test.ts
