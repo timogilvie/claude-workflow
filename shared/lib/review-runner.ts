@@ -198,19 +198,11 @@ function collectReviewScopeGuardFindings(input: {
   featureDir?: string;
   sinceCommit?: string;
 }): ReviewFinding[] {
-  // Neither input available means scope cannot be evaluated. Report it, but as
-  // a warning rather than a blocker: a missing input is not evidence of a scope
-  // violation, and blocking here makes every review of a task without these
-  // inputs fail closed. Same fail-open rule as runPrePrSafetyGuard.
-  if (!input.sinceCommit && !input.featureDir) {
-    return [{
-      severity: 'warning',
-      location: 'review-runner',
-      category: 'requirements',
-      description: 'Review scope guard requires either sinceCommit or featureDir to validate that review changes are scoped to the task. Neither was provided.',
-    }];
-  }
-
+  // The guard always evaluates: without sinceCommit/featureDir it derives
+  // scope from git (merge base against the integration branch), so there is
+  // no "cannot evaluate" skip path any more (HOK-2887). Verified on this
+  // branch: validateReviewScope with neither input returns ok with
+  // baselineSource "git merge-base auto/integration".
   const result = reviewRunnerDeps.validateReviewScope({
     repoDir: input.repoDir,
     featureDir: input.featureDir,
@@ -255,8 +247,96 @@ async function collectCrossPrRevertReviewFindings(input: {
 
   const acknowledgements = parseRevertAcknowledgements(loadRevertAcknowledgementText(input.repoDir));
   const unacknowledged = filterUnacknowledgedReverts(findings, acknowledgements);
+  const filtered = filterRevertsAlreadyOnIntegration(
+    unacknowledged,
+    input.repoDir,
+    integrationBranch,
+  );
 
-  return unacknowledged.map(buildCrossPrRevertReviewFinding);
+  return filtered.map(buildCrossPrRevertReviewFinding);
+}
+
+/**
+ * Drop revert findings the branch did not introduce: when HEAD's blob for a
+ * flagged path matches the integration tip's blob, the "revert" already
+ * lives in the integration branch's own history (e.g. integration itself
+ * reverted the PR), so merging this branch cannot regress that path.
+ */
+function filterRevertsAlreadyOnIntegration(
+  reverts: CrossPrRevertFinding[],
+  repoDir: string,
+  integrationRef: string,
+): CrossPrRevertFinding[] {
+  return reverts
+    .map((revert) => ({
+      ...revert,
+      files: revert.files.filter((file) => {
+        const integrationBlob = lookupBlobAtRef(repoDir, integrationRef, file.path);
+        const headBlob = lookupBlobAtRef(repoDir, 'HEAD', file.path);
+
+        // An unreadable ref is not proof a path is unchanged, so a lookup
+        // failure keeps the finding: this guard must fail closed.
+        if (integrationBlob.kind === 'error' || headBlob.kind === 'error') {
+          return true;
+        }
+
+        // A path that does not exist on integration cannot be reverted by this
+        // branch -- there is no integration content to regress. Distinguishing
+        // this from a failed lookup matters: `git rev-parse` reports both as an
+        // empty result, so treating them alike either fails open on real errors
+        // or fabricates blockers for files integration never had.
+        if (integrationBlob.kind === 'absent') {
+          return false;
+        }
+
+        // Present on integration but gone at HEAD is a deletion -- exactly the
+        // case this guard exists to catch.
+        if (headBlob.kind === 'absent') {
+          return true;
+        }
+
+        return integrationBlob.id !== headBlob.id;
+      }),
+    }))
+    .filter((revert) => revert.files.length > 0);
+}
+
+type BlobLookup =
+  | { kind: 'blob'; id: string }
+  | { kind: 'absent' }
+  | { kind: 'error' };
+
+/**
+ * Resolve a path's blob at a ref, distinguishing "the ref is unreadable" from
+ * "the ref is fine but does not contain this path".
+ *
+ * `git rev-parse --verify --quiet <ref>:<path>` reports both as an empty
+ * result, which is why the ref itself is verified first.
+ */
+function lookupBlobAtRef(
+  repoDir: string,
+  ref: string,
+  path: string,
+): BlobLookup {
+  try {
+    reviewRunnerDeps.execShellCommand(
+      `git rev-parse --verify --quiet ${escapeShellArg(`${ref}^{commit}`)}`,
+      { cwd: repoDir, encoding: 'utf-8' },
+    );
+  } catch {
+    return { kind: 'error' };
+  }
+
+  try {
+    const blob = String(reviewRunnerDeps.execShellCommand(
+      `git rev-parse --verify --quiet ${escapeShellArg(`${ref}:${path}`)}`,
+      { cwd: repoDir, encoding: 'utf-8' },
+    )).trim();
+    return blob ? { kind: 'blob', id: blob } : { kind: 'absent' };
+  } catch {
+    // The ref resolved above, so a failure here means the path is not present.
+    return { kind: 'absent' };
+  }
 }
 
 function loadRevertAcknowledgementText(repoDir: string): string {

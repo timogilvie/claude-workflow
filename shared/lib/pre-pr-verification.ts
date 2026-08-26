@@ -369,16 +369,39 @@ export function runPrePrSafetyGuard(options: {
     featureDir: options.featureDir,
     baseRef: options.baseSha,
     headRef: options.headSha ?? 'HEAD',
+    // Staged-only: the guard still evaluates the staged index (see
+    // collectStagedEntries), which is the enforcement surface here. Opting into
+    // the full working tree would also sweep in untracked task packets and
+    // verification artifacts and flag them as out-of-scope review edits.
     includeWorkingTree: false,
     writeBaseline: false,
   });
+
+  // A clean result is still unenforceable when no feature directory resolved:
+  // there was no scope to check the branch against, so "ok" means "found
+  // nothing to look at", not "verified". Report the skip before banking the
+  // pass so callers (the gate) can surface it as a configuration error.
+  if (result.status !== 'error' && result.featureDir === null) {
+    return {
+      passed: true,
+      skipped: true,
+      skipCause: 'feature-dir-unresolved',
+      reason:
+        'Review scope guard skipped: no task feature directory could be resolved, ' +
+        'so in-scope files could not be determined. Cross-PR revert and deletion ' +
+        'checks still ran and found nothing.',
+    };
+  }
 
   if (result.ok) {
     return { passed: true };
   }
 
   const hasDeclaredScope = result.declaredScope.length > 0;
-  const hasBaseline = result.baselineSource !== 'unresolved';
+  // Must be the artifact, not `baselineSource !== 'unresolved'`: the git-derived
+  // merge-base fallback fills that string in too, which would make scope
+  // authority unconditionally true and silently kill the carve-out below.
+  const hasBaseline = result.baselineIsArtifact;
   const hasScopeAuthority = hasDeclaredScope || hasBaseline;
 
   // Fail closed on anything that is not a consequence of missing scope
@@ -398,6 +421,18 @@ export function runPrePrSafetyGuard(options: {
     return true;
   });
   if (enforceableBlockers.length > 0 || result.crossPrReverts.length > 0) {
+    return {
+      passed: false,
+      reason: formatReviewScopeGuardResult(result),
+    };
+  }
+
+  // An `error` result is produced by the guard's catch path, which returns an
+  // empty `findings` array — so the blocker filter above cannot see it. Without
+  // this check it falls through to the `featureDir === null` branch below and
+  // is reported as a benign skip, silently failing open on exactly the
+  // infrastructure failures the guard exists to catch.
+  if (result.status === 'error') {
     return {
       passed: false,
       reason: formatReviewScopeGuardResult(result),

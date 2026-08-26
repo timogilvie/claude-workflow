@@ -385,7 +385,12 @@ test('runPrePrSafetyGuard: fails open when no feature directory can be resolved'
     // No featureDir supplied and none resolvable: the guard cannot determine
     // which files the task owns. Before this fix it blocked here, which made
     // checkPrePrVerificationGate reject every caller in every repo.
-    writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
+    // Stage the change rather than committing it: the guard polices the
+    // review commit's *uncommitted* edits, so committed work is task work by
+    // definition and is never flagged. A committed change here would make the
+    // guard pass trivially and prove nothing about the fail-open path.
+    writeFileSync(join(repoDir, 'rogue.txt'), 'bad\n');
+    git(repoDir, ['add', 'rogue.txt']);
 
     const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
 
@@ -442,7 +447,10 @@ test('runPrePrSafetyGuard: branch derivation alone blocks an out-of-scope change
 
 - \`feature.txt\`
 `);
-    writeAndCommit(repoDir, 'rogue.txt', 'bad\n', 'out of scope');
+    // Staged, not committed — see the note above: only uncommitted review
+    // edits are in the guard's remit.
+    writeFileSync(join(repoDir, 'rogue.txt'), 'bad\n');
+    git(repoDir, ['add', 'rogue.txt']);
 
     const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
 
@@ -478,9 +486,16 @@ test('runPrePrSafetyGuard: declared scope with no baseline file passes an in-sco
   }
 });
 
-test('runPrePrSafetyGuard: resolvable featureDir with no scope authority skips', () => {
-  // Keeps the fail-open path reachable: a feature directory that declares
-  // nothing (unexpanded packet, no baseline) degrades instead of blocking.
+test('runPrePrSafetyGuard: featureDir declaring nothing is enforced via git-derived scope', () => {
+  // Superseded contract: this previously skipped with `no-scope-authority`,
+  // because an unexpanded packet with no baseline left nothing to enforce
+  // against. The guard now always derives task scope from the merge-base, so
+  // the same feature directory yields real authority and the change is
+  // actually checked instead of waved through — strictly stronger.
+  //
+  // The `no-scope-authority` skip is NOT dead: it still fires when the guard
+  // fails and every remaining finding is missing-authority. It is simply no
+  // longer reachable from this fixture, whose change is in git-derived scope.
   const { tmpDir, repoDir, baseSha } = createVerificationRepo();
   try {
     const featureDir = join(repoDir, 'features', 'test');
@@ -489,9 +504,7 @@ test('runPrePrSafetyGuard: resolvable featureDir with no scope authority skips',
     const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
 
     assert.equal(result.passed, true);
-    assert.equal(result.skipped, true);
-    assert.equal(result.skipCause, 'no-scope-authority');
-    assert.match(result.reason ?? '', /no scope authority/i);
+    assert.notEqual(result.skipped, true);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
