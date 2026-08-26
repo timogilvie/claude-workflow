@@ -79,7 +79,7 @@ export function parseAbortFailureKind(abortReason?: string | null): string | nul
   if (trimmed === 'varied_model_unresolvable') {
     return trimmed;
   }
-  const match = /^(?:terminal_stage_failure|terminal_launch_failure):(.+)$/.exec(trimmed);
+  const match = /^(?:terminal_stage_failure|terminal_launch_failure|retry_exhausted):(.+)$/.exec(trimmed);
   return match?.[1]?.trim() || null;
 }
 

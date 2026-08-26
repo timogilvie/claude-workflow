@@ -215,6 +215,21 @@ check_eq "stale retry process removes challenge state" "false" "$(jq -r '.tasks 
 check_true "stale retry process schedules cleanup" test -n "$CLEANUP_CALLS"
 reset_retry_count "$TEST_SESSION" "HOK-21_c"
 
+# HOK-2885: a native agent is a single process that exits on failure — there is
+# no live TUI to resume into. The send-keys recovery path must no-op so it
+# cannot burn the retry budget or race the challenger phase-relaunch machinery.
+seed_retry_challenge "HOK-22_c" "native-guard-challenger" "coding"
+cat > "/tmp/wavemill-${TEST_SESSION}-HOK-22_c.hook" <<EOF
+{"state":"error","agent":"native","detail":"API Error: 500","timestamp":$(date +%s)}
+EOF
+CLEANUP_CALLS=""
+handle_agent_error_recovery "HOK-22_c" "native"
+check_eq "native error hook leaves challenge state intact" "true" "$(jq -r '.tasks | has("HOK-22_c")' "$STATE_FILE")"
+check_eq "native error hook does not consume the retry counter" "0" "$(get_retry_count "$TEST_SESSION" "HOK-22_c")"
+check_true "native error hook schedules no cleanup" test -z "$CLEANUP_CALLS"
+check_false "native error hook is not held pending by TUI recovery" transient_error_recovery_pending "HOK-22_c"
+rm -f "/tmp/wavemill-${TEST_SESSION}-HOK-22_c.hook"
+
 echo ""
 echo "=== No-PR Guard Helpers ==="
 

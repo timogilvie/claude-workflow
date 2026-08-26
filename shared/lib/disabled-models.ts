@@ -7,20 +7,26 @@
  * alike. It does not remove the model from the registry: identity, pricing and
  * audit history are preserved, and re-enabling is a one-line revert.
  *
- * Prefer this over `routingEligible: false` in the registry when the goal is to
- * stop a model being chosen. Challenger selection draws its candidate pool from
- * `filterDisabledModels`, not from the registry's routing eligibility, so
- * `routingEligible` alone does not remove a model from challenge work.
+ * Prefer this over `routingEligible: false` in the registry as the single
+ * authoritative kill-switch. Registry eligibility flags do reach challenge
+ * selection (listEffectiveModelsForStage applies explainModelSupportExclusion,
+ * which checks lifecycle, stages, disabled and routingEligible), but an entry
+ * here is unambiguous, greppable, and reverts in one line.
  */
 export const DISABLED_MODEL_IDS = new Set<string>([
   'gpt-5.3-codex',
-  // Disabled 2026-08-25 pending HOK-2885. Stalled with
+  // Disabled 2026-08-25 for HOK-2885. Stalled with
   // `provider-transient-error: Upstream idle timeout exceeded` on 5 of 7 recent
   // challenger launches -- the most-selected challenger and the least reliable.
   // The stall is provider-side (OpenRouter tearing down an idle upstream
   // mid-stream), not a quality problem, so this is a reliability hold rather
-  // than a judgement on the model's output. Revisit once HOK-2885 lands
-  // retry-on-transient, which may make it viable again.
+  // than a judgement on the model's output. HOK-2885 has since landed bounded
+  // phase relaunch on transient challenger failures plus single-side abort
+  // scoping, so a stall no longer costs the pair -- but at a ~71% observed
+  // stall rate the retry budget would still be spent mostly on this model.
+  // Re-enable only after a completion-rate review shows the upstream stalls
+  // have subsided (or once challenge selection weights by observed
+  // completion rate).
   'llama-4-maverick',
 ]);
 
