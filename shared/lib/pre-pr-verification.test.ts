@@ -16,6 +16,7 @@ import {
   fetchAndResolveBase,
   runPrePrSafetyGuard,
 } from './pre-pr-verification.ts';
+import { reviewScopeGuardDeps } from './review-scope-guard.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Test Harness
@@ -378,44 +379,25 @@ test('runPrePrSafetyGuard: blocks unsafe branch diff after refreshed base', () =
   }
 });
 
-test('runPrePrSafetyGuard: evaluates git-derived scope when no feature directory can be resolved', () => {
+test('runPrePrSafetyGuard: fails open when no feature directory can be resolved', () => {
   const { tmpDir, repoDir, baseSha } = createVerificationRepo();
   try {
-    // No featureDir supplied and none resolvable: the guard derives scope
-    // from git (merge base against the integration branch) instead of
-    // skipping — HOK-2887. In-scope work passes without a bypass.
-    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
-      integration: { integrationBranch: 'auto/integration' },
-      reviewMerge: { crossPrRevertCheck: { enabled: false } },
-    }));
-    writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
-
-    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
-
-    assert.equal(result.passed, true);
-    assert.notEqual(result.skipped, true);
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
-});
-
-test('runPrePrSafetyGuard: reports unverified (skipped) when guard tooling fails', () => {
-  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
-  try {
-    // The configured integration ref does not exist and no baseline or
-    // declared scope can stand in: scope is unverifiable. The gate does not
-    // hard-fail, but callers see `skipped` (a bypass), never a clean pass.
-    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
-      integration: { integrationBranch: 'does/not/exist' },
-      reviewMerge: { crossPrRevertCheck: { enabled: false } },
-    }));
-    writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
+    // No featureDir supplied and none resolvable: the guard cannot determine
+    // which files the task owns. Before this fix it blocked here, which made
+    // checkPrePrVerificationGate reject every caller in every repo.
+    // Stage the change rather than committing it: the guard polices the
+    // review commit's *uncommitted* edits, so committed work is task work by
+    // definition and is never flagged. A committed change here would make the
+    // guard pass trivially and prove nothing about the fail-open path.
+    writeFileSync(join(repoDir, 'rogue.txt'), 'bad\n');
+    git(repoDir, ['add', 'rogue.txt']);
 
     const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
 
     assert.equal(result.passed, true);
     assert.equal(result.skipped, true);
-    assert.match(result.reason ?? '', /could not verify|unverified/i);
+    assert.equal(result.skipCause, 'feature-dir-unresolved');
+    assert.match(result.reason ?? '', /scope guard skipped/i);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -448,6 +430,106 @@ test('runPrePrSafetyGuard: a resolvable scope still blocks an out-of-scope chang
     assert.equal(result.passed, false);
     assert.notEqual(result.skipped, true);
   } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: branch derivation alone blocks an out-of-scope change', () => {
+  // No explicit featureDir: the guard must derive features/test from the
+  // task/test branch, proving the zero-config path enforces at every call site.
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+    // Staged, not committed — see the note above: only uncommitted review
+    // edits are in the guard's remit.
+    writeFileSync(join(repoDir, 'rogue.txt'), 'bad\n');
+    git(repoDir, ['add', 'rogue.txt']);
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
+
+    assert.equal(result.passed, false);
+    assert.notEqual(result.skipped, true);
+    assert.match(result.reason ?? '', /rogue\.txt/);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: declared scope with no baseline file passes an in-scope change', () => {
+  // Regression: a resolvable featureDir with a declared scope but no
+  // persisted baseline must enforce against the declared scope and pass —
+  // not block on "Unable to resolve a review baseline".
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`);
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, true);
+    assert.notEqual(result.skipped, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: featureDir declaring nothing is enforced via git-derived scope', () => {
+  // Superseded contract: this previously skipped with `no-scope-authority`,
+  // because an unexpanded packet with no baseline left nothing to enforce
+  // against. The guard now always derives task scope from the merge-base, so
+  // the same feature directory yields real authority and the change is
+  // actually checked instead of waved through — strictly stronger.
+  //
+  // The `no-scope-authority` skip is NOT dead: it still fires when the guard
+  // fails and every remaining finding is missing-authority. It is simply no
+  // longer reachable from this fixture, whose change is in git-derived scope.
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, true);
+    assert.notEqual(result.skipped, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: git collection errors fail closed even without declared scope', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  const realRunner = reviewScopeGuardDeps.execShellCommand;
+  try {
+    const featureDir = join(repoDir, 'features', 'test');
+    execFileSync('mkdir', ['-p', featureDir]);
+    reviewScopeGuardDeps.execShellCommand = ((cmd: string, opts?: { encoding?: string; cwd?: string }) => {
+      if (cmd.startsWith('git diff')) {
+        throw new Error('simulated git failure');
+      }
+      return realRunner(cmd, opts);
+    }) as typeof realRunner;
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha, featureDir });
+
+    assert.equal(result.passed, false);
+    assert.notEqual(result.skipped, true);
+    assert.match(result.reason ?? '', /simulated git failure/);
+  } finally {
+    reviewScopeGuardDeps.execShellCommand = realRunner;
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });

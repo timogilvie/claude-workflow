@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { buildTaskContract, type TaskContractField } from './task-contract.ts';
 import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
@@ -43,6 +43,22 @@ const TEST_COMPANION_PATTERN = /^(?<base>.+)\.(?:test|spec)\.(?<ext>ts|tsx|js|js
 
 export interface ReviewScopeGuardFinding {
   severity: 'blocker' | 'warning';
+  /**
+   * Machine-readable discriminant so callers can react differently to the
+   * three failure classes without parsing messages:
+   * - 'violation': positive evidence of an out-of-scope change (unexpected
+   *   path, exceeded deletion budget, unacknowledged cross-PR revert).
+   * - 'missing-authority': a scope authority (feature directory, baseline
+   *   artifact, declared Files to Modify) could not be resolved, so the
+   *   corresponding check could not run. Not evidence of a violation.
+   * - 'error': infrastructure failure (git/contract collection threw); the
+   *   check ran but could not complete, so its result is unknown.
+   *
+   * HOK-2887 derives scope from git merge-base, so 'missing-authority' should
+   * now be rare -- but the distinction is kept because collapsing it into a
+   * blocker is what stalled HOK-2884 for 18 hours (HOK-2889).
+   */
+  kind?: 'violation' | 'missing-authority' | 'error';
   category: 'review-scope' | 'deletion-budget' | 'cross-pr-revert';
   path?: string;
   status?: string;
@@ -69,6 +85,12 @@ export interface ReviewScopeGuardResult {
   baselinePaths: string[];
   declaredScope: string[];
   baselineSource: string;
+  /**
+   * True only when a persisted baseline artifact supplied the scope. The
+   * git-derived merge-base fallback also populates `baselineSource`, so that
+   * string cannot be used to decide whether real scope authority exists.
+   */
+  baselineIsArtifact: boolean;
   featureDir: string | null;
   /** Integration ref used to derive the merge base. */
   integrationRef: string;
@@ -257,6 +279,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       findings.push({
         severity: 'warning',
         category: 'review-scope',
+        kind: 'error',
         message:
           'Git-derived task scope is unavailable ' +
           `(${gitScopeFailure.toolError.commandClass}: ${gitScopeFailure.toolError.stderr}); ` +
@@ -282,9 +305,12 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const committedEntries = baseRef
       ? collectCommittedEntries(repoDir, baseRef, headRef, shellRunner)
       : [];
+    // Never []: with no baseline the committed check passes by construction, so
+    // dropping the staged index too would leave the guard with nothing to
+    // evaluate and every branch would pass unconditionally (HOK-2884).
     const uncommittedEntries = includeWorkingTree
       ? collectUncommittedEntries(repoDir, stagedPaths, shellRunner)
-      : [];
+      : collectStagedEntries(repoDir, stagedPaths, shellRunner);
 
     const isInScope = (path: string): boolean =>
       taskPathSet.has(path)
@@ -296,10 +322,35 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const allowedCompanionPaths = findAllowedCompanionPaths(companionCandidates, isInScope);
     const companionSet = new Set(allowedCompanionPaths);
 
+    // When the packet declares "Files to Modify" and no baseline artifact
+    // overrides it, that declaration governs the committed diff. Falling back
+    // to `committedScopeSet` (the git-derived task paths) would admit every
+    // committed path by construction and make the declaration unenforceable —
+    // the fail-open at the heart of HOK-2884. Companion and support-file
+    // allowances still apply, and support-file derivation keeps using the
+    // git-derived set so test/fixture companions are not over-blocked.
+    const declaredGovernsCommitted = declaredScope.length > 0 && !baseline;
+
+    // Wavemill's own task context is never product code and is never listed in
+    // "Files to Modify", so a declared scope must not turn the task's packet,
+    // baseline, or repo config into out-of-scope violations.
+    const featureDirRel = featureDir
+      ? relative(repoDir, featureDir).split(sep).join('/')
+      : null;
+    const isTaskContextPath = (path: string): boolean =>
+      path.startsWith('.wavemill/')
+      || path.startsWith('.wavemill-config.')
+      || path === '.wavemill-config.json'
+      || (featureDirRel !== null
+        && featureDirRel !== ''
+        && !featureDirRel.startsWith('..')
+        && (path === featureDirRel || path.startsWith(`${featureDirRel}/`)));
+
     const allowedCommitted = (path: string): boolean =>
-      committedScopeSet.has(path)
+      (declaredGovernsCommitted ? false : committedScopeSet.has(path))
       || scopeMatchers.some((matcher) => matcher(path))
       || companionSet.has(path)
+      || isTaskContextPath(path)
       || isSupportFile(path, committedScopeSet);
     const allowedUncommitted = (path: string): boolean =>
       allowedCommitted(path) || taskPathSet.has(path) || baselineSet.has(path);
@@ -322,6 +373,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
         category: 'review-scope',
         path: entry.path,
         status: entry.status,
+        kind: 'violation',
         message:
           `Unexpected review change outside task scope: ${entry.path} (${entry.status}). ` +
           `Baseline source: ${baselineSource}.`,
@@ -359,6 +411,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       findings.push({
         severity: 'blocker',
         category: 'cross-pr-revert',
+      kind: 'violation' as const,
         message:
           `This branch appears to revert changes from PR #${revert.prNumber}` +
           `${revert.title ? ` (${revert.title})` : ''}. ` +
@@ -380,6 +433,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       baselinePaths,
       declaredScope,
       baselineSource,
+      baselineIsArtifact: baseline !== null,
       featureDir,
       integrationRef,
       mergeBase,
@@ -407,6 +461,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       baselinePaths: [],
       declaredScope: [],
       baselineSource: 'unresolved',
+      baselineIsArtifact: false,
       featureDir: null,
       integrationRef,
       mergeBase: null,
@@ -431,6 +486,26 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
  * integration branch, a missing local ref is an honest tool error rather than
  * a silent fallback to `main`.
  */
+/**
+ * Report whether `ref` names a commit reachable in this repository, checking
+ * the bare name and its `origin/` counterpart. Used to reject a configured
+ * default-branch name that does not exist in the checkout at hand.
+ */
+function refExists(repoDir: string, ref: string): boolean {
+  for (const candidate of [ref, `origin/${ref}`]) {
+    try {
+      reviewScopeGuardDeps.execShellCommand(
+        `git rev-parse --verify --quiet ${candidate}^{commit}`,
+        { cwd: repoDir, encoding: 'utf-8' },
+      );
+      return true;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return false;
+}
+
 function resolveIntegrationRef(repoDir: string, explicitIntegrationRef: string | undefined): string {
   if (explicitIntegrationRef?.trim()) {
     return explicitIntegrationRef.trim();
@@ -446,10 +521,100 @@ function resolveIntegrationRef(repoDir: string, explicitIntegrationRef: string |
     && !rawConfig.integration?.integrationBranch
     && !hasLocalConfigFile
   ) {
-    return resolveDefaultBaseRef(repoDir) ?? integrationConfig.integrationBranch;
+    // `resolveDefaultBaseRef` can fall back to `init.defaultBranch` (commonly
+    // "main"), which is a *name*, not a guarantee that the ref exists here.
+    // Handing an unresolvable ref to merge-base turns every downstream check
+    // into an infrastructure error, so only take it if it actually resolves.
+    const probed = resolveDefaultBaseRef(repoDir);
+    if (probed && refExists(repoDir, probed)) {
+      return probed;
+    }
+    return integrationConfig.integrationBranch;
   }
 
   return integrationConfig.integrationBranch;
+}
+
+
+/**
+ * Resolve the feature directory owning the current task.
+ *
+ * Resolution order:
+ * 1. `explicit` — returned as-is (resolved to an absolute path) with no
+ *    existence check, preserving the historical semantics for callers that
+ *    already know the directory.
+ * 2. `WAVEMILL_FEATURE_DIR` env var, when it points at an existing directory.
+ * 3. `WAVEMILL_FEATURE_SLUG` / `WAVEMILL_SLUG` env vars (exported by the mill
+ *    into every agent shell), joined under `features/` then `bugs/` in
+ *    `repoDir`; the first existing candidate wins. This keeps scope resolvable
+ *    on detached HEAD (e.g. mid-rebase) where branch derivation fails.
+ * 4. Branch-name derivation: `task|feature|bugfix|bug/<slug>` mapped to
+ *    `features/<slug>` then `bugs/<slug>` under `repoDir`.
+ *
+ * Every derived (non-explicit) candidate must exist on disk, so stale env vars
+ * from another task cannot resolve to a directory this worktree does not have.
+ *
+ * @returns Absolute path to the feature directory, or null when none resolves.
+ */
+export function resolveTaskFeatureDir(
+  repoDir: string,
+  explicit?: string,
+  shellRunner: ShellRunner = reviewScopeGuardDeps.execShellCommand,
+): string | null {
+  const resolvedRepoDir = resolve(repoDir);
+  if (explicit) {
+    return resolve(explicit);
+  }
+
+  const envDir = process.env.WAVEMILL_FEATURE_DIR;
+  if (envDir) {
+    const candidate = resolve(envDir);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const slug of [process.env.WAVEMILL_FEATURE_SLUG, process.env.WAVEMILL_SLUG]) {
+    if (!slug) {
+      continue;
+    }
+    for (const root of ['features', 'bugs']) {
+      const candidate = join(resolvedRepoDir, root, slug);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  let branch = '';
+  try {
+    branch = runGit(shellRunner, resolvedRepoDir, 'git rev-parse --abbrev-ref HEAD').trim();
+  } catch {
+    return null;
+  }
+  const match = branch.match(/^(?:task|feature|bugfix|bug)\/(.+)$/);
+  if (!match) {
+    return null;
+  }
+
+  for (const root of ['features', 'bugs']) {
+    const candidate = join(resolvedRepoDir, root, match[1]);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether `repoDir` looks like a wavemill-managed task workspace: it has a
+ * `features/` or `bugs/` root. Callers use this to distinguish "scope-less
+ * repo, degrade gracefully" from "task workspace where an unresolvable feature
+ * directory is a configuration error".
+ */
+export function hasTaskWorkspaceRoots(repoDir: string): boolean {
+  const resolvedRepoDir = resolve(repoDir);
+  return ['features', 'bugs'].some((root) => existsSync(join(resolvedRepoDir, root)));
 }
 
 function resolveFeatureDir(repoDir: string, explicit: string | undefined, shellRunner: ShellRunner): string | null {
@@ -487,6 +652,7 @@ function loadDeclaredScope(featureDir: string, findings: ReviewScopeGuardFinding
     findings.push({
       severity: 'warning',
       category: 'review-scope',
+      kind: 'error',
       message: `Unable to build task contract for review scope: ${(error as Error).message}`,
     });
     return [];
@@ -617,7 +783,15 @@ function collectCommittedEntries(
   return parseNameStatusOutput(output);
 }
 
-function collectUncommittedEntries(
+/**
+ * Collect only what is staged. This is the enforcement surface for callers
+ * that do not opt into the working tree: without a baseline the committed
+ * check passes by construction, so the staged index is the sole place an
+ * out-of-scope review edit can still be caught. Untracked files are
+ * deliberately excluded — task packets and verification artifacts live
+ * untracked in the repo and are not review edits.
+ */
+function collectStagedEntries(
   repoDir: string,
   stagedPaths: string[],
   shellRunner: ShellRunner,
@@ -634,6 +808,19 @@ function collectUncommittedEntries(
     if (!entries.has(path)) {
       entries.set(path, { status: 'M', path });
     }
+  }
+
+  return [...entries.values()];
+}
+
+function collectUncommittedEntries(
+  repoDir: string,
+  stagedPaths: string[],
+  shellRunner: ShellRunner,
+): NameStatusEntry[] {
+  const entries = new Map<string, NameStatusEntry>();
+  for (const entry of collectStagedEntries(repoDir, stagedPaths, shellRunner)) {
+    entries.set(entry.path, entry);
   }
 
   const worktreeOutput = runGitChecked(shellRunner, repoDir, 'git diff --name-status', 'git-diff-worktree');
@@ -680,6 +867,7 @@ function collectDeletionBudgetFindings(
     .map((entry) => ({
       severity: 'blocker' as const,
       category: 'deletion-budget' as const,
+      kind: 'violation' as const,
       path: entry.path,
       message:
         `Deletion budget exceeded outside task baseline: ${entry.path} ` +
@@ -729,6 +917,7 @@ function collectCrossPrReverts(input: {
     input.findings.push({
       severity: 'blocker',
       category: 'cross-pr-revert',
+      kind: 'violation' as const,
       message:
         `Unable to prove the branch does not revert recent integration work: ${(error as Error).message}`,
     });

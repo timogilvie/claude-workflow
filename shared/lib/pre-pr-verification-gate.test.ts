@@ -49,7 +49,15 @@ function writeAndCommit(repo: string, fileName: string, content: string, message
   return git(repo, ['rev-parse', 'HEAD']);
 }
 
-function createGateRepo(): { tmpDir: string; repoDir: string; remoteDir: string; baseSha: string; headSha: string } {
+function createGateRepo(options: { withFeatureDir?: boolean } = {}): {
+  tmpDir: string;
+  repoDir: string;
+  remoteDir: string;
+  featureDir: string;
+  baseSha: string;
+  headSha: string;
+} {
+  const withFeatureDir = options.withFeatureDir ?? true;
   const tmpDir = mkdtempSync(join('/tmp', 'gate-git-test-'));
   const remoteDir = join(tmpDir, 'origin.git');
   const repoDir = join(tmpDir, 'work');
@@ -68,7 +76,24 @@ function createGateRepo(): { tmpDir: string; repoDir: string; remoteDir: string;
   git(repoDir, ['switch', '-c', 'task/test']);
   const headSha = writeAndCommit(repoDir, 'feature.txt', 'feature\n', 'feature');
 
-  return { tmpDir, repoDir, remoteDir, baseSha, headSha };
+  // Realistic task worktree: the branch slug matches features/<slug>, whose
+  // task packet declares the file this fixture commits. The safety guard's
+  // branch derivation resolves this directory, so the eight baseline gate
+  // tests run with scope enforcement active (and passing), not skipped.
+  // Left uncommitted deliberately: task context lives beside the change, and
+  // the guard diffs base..HEAD only.
+  const featureDir = join(repoDir, 'features', 'test');
+  if (withFeatureDir) {
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`feature.txt\`
+`, 'utf-8');
+  }
+
+  return { tmpDir, repoDir, remoteDir, featureDir, baseSha, headSha };
 }
 
 function writeArtifact(repoDir: string, artifact: Record<string, unknown>): void {
@@ -406,6 +431,172 @@ test('gate: operator override cannot bypass a stale artifact', () => {
 
     assert.equal(result.passed, false);
     assert(result.reason?.includes('stale'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: blocks an out-of-scope change with the offending path in the failure', () => {
+  const { tmpDir, repoDir, baseSha } = createGateRepo();
+  try {
+    const headSha = writeAndCommit(repoDir, 'rogue.txt', 'not declared\n', 'out of scope change');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.reason, 'Pre-PR safety guard failed');
+    assert.equal(result.requiresRemediation, true);
+    assert(result.recommendation?.includes('rogue.txt'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: passes an in-scope change enforced via a persisted baseline artifact', () => {
+  // No declared scope at all: the persisted .review-scope-baseline.json is the
+  // only authority, and it covers the change.
+  const { tmpDir, repoDir, featureDir, headSha, baseSha } = createGateRepo({ withFeatureDir: false });
+  try {
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['feature.txt'],
+    }), 'utf-8');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: fails closed as a configuration error when no feature directory resolves', () => {
+  const { tmpDir, repoDir, headSha, baseSha } = createGateRepo({ withFeatureDir: false });
+  try {
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, false);
+    assert(result.reason?.includes('cannot enforce review scope'));
+    assert(result.recommendation?.includes('configuration error'));
+    assert.equal(result.requiresRemediation, false);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: explicit featureDir argument overrides branch derivation', () => {
+  // Derivation would find features/test (which declares feature.txt and would
+  // pass); the explicit featureDir declares a different scope, so the same
+  // change must now block — proving the override took effect.
+  const { tmpDir, repoDir, headSha, baseSha } = createGateRepo();
+  try {
+    const altFeatureDir = join(repoDir, 'features', 'alt');
+    mkdirSync(altFeatureDir, { recursive: true });
+    writeFileSync(join(altFeatureDir, 'task-packet.md'), `# Task
+
+## Files to Modify
+
+- \`other.txt\`
+`, 'utf-8');
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+      altFeatureDir,
+    );
+
+    assert.equal(result.passed, false);
+    assert.equal(result.reason, 'Pre-PR safety guard failed');
+    assert(result.recommendation?.includes('feature.txt'));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('gate: warns and proceeds when the task context declares no scope authority', () => {
+  // featureDir resolves but yields neither declared scope nor a baseline:
+  // the gate must degrade (warn + continue to artifact checks), not wedge.
+  const { tmpDir, repoDir, featureDir, headSha, baseSha } = createGateRepo({ withFeatureDir: false });
+  try {
+    mkdirSync(featureDir, { recursive: true });
+    writeArtifact(repoDir, {
+      version: '1.0',
+      timestamp: new Date().toISOString(),
+      workingBranch: 'test',
+      headSha,
+      baseSha,
+      overallStatus: 'pass' as const,
+      commands: [],
+    });
+
+    const result = checkPrePrVerificationGate(
+      repoDir,
+      { enabled: true, required: true, recipe: { commands: ['npm test'] } },
+      headSha,
+      baseSha,
+    );
+
+    assert.equal(result.passed, true);
+    assert(result.artifact);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

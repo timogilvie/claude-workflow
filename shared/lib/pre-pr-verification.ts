@@ -312,45 +312,84 @@ export function runVerificationRecipe(
   };
 }
 
+export interface PrePrSafetyGuardResult {
+  passed: boolean;
+  reason?: string;
+  /** Set when the scope check was bypassed rather than evaluated. */
+  skipped?: boolean;
+  /**
+   * Why the scope check was bypassed:
+   * - 'feature-dir-unresolved': no explicit featureDir was supplied and none
+   *   could be derived from the branch name, so nothing about the task's
+   *   scope is knowable.
+   * - 'no-scope-authority': a feature directory resolved, but it yields
+   *   neither a declared scope (Files to Modify / Scope In) nor a persisted
+   *   review baseline, so there is nothing to enforce against.
+   */
+  skipCause?: 'feature-dir-unresolved' | 'no-scope-authority';
+}
+
 /**
  * Run the review scope guard as a pre-PR safety check.
  *
- * The guard always evaluates: when no feature directory or baseline resolves,
- * scope is derived from git (merge base against the integration branch), so a
- * missing featureDir is no longer a reason to skip (HOK-2887, obviating the
- * HOK-2884 threading gap).
+ * Findings from `validateReviewScope` fall into three classes (see
+ * `ReviewScopeGuardFinding.kind`), and this wrapper maps them onto a
+ * pass/fail/skip contract:
  *
- * `skipped` now means the guard *tooling* failed (a git/tool error left scope
- * unverified) — which should be genuinely rare, not the normal case. The gate
- * does not hard-fail PRs on transient tooling errors, but callers log the
- * bypass (⚠) instead of mistaking it for a pass. Concrete policy violations
- * (`status: 'fail'`) always fail the gate.
+ * - Any `violation` (out-of-scope path, deletion budget, cross-PR revert) or
+ *   `error` (git/contract collection failed) blocks. Cross-PR revert and
+ *   deletion-budget findings derive from baseRef, not the feature directory,
+ *   so they block even when scope itself is unknowable — those are the
+ *   findings that protect merged work.
+ * - When only `missing-authority` findings remain, nothing was actually
+ *   violated; the guard's behavior depends on how much authority it had:
+ *   - No feature directory at all → fail **open** with
+ *     `skipCause: 'feature-dir-unresolved'` (a missing input is not evidence
+ *     of a violation).
+ *   - Feature directory resolved but no declared scope AND no baseline →
+ *     fail open with `skipCause: 'no-scope-authority'`.
+ *   - Feature directory resolved and at least one authority present → the
+ *     scope check ran against the available authority and found nothing, so
+ *     this is a real **pass** (a task with a declared scope but no baseline
+ *     file must not block on the absent baseline).
+ *
+ * `skipped` is set when the guard failed open, so callers can log a bypassed
+ * check instead of mistaking it for a pass. Strictness on skip is the
+ * caller's decision: `checkPrePrVerificationGate` treats
+ * 'feature-dir-unresolved' as a configuration error.
  */
 export function runPrePrSafetyGuard(options: {
   stateDir: string;
   baseSha: string;
   headSha?: string;
   featureDir?: string;
-}): { passed: boolean; reason?: string; skipped?: boolean } {
+}): PrePrSafetyGuardResult {
   const result = validateReviewScope({
     repoDir: options.stateDir,
     featureDir: options.featureDir,
     baseRef: options.baseSha,
     headRef: options.headSha ?? 'HEAD',
+    // Staged-only: the guard still evaluates the staged index (see
+    // collectStagedEntries), which is the enforcement surface here. Opting into
+    // the full working tree would also sweep in untracked task packets and
+    // verification artifacts and flag them as out-of-scope review edits.
     includeWorkingTree: false,
     writeBaseline: false,
   });
 
-  if (result.status === 'error') {
-    const toolDetail = result.toolError
-      ? ` (${result.toolError.commandClass}: ${result.toolError.stderr})`
-      : '';
+  // A clean result is still unenforceable when no feature directory resolved:
+  // there was no scope to check the branch against, so "ok" means "found
+  // nothing to look at", not "verified". Report the skip before banking the
+  // pass so callers (the gate) can surface it as a configuration error.
+  if (result.status !== 'error' && result.featureDir === null) {
     return {
       passed: true,
       skipped: true,
+      skipCause: 'feature-dir-unresolved',
       reason:
-        'Review scope guard could not verify scope — treat as unverified, ' +
-        `not as a pass${toolDetail}.`,
+        'Review scope guard skipped: no task feature directory could be resolved, ' +
+        'so in-scope files could not be determined. Cross-PR revert and deletion ' +
+        'checks still ran and found nothing.',
     };
   }
 
@@ -358,10 +397,79 @@ export function runPrePrSafetyGuard(options: {
     return { passed: true };
   }
 
-  return {
-    passed: false,
-    reason: formatReviewScopeGuardResult(result),
-  };
+  const hasDeclaredScope = result.declaredScope.length > 0;
+  // Must be the artifact, not `baselineSource !== 'unresolved'`: the git-derived
+  // merge-base fallback fills that string in too, which would make scope
+  // authority unconditionally true and silently kill the carve-out below.
+  const hasBaseline = result.baselineIsArtifact;
+  const hasScopeAuthority = hasDeclaredScope || hasBaseline;
+
+  // Fail closed on anything that is not a consequence of missing scope
+  // authority: concrete violations, infrastructure errors, and (defensively)
+  // findings predating the `kind` discriminant. One exception: with no scope
+  // authority at all, every changed path is flagged as a review-scope
+  // "violation" because it was compared against an empty allow-list — those
+  // are artifacts of the missing authority, not evidence. Deletion-budget and
+  // cross-PR-revert violations derive from baseRef, so they stay enforceable
+  // regardless.
+  const enforceableBlockers = result.findings.filter((finding) => {
+    if (finding.severity !== 'blocker') return false;
+    if (finding.kind === 'missing-authority') return false;
+    if (!hasScopeAuthority && finding.kind === 'violation' && finding.category === 'review-scope') {
+      return false;
+    }
+    return true;
+  });
+  if (enforceableBlockers.length > 0 || result.crossPrReverts.length > 0) {
+    return {
+      passed: false,
+      reason: formatReviewScopeGuardResult(result),
+    };
+  }
+
+  // An `error` result is produced by the guard's catch path, which returns an
+  // empty `findings` array — so the blocker filter above cannot see it. Without
+  // this check it falls through to the `featureDir === null` branch below and
+  // is reported as a benign skip, silently failing open on exactly the
+  // infrastructure failures the guard exists to catch.
+  if (result.status === 'error') {
+    return {
+      passed: false,
+      reason: formatReviewScopeGuardResult(result),
+    };
+  }
+
+  // Only missing-authority blockers (and, absent any authority, the per-path
+  // findings they induce) remain: nothing was provably violated, but some
+  // scope input could not be resolved.
+  if (result.featureDir === null) {
+    return {
+      passed: true,
+      skipped: true,
+      skipCause: 'feature-dir-unresolved',
+      reason:
+        'Review scope guard skipped: no task feature directory could be resolved, ' +
+        'so in-scope files could not be determined. Cross-PR revert and deletion ' +
+        'checks still ran and found nothing.',
+    };
+  }
+
+  if (!hasScopeAuthority) {
+    return {
+      passed: true,
+      skipped: true,
+      skipCause: 'no-scope-authority',
+      reason:
+        `Review scope guard skipped: feature directory ${result.featureDir} resolved, ` +
+        'but the task declares no Files to Modify / Scope In entries and no review ' +
+        'baseline artifact exists, so there is no scope authority to enforce. ' +
+        'Cross-PR revert and deletion checks still ran and found nothing.',
+    };
+  }
+
+  // At least one scope authority was available and the changed files all
+  // passed against it; the other, absent authority is not a failure.
+  return { passed: true };
 }
 
 /**
