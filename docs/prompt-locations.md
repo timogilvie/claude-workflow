@@ -35,6 +35,7 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `.wavemill-config.json`: Typed `policy` lookup role `wavemill-config`.
 - `commands/workflow.md`: Phase 4 defines the interactive `/workflow` self-review loop.
 - `commands/bugfix.md`: Phase 5 defines the bugfix self-review loop.
+- **Pre-commit review scope guard instruction** (`npx tsx .../check-review-scope.ts --repo-dir .`, run immediately before any review-fix commit; on non-zero exit: preserve the index, report the violation, and stop — no review commit may be created): carried by `tools/prompts/review-phase.md`, `tools/prompts/self-review-instructions.md`, `commands/bugfix.md`, `commands/workflow.md`, and the review-phase heredoc in `shared/lib/agent-adapters.sh`. These five surfaces must stay in sync; `tools/review-scope-prompt.test.ts` asserts the command and its ordering relative to the commit instruction on all of them. The guard itself is `shared/lib/review-scope-guard.ts` (git-derived scope, no featureDir needed) with CLI `tools/check-review-scope.ts` (exit 0 ok / 1 policy violation / 2 tool failure = unverified).
 - `commands/create-plan.md`: Phase 5 plan review must surface planner/coder/reviewer model routing via `shared/lib/model-resolution-display.ts` before approval.
 - `commands/plan.md`: Phase 5 verification must keep the plan-review routing block aligned with `/create-plan` when routing records are present.
 - `commands/implement-plan.md`: does not define self-review; that behavior is owned by `/workflow`.

@@ -378,19 +378,44 @@ test('runPrePrSafetyGuard: blocks unsafe branch diff after refreshed base', () =
   }
 });
 
-test('runPrePrSafetyGuard: fails open when no feature directory can be resolved', () => {
+test('runPrePrSafetyGuard: evaluates git-derived scope when no feature directory can be resolved', () => {
   const { tmpDir, repoDir, baseSha } = createVerificationRepo();
   try {
-    // No featureDir supplied and none resolvable: the guard cannot determine
-    // which files the task owns. Before this fix it blocked here, which made
-    // checkPrePrVerificationGate reject every caller in every repo.
+    // No featureDir supplied and none resolvable: the guard derives scope
+    // from git (merge base against the integration branch) instead of
+    // skipping — HOK-2887. In-scope work passes without a bypass.
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      integration: { integrationBranch: 'auto/integration' },
+      reviewMerge: { crossPrRevertCheck: { enabled: false } },
+    }));
+    writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
+
+    const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
+
+    assert.equal(result.passed, true);
+    assert.notEqual(result.skipped, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runPrePrSafetyGuard: reports unverified (skipped) when guard tooling fails', () => {
+  const { tmpDir, repoDir, baseSha } = createVerificationRepo();
+  try {
+    // The configured integration ref does not exist and no baseline or
+    // declared scope can stand in: scope is unverifiable. The gate does not
+    // hard-fail, but callers see `skipped` (a bypass), never a clean pass.
+    writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+      integration: { integrationBranch: 'does/not/exist' },
+      reviewMerge: { crossPrRevertCheck: { enabled: false } },
+    }));
     writeAndCommit(repoDir, 'feature.txt', 'work\n', 'ordinary task work');
 
     const result = runPrePrSafetyGuard({ stateDir: repoDir, baseSha });
 
     assert.equal(result.passed, true);
     assert.equal(result.skipped, true);
-    assert.match(result.reason ?? '', /scope guard skipped/i);
+    assert.match(result.reason ?? '', /could not verify|unverified/i);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
