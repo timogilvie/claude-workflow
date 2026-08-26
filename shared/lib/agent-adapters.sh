@@ -1134,6 +1134,9 @@ This is a REQUIRED step — do not skip it or substitute your own review.
    - Read the review JSON output carefully
    - Fix all blockers (severity: blocker) and straightforward warnings
    - Make targeted fixes only — do not refactor unrelated code
+   - Run the review scope guard immediately before committing:
+     npx tsx $tools_dir/check-review-scope.ts --repo-dir .
+   - If the guard exits non-zero, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
    - Re-run the review tool (step 1)
 
