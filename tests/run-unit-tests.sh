@@ -252,6 +252,7 @@ TESTS=(
   tools/set-pr-ready-label.test.ts
   tools/smoke-deepseek.test.ts
   tools/openrouter-doctor.test.ts
+  tools/review-scope-prompt.test.ts
   tools/audit-openrouter-aliases.test.ts
   tools/resolve-orphan-challenge-pair.test.ts
   tools/resolve-primary-merged-pair.test.ts

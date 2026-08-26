@@ -688,6 +688,53 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
   }
 });
 
+test('resolver forfeits to the primary when a challenger exhausts transient-provider retries', async () => {
+  // HOK-2885 shape: a native challenger stalls upstream, exhausts the bounded
+  // phase-relaunch budget, and is aborted single-side with a retry_exhausted
+  // reason (usually before any PR exists). The healthy primary keeps its eval
+  // and must win by forfeit, with the failure attributed as a provider fault.
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-transient',
+        challengeRole: 'primary',
+        challengeModel: 'claude-opus-4-7',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-transient',
+        challengeRole: 'challenger',
+        challengeModel: 'llama-4-maverick',
+        challengeAborted: 'retry_exhausted:provider-transient-error',
+        challengeAbortedDetail:
+          'Challenger coding phase failed on a transient provider error after 3/3 relaunches (attempts=3): Upstream idle timeout exceeded',
+        challengeAbortedStage: 'implementation',
+      },
+    });
+
+    const result = await resolveUnresolvablePair({ pairId: 'pair-transient', repoDir });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'sibling-challenge-aborted');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+    assert.equal(result.record.challengerCompleted, false);
+    assert.equal(result.record.armFailures?.[0].side, 'challenger');
+    assert.equal(result.record.armFailures?.[0].model, 'llama-4-maverick');
+    assert.equal(result.record.armFailures?.[0].failureKind, 'provider-transient-error');
+    assert.equal(result.record.armFailures?.[0].faultClass, 'provider-fault');
+  } finally {
+    cleanup();
+  }
+});
+
 test('resolver writes double-forfeit when both aborted arms have no completed evals but both produced PRs', async () => {
   const { repoDir, cleanup } = setupRepoDir();
   try {

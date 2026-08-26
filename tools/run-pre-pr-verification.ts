@@ -36,6 +36,7 @@ interface CLIOptions {
   json: boolean;
   baseRef?: string;
   override?: string;
+  featureDir?: string;
 }
 
 function parseCLI(): CLIOptions {
@@ -46,6 +47,7 @@ function parseCLI(): CLIOptions {
   let json = false;
   let baseRef: string | undefined;
   let override: string | undefined;
+  let featureDir: string | undefined;
 
   // Env-var override (per task packet): WAVEMILL_PRE_PR_OVERRIDE=1 activates
   // the override; WAVEMILL_PRE_PR_OVERRIDE_REASON supplies the reason. The
@@ -68,6 +70,8 @@ function parseCLI(): CLIOptions {
           '  --dry-run            Print the recipe without executing commands',
           '  --json               Emit machine-readable output',
           '  --base-ref <branch>   Override the configured base branch',
+          '  --feature-dir <dir>   Task feature directory for the review scope guard',
+          '                        (default: derived from the branch name)',
           '  --override <reason>   Record an operator override with the artifact',
           '  --help               Show this help',
           '',
@@ -88,6 +92,15 @@ function parseCLI(): CLIOptions {
       }
       baseRef = args[i + 1];
       i += 1;
+    } else if (arg.startsWith('--feature-dir=')) {
+      featureDir = resolve(arg.slice('--feature-dir='.length));
+    } else if (arg === '--feature-dir') {
+      if (i + 1 >= args.length) {
+        console.error('✗ --feature-dir requires a directory path.');
+        process.exit(1);
+      }
+      featureDir = resolve(args[i + 1]);
+      i += 1;
     } else if (arg.startsWith('--override=')) {
       override = arg.slice('--override='.length);
     } else if (arg === '--override') {
@@ -103,7 +116,7 @@ function parseCLI(): CLIOptions {
     }
   }
 
-  return { stateDir, force, dryRun, json, baseRef, override };
+  return { stateDir, force, dryRun, json, baseRef, override, featureDir };
 }
 
 // ────────────────────────────────────────────────────────────────
@@ -212,7 +225,15 @@ async function main(): Promise<void> {
     stateDir: opts.stateDir,
     baseSha,
     headSha,
+    featureDir: opts.featureDir,
   });
+  // Fail open on both skip causes here: this tool is also run manually on
+  // non-task branches. Strict enforcement of an unresolvable feature
+  // directory belongs to checkPrePrVerificationGate. Still surface the
+  // bypassed check so a skip never reads as a pass.
+  if (safetyGuard.skipped && !opts.json) {
+    console.warn(`⚠ ${safetyGuard.reason}`);
+  }
   if (!safetyGuard.passed) {
     if (!opts.json) {
       console.error(`✗ ${safetyGuard.reason}`);
@@ -251,6 +272,9 @@ async function main(): Promise<void> {
               headSha,
               baseSha,
               baseRefresh: baseResolution,
+              ...(safetyGuard.skipped
+                ? { safetyGuardSkipped: true, skipCause: safetyGuard.skipCause }
+                : {}),
             }),
           );
         }
@@ -302,6 +326,9 @@ async function main(): Promise<void> {
         headSha,
         baseSha,
         baseRefresh: baseResolution,
+        ...(safetyGuard.skipped
+          ? { safetyGuardSkipped: true, skipCause: safetyGuard.skipCause }
+          : {}),
       }),
     );
   }

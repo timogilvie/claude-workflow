@@ -49,6 +49,13 @@ export interface GateCheckResult {
  * @param config Pre-PR verification config
  * @param currentHeadSha Current HEAD SHA
  * @param currentBaseSha Current base SHA
+ * @param featureDir Explicit task feature directory for the safety guard.
+ *   Callers that know it (the mill tracks it per task) should pass it; when
+ *   omitted, the guard derives it from the branch name
+ *   (`task|feature/<slug>` → `features/<slug>`, `bugfix|bug/<slug>` →
+ *   `bugs/<slug>`). If neither yields a directory, the gate fails closed as a
+ *   configuration error — a repo that requires pre-PR verification must be
+ *   able to prove review scope.
  * @returns Gate result with pass/fail and recommendations
  */
 export function checkPrePrVerificationGate(
@@ -56,6 +63,7 @@ export function checkPrePrVerificationGate(
   config: PrePrVerificationConfigSchema | undefined,
   currentHeadSha?: string,
   currentBaseSha?: string,
+  featureDir?: string,
 ): GateCheckResult {
   // Check 1: Is verification configured? Consult compatibility mode so that
   // unconfigured/disabled repos with strict compatibility fail closed.
@@ -111,9 +119,31 @@ export function checkPrePrVerificationGate(
     stateDir,
     baseSha: latestBaseSha,
     headSha: currentHeadSha,
+    featureDir,
   });
+  if (safetyGuard.skipped && safetyGuard.skipCause === 'feature-dir-unresolved') {
+    // A repo that requires pre-PR verification must be able to prove review
+    // scope. No feature directory means the scope check can never run here,
+    // so treat it as a configuration error rather than silently skipping on
+    // every invocation.
+    return {
+      passed: false,
+      reason:
+        'Pre-PR safety guard cannot enforce review scope: no task feature ' +
+        `directory could be resolved. ${safetyGuard.reason ?? ''}`.trim(),
+      recommendation:
+        'This is a configuration error, not a code problem: pre-PR verification is ' +
+        'required, but the branch/worktree has no task context to derive review scope ' +
+        'from. Either check out a task branch whose slug matches a features/<slug> ' +
+        '(or bugs/<slug>) directory, or pass the feature directory explicitly ' +
+        '(featureDir parameter, or --feature-dir on tools/run-pre-pr-verification.ts).',
+      requiresRemediation: false,
+    };
+  }
   if (safetyGuard.skipped) {
-    // Surface a bypassed check rather than letting it read as a pass.
+    // no-scope-authority: the task context exists but declares nothing to
+    // enforce (unexpanded packet, no baseline). Failing closed here would
+    // wedge every unexpanded task, so surface the bypassed check and move on.
     console.warn(`⚠ ${safetyGuard.reason}`);
   }
   if (!safetyGuard.passed) {

@@ -3311,11 +3311,19 @@ handle_agent_error_recovery() {
   local issue="$1"
   local agent_cmd="$2"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
-  local retry_file hook_state error_detail hook_ts now staleness retry_count last_retry_ts backoff_delay
+  local retry_file hook_state hook_agent error_detail hook_ts now staleness retry_count last_retry_ts backoff_delay
   local time_since_last_retry time_since_error next_retry max_retries
 
   retry_file="$(retry_state_file "$SESSION" "$issue")"
   [[ -f "$hook_file" ]] || return 0
+
+  # Native agents are single processes that exit on failure — there is no live
+  # TUI to send-keys a resume into, so this path would type into a dead pane,
+  # burn the retry counter, and race the challenger phase-relaunch machinery
+  # (maybe_retry_challenger_transient_phase). Native failures are handled by
+  # phase relaunch instead.
+  hook_agent=$(jq -r '.agent // empty' "$hook_file" 2>/dev/null || echo "")
+  [[ "$hook_agent" != "native" ]] || return 0
 
   hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
   error_detail=$(jq -r '.detail // empty' "$hook_file" 2>/dev/null || echo "")
@@ -3425,7 +3433,8 @@ terminalize_transient_retry_failure() {
   if [[ "$is_challenge" == "true" && -z "$pr" && -n "$feature_dir" ]]; then
     win="${issue}-${slug}"
     challenge_abort_pair "$issue" "$feature_dir" "$win" "$result_stage" "$model" \
-      "retry_exhausted:provider-transient-error" "$notes" "$next_action" || true
+      "retry_exhausted:provider-transient-error" "$notes" "$next_action" \
+      "$(challenge_abort_scope_for_failure "$issue" "provider-transient-error")" || true
     cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$result_stage" "$terminal_reason" || true
     log_warn "$issue → challenge arm failed after transient retry recovery. Pair quarantined. $next_action"
   else
@@ -3437,9 +3446,14 @@ terminalize_transient_retry_failure() {
 transient_error_recovery_pending() {
   local issue="$1"
   local hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
-  local hook_state error_detail hook_ts now staleness retry_count
+  local hook_state hook_agent error_detail hook_ts now staleness retry_count
 
   [[ -f "$hook_file" ]] || return 1
+
+  # Mirror the native guard in handle_agent_error_recovery: a dead native
+  # process must not be held "active" by the TUI resume path.
+  hook_agent=$(jq -r '.agent // empty' "$hook_file" 2>/dev/null || echo "")
+  [[ "$hook_agent" != "native" ]] || return 1
 
   hook_state=$(jq -r '.state // empty' "$hook_file" 2>/dev/null || echo "")
   [[ "$hook_state" == "error" ]] || return 1
@@ -3875,16 +3889,44 @@ record_openrouter_credits_challenge_abort() {
   fi
 }
 
-# Quarantine both arms of a challenge pair and record why.
+# Decide the challenge_abort_pair scope for a terminal arm failure.
+#
+# A challenger arm dying on a transient provider fault (mid-stream upstream
+# stall, 5xx, rate limit) must not drag the healthy primary down with it —
+# abort only the failing side so the pair can still resolve by forfeit.
+# Non-transient challenger failures and primary-side failures keep today's
+# pair-wide quarantine; broader isolation is an explicit non-goal of HOK-2885.
+challenge_abort_scope_for_failure() {
+  local issue="$1" failure_kind="$2"
+  local role
+  role="$(_challenge_side_for_issue "$issue" 2>/dev/null || true)"
+  if [[ "$role" == "challenger" && "$failure_kind" == "provider-transient-error" ]]; then
+    printf 'single\n'
+  else
+    printf 'pair\n'
+  fi
+}
+
+# Quarantine a challenge pair (or one arm of it) and record why.
 #
 # A challenge is only meaningful when both arms actually ran, so a terminal
-# failure on either side invalidates the comparison. Marking both arms (and
-# writing the artifact) keeps the comparison from being scored later, and keeps
-# the reason attached to the evidence rather than inferred after the fact.
+# failure on either side normally invalidates the comparison. Marking both arms
+# (and writing the artifact) keeps the comparison from being scored later, and
+# keeps the reason attached to the evidence rather than inferred after the fact.
+#
+# The optional 9th arg `scope` ("pair" default | "single") restricts the state
+# stamp to the failing arm only. Used when a challenger dies on a transient
+# provider fault (HOK-2885): stamping the healthy primary too would cost it its
+# eval for a fault it did not have, and would make the pair classify as
+# both-challenge-aborted — leaving the existing sibling-challenge-aborted
+# forfeit-to-survivor path in challenge-pair-resolver.ts unreachable. With
+# scope=single the primary keeps running, and the resolver later forfeits the
+# pair to it (terminalReason: challenger_challenge_aborted).
 challenge_abort_pair() {
-  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7" next_action="${8:-}"
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" model="$5" reason="$6" detail="$7" next_action="${8:-}" scope="${9:-pair}"
   local result_stage pair_id role peer now artifact tmp
   [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$reason" ]] || return 1
+  [[ "$scope" == "single" ]] || scope="pair"
 
   result_stage="$(challenge_result_stage_for_launch "$stage")"
   pair_id="$(get_task_meta "$issue" "challengePairId" 2>/dev/null || true)"
@@ -3911,13 +3953,14 @@ challenge_abort_pair() {
               | .tasks[$key].updated = (now | todate)
          else .
          end;
-       mark($issue) | mark($peer)' \
+       mark($issue) | (if $scope == "pair" then mark($peer) else . end)' \
       --arg issue "$issue" \
       --arg peer "${peer:-}" \
       --arg reason "$reason" \
       --arg detail "$detail" \
       --arg stage "$(challenge_stage_for_launch_env "$stage")" \
-      --arg nextAction "$next_action" >/dev/null 2>&1 || true
+      --arg nextAction "$next_action" \
+      --arg scope "$scope" >/dev/null 2>&1 || true
   fi
 
   mkdir -p "$feature_dir"
@@ -7171,7 +7214,8 @@ emit_native_terminal_failure_attention() {
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
   if [[ "$is_challenge" == "true" ]]; then
     challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
-      "terminal_launch_failure:${failure_kind}" "$notes" "$next_action" || true
+      "terminal_launch_failure:${failure_kind}" "$notes" "$next_action" \
+      "$(challenge_abort_scope_for_failure "$issue" "$failure_kind")" || true
   fi
 
   write_stage_result "$feature_dir" "$stage" "failed" "$agent" "$model" "$notes" "$artifacts_json"
@@ -7222,10 +7266,202 @@ emit_challenge_stage_failure_quarantine() {
   model="$(stage_result_field "$feature_dir" "$stage" "model")"
 
   challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
-    "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" || return 1
+    "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" \
+    "$(challenge_abort_scope_for_failure "$issue" "$failure_kind")" || return 1
 
   log_warn "$issue → challenge arm failed at ${stage} (${failure_kind}). Pair quarantined. ${next_action}"
   cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "terminal stage failure:${failure_kind}" || true
+  return 0
+}
+
+# ── Challenger transient-failure phase relaunch (HOK-2885) ────────────────────
+#
+# `provider-transient-error` on a native challenger arm is a mid-stream upstream
+# stall (OpenRouter tearing down its own idle connection), observed on ~59% of
+# challenger launches. The in-process retry inside the native loop (3 attempts,
+# ~21s span) cannot ride out a stall measured in minutes, so the mill relaunches
+# the whole phase instead: fresh session, minutes-scale spacing, bounded budget.
+#
+# The counter lives in the feature dir (not workflow state) because
+# save_task_state replaces task objects with a fixed field literal — any state
+# field not listed there is silently dropped. The file dies with the worktree.
+
+challenger_transient_retry_file() {
+  printf '%s\n' "$1/.challenger-transient-retries.json"
+}
+
+challenger_transient_retry_max() {
+  local max="${WAVEMILL_CHALLENGER_TRANSIENT_RETRY_MAX:-3}"
+  [[ "$max" =~ ^[0-9]+$ ]] || max=3
+  printf '%s\n' "$max"
+}
+
+clear_challenger_transient_retry_state() {
+  rm -f "$1/.challenger-transient-retries.json" 2>/dev/null || true
+}
+
+# Relaunch a challenger arm's failed phase after a transient provider error.
+#
+# Called from the three stage-failed branches of monitor_issue_state, before
+# the quarantine fall-through. Returns:
+#   0 — phase relaunched; caller keeps the arm active, no quarantine
+#   2 — waiting out backoff; caller keeps the arm active, no quarantine
+#   1 — not applicable (not a transient challenger failure), or the retry
+#       budget is exhausted / the relaunch is not possible. On exhaustion this
+#       function has already applied the single-side quarantine
+#       (retry_exhausted:provider-transient-error); the caller's
+#       emit_challenge_stage_failure_quarantine call is then an idempotent no-op.
+maybe_retry_challenger_transient_phase() {
+  local issue="$1" feature_dir="$2" stage="$3" win="$4"
+  local is_challenge role existing detail failure_kind retry_file retry_state
+  local stored_stage count last_at now max backoff agent model
+  local slug wt_dir branch title issue_json contract_payload depth review_mode rc=0
+
+  # 1. Applicability: challenger arm of a live challenge, transient failure kind.
+  is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
+  [[ "$is_challenge" == "true" ]] || return 1
+  role="$(_challenge_side_for_issue "$issue" 2>/dev/null || true)"
+  [[ "$role" == "challenger" ]] || return 1
+  existing="$(get_task_meta "$issue" "challengeAborted" 2>/dev/null || true)"
+  [[ -z "$existing" ]] || return 1
+
+  # Failure detail resolution mirrors emit_challenge_stage_failure_quarantine:
+  # prefer the agent's terminal hook detail, fall back to the stage notes.
+  detail="$(native_hook_terminal_failure_detail "$issue" 2>/dev/null || true)"
+  [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
+  [[ -n "$detail" ]] || return 1
+  failure_kind="$(native_terminal_failure_kind "$detail")"
+  [[ "$failure_kind" == "provider-transient-error" ]] || return 1
+
+  # 2. Read the counter; a different stored stage means a new phase gets a
+  # fresh budget.
+  retry_file="$(challenger_transient_retry_file "$feature_dir")"
+  count=0
+  last_at=0
+  if [[ -f "$retry_file" ]]; then
+    retry_state="$(cat "$retry_file" 2>/dev/null || printf '{}')"
+    stored_stage="$(printf '%s' "$retry_state" | jq -r '.stage // empty' 2>/dev/null || true)"
+    if [[ "$stored_stage" == "$stage" ]]; then
+      count="$(printf '%s' "$retry_state" | jq -r '.count // 0' 2>/dev/null || echo 0)"
+      last_at="$(printf '%s' "$retry_state" | jq -r '.lastAt // 0' 2>/dev/null || echo 0)"
+    fi
+  fi
+  [[ "$count" =~ ^[0-9]+$ ]] || count=0
+  [[ "$last_at" =~ ^[0-9]+$ ]] || last_at=0
+  now="$(date +%s)"
+  max="$(challenger_transient_retry_max)"
+
+  # 3. Budget exhausted: terminalize with a single-side quarantine so the
+  # healthy primary keeps its eval and the pair resolves by forfeit.
+  if (( count >= max )); then
+    model="$(stage_result_field "$feature_dir" "$stage" "model")"
+    local exhausted_notes exhausted_next
+    exhausted_next="$(native_terminal_failure_next_action "provider-transient-error")"
+    exhausted_notes="Challenger ${stage} phase failed on a transient provider error after ${count}/${max} relaunches (attempts=${count}): ${detail}"
+    challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+      "retry_exhausted:provider-transient-error" "$exhausted_notes" "$exhausted_next" "single" || true
+    log_warn "$issue → challenger transient retries exhausted at ${stage} (${count}/${max}). Challenger quarantined, primary unaffected."
+    cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "retry_exhausted:provider-transient-error" || true
+    return 1
+  fi
+
+  # 4. First observation of this failure: start the backoff clock instead of
+  # relaunching immediately — the upstream stall needs time to clear.
+  if (( last_at == 0 )); then
+    if jq -n --arg stage "$stage" --argjson count "$count" --argjson lastAt "$now" \
+      '{stage:$stage,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
+      mv "$retry_file.tmp.$$" "$retry_file" 2>/dev/null || rm -f "$retry_file.tmp.$$"
+    else
+      rm -f "$retry_file.tmp.$$"
+    fi
+    log "status" "$issue → transient challenger failure at ${stage}, retrying in $(get_backoff_delay $((count + 1)))s (attempt $((count + 1))/${max})"
+    return 2
+  fi
+  backoff="$(get_backoff_delay $((count + 1)))"
+  if (( now - last_at < backoff )); then
+    return 2
+  fi
+
+  # 5. Validate the relaunch the way the review-infra retry does.
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
+  [[ -n "$model" ]] || model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
+  if [[ -z "$agent" || -z "$model" ]] \
+    || ! agent_validate_phase_launch "$agent" "$stage" "$model" "$REPO_DIR"; then
+    log_warn "$issue → challenger transient retry not launchable (agent=${agent:-?} model=${model:-?}); falling through to quarantine"
+    return 1
+  fi
+
+  slug="$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')"
+  [[ -n "$slug" ]] || return 1
+  wt_dir="$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')"
+  [[ -n "$wt_dir" ]] || wt_dir="${WORKTREE_ROOT}/${slug}"
+  [[ -d "$wt_dir" ]] || return 1
+  branch="$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // empty')"
+  [[ -n "$branch" ]] || branch="task/${slug}"
+  title="$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')"
+  if [[ -z "$title" ]]; then
+    issue_json="$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")"
+    title="$(printf '%s' "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")"
+  fi
+
+  # 6. Increment the counter first (crash-safe), then re-arm and relaunch.
+  count=$((count + 1))
+  if jq -n --arg stage "$stage" --argjson count "$count" --argjson lastAt "$now" \
+    '{stage:$stage,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
+    mv "$retry_file.tmp.$$" "$retry_file" 2>/dev/null || rm -f "$retry_file.tmp.$$"
+  else
+    rm -f "$retry_file.tmp.$$"
+  fi
+
+  contract_payload="$(jq -cn --arg stageRole "$stage" --arg agent "$agent" --arg model "$model" \
+    '{stageRole:$stageRole,agent:$agent,model:$model}' 2>/dev/null || printf '{}')"
+
+  # Clear the stale terminal-error hook before relaunching. Launch paths never
+  # reset it, and _prepare_recovery_phase_launch's hook write is a no-op in the
+  # monitor (no WAVEMILL_ISSUE in env) — leaving the old {"state":"error"} in
+  # place would let emit_native_terminal_failure_attention re-quarantine the
+  # relaunched arm on the next tick, before the new process writes its first hook.
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+
+  case "$stage" in
+    planning)
+      depth="$(read_phase_config "$feature_dir" "planning" "depth")"
+      [[ -n "$depth" ]] || depth="$(get_task_meta "$issue" "planDepth")"
+      [[ -n "$depth" ]] || depth="light"
+      _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || return 1
+      launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent" "$depth" || rc=$?
+      ;;
+    coding)
+      depth="$(read_phase_config "$feature_dir" "coding" "depth")"
+      [[ -n "$depth" ]] || depth="$(get_task_meta "$issue" "codeDepth")"
+      [[ -n "$depth" ]] || depth="medium"
+      _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || return 1
+      launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent" "$depth" || rc=$?
+      ;;
+    review)
+      review_mode="$(read_phase_config "$feature_dir" "review" "mode")"
+      [[ -n "$review_mode" ]] || review_mode="$(get_task_meta "$issue" "reviewMode")"
+      [[ -n "$review_mode" ]] || review_mode="static"
+      _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" "review" || return 1
+      launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
+        "$model" "$agent" "$review_mode" || rc=$?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [[ "$rc" -ne 0 ]]; then
+    log_warn "$issue → challenger transient relaunch of ${stage} failed (rc=$rc); falling through to quarantine"
+    return 1
+  fi
+
+  set_window_attention_state "$win" "clear"
+  log "status" "♻ $issue → challenger_transient_retry attempt=${count}/${max}: relaunched ${stage} after transient provider error"
   return 0
 }
 
@@ -9740,6 +9976,7 @@ launch_ready_phase() {
   fi
 
   clear_review_infra_retry_state "$state_dir"
+  clear_challenger_transient_retry_state "$state_dir"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -15137,6 +15374,12 @@ monitor_issue_state() {
           fi
 
           if [[ "$planning_status" == "failed" ]]; then
+            local planning_transient_rc=0
+            maybe_retry_challenger_transient_phase "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" || planning_transient_rc=$?
+            if [[ "$planning_transient_rc" -eq 0 || "$planning_transient_rc" -eq 2 ]]; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
             emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "planning" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
@@ -15311,6 +15554,12 @@ monitor_issue_state() {
           fi
 
           if [[ "$coding_status" == "failed" ]]; then
+            local coding_transient_rc=0
+            maybe_retry_challenger_transient_phase "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" || coding_transient_rc=$?
+            if [[ "$coding_transient_rc" -eq 0 || "$coding_transient_rc" -eq 2 ]]; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
             emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "coding" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
@@ -15382,6 +15631,12 @@ monitor_issue_state() {
           fi
 
           if [[ "$review_status" == "failed" ]]; then
+            local review_transient_rc=0
+            maybe_retry_challenger_transient_phase "$ISSUE" "$FEATURE_DIR" "review" "$WIN" || review_transient_rc=$?
+            if [[ "$review_transient_rc" -eq 0 || "$review_transient_rc" -eq 2 ]]; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
             emit_challenge_stage_failure_quarantine "$ISSUE" "$FEATURE_DIR" "review" "$WIN" || true
             set_window_attention_state "$WIN" "needs-user"
             active_count=$((active_count + 1))
