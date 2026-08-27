@@ -341,8 +341,8 @@
     {
       "wavemillAlias": "glm-5.3-flash",
       "openrouterId": "z-ai/glm-5.3-flash",
-      "family": "unknown",
-      "status": "provisional",
+      "family": "glm",
+      "status": "active",
       "priorityTier": 3,
       "roleEligibility": [
         "planning",

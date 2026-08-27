@@ -125,10 +125,45 @@ For provisional entries:
 - Do not run launch-priority `--persist` for held provisional identities; those
   observations are operational only and must not feed performance consumers.
 
-Ox Alpha follows this path as alias `ox-alpha` with wire ID
+Ox Alpha followed this path as alias `ox-alpha` with wire ID
 `stealth/ox-alpha`. Roll back a provisional native model by changing its
 lifecycle to `blocked` and its launch-priority status to `deprecated`; keep the
 identity and certification history for audit.
+
+### Promoting a disclosed provisional identity
+
+Run the standard promotion CLI with a checked-in transition spec; never
+hand-rename a provisional entry:
+
+```bash
+npx tsx tools/promote-provisional-model.ts --spec transitions/<old>-to-<new>.json --repo-dir .          # dry-run
+npx tsx tools/promote-provisional-model.ts --spec transitions/<old>-to-<new>.json --repo-dir . --apply  # after review
+```
+
+The apply stamps successor lineage on the old entry (lifecycle `deprecated`,
+launch/routing false, mapping row `deprecated`), appends the verified final
+entry and an active mapping row, and records a manifest plus exact backups
+under `.wavemill/model-promotions/<promotionId>/`. Land the final entry
+conservatively (`evidencePolicy: "held"`, launch/routing false,
+`readOnlyNative: "partial"`), then live-smoke and freshly certify the final
+subject — the old certificate can never match the new subject fingerprint —
+and only then flip certification metadata, launch/routing eligibility, and
+`evidencePolicy: "eligible"` in a separate explicit catalog change.
+
+**Ox Alpha → GLM 5.3 Flash (2026-08-27).** OpenRouter disclosed `ox-alpha`
+(`stealth/ox-alpha`) as **GLM 5.3 Flash** (`z-ai/glm-5.3-flash`, family
+`glm`, vendor Z.ai): <https://openrouter.ai/z-ai/glm-5.3-flash>. Promotion
+`ox-alpha-to-glm-5.3-flash` applied via
+`transitions/ox-alpha-to-glm-5.3-flash.json` with disclosed pricing
+input/output/cache-read **0.075 / 0.25 / 0.015** USD per MTok
+(`cacheWriteCostPerMTok: 0` because OpenRouter advertises no
+`input_cache_write` dimension — a schema-forced representation of "no
+separate cache-write price", not a guess), context window 1,310,720. The
+final identity passed live smoke and a fresh suite-v3 `workflow`
+certification (2026-08-27T23:03:41.432Z). Quality scores stay 0 until
+canonical local evidence accumulates; disclosure captures, dry-run/apply
+manifests, and the certification run are retained under
+`.wavemill/audits/model-promotions/glm-5.3-flash/`.
 
 ## Family Aliases
 

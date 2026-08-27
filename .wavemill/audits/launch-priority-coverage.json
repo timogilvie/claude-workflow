@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-18T16:18:48.197Z",
+  "generatedAt": "2026-08-27T23:08:20.693Z",
   "schemaVersion": "1",
   "coverageTargetPerRole": 3,
   "models": [
@@ -11,7 +11,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 261,
+      "availablePoolExposureCount": 351,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -25,7 +25,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 261,
+      "availablePoolExposureCount": 351,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -39,7 +39,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 1,
-      "availablePoolExposureCount": 261,
+      "availablePoolExposureCount": 351,
       "evalAttempts": 1,
       "evalSuccesses": 1,
       "blockers": [],
@@ -53,7 +53,7 @@
       "priorityTier": 1,
       "role": "planning",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 278,
+      "availablePoolExposureCount": 368,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -67,7 +67,7 @@
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 278,
+      "availablePoolExposureCount": 368,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -81,7 +81,7 @@
       "priorityTier": 1,
       "role": "review",
       "directEvidenceCount": 18,
-      "availablePoolExposureCount": 278,
+      "availablePoolExposureCount": 368,
       "evalAttempts": 18,
       "evalSuccesses": 17,
       "blockers": [],
@@ -136,10 +136,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "planning",
-      "directEvidenceCount": 5,
-      "availablePoolExposureCount": 204,
-      "evalAttempts": 5,
-      "evalSuccesses": 3,
+      "directEvidenceCount": 38,
+      "availablePoolExposureCount": 424,
+      "evalAttempts": 38,
+      "evalSuccesses": 23,
       "blockers": [],
       "status": "at-target"
     },
@@ -150,10 +150,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 5,
-      "availablePoolExposureCount": 204,
-      "evalAttempts": 5,
-      "evalSuccesses": 3,
+      "directEvidenceCount": 38,
+      "availablePoolExposureCount": 424,
+      "evalAttempts": 38,
+      "evalSuccesses": 23,
       "blockers": [],
       "status": "at-target"
     },
@@ -164,10 +164,10 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 5,
-      "availablePoolExposureCount": 204,
-      "evalAttempts": 5,
-      "evalSuccesses": 3,
+      "directEvidenceCount": 38,
+      "availablePoolExposureCount": 424,
+      "evalAttempts": 38,
+      "evalSuccesses": 23,
       "blockers": [],
       "status": "at-target"
     },
@@ -248,11 +248,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "planning",
-      "directEvidenceCount": 4,
+      "directEvidenceCount": 6,
       "availablePoolExposureCount": 231,
-      "evalAttempts": 4,
-      "evalSuccesses": 1,
-      "blockers": [],
+      "evalAttempts": 6,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "gemini-2.5-pro lacks workflow certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -262,11 +268,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 4,
+      "directEvidenceCount": 6,
       "availablePoolExposureCount": 231,
-      "evalAttempts": 4,
-      "evalSuccesses": 1,
-      "blockers": [],
+      "evalAttempts": 6,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "gemini-2.5-pro lacks patch certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -276,193 +288,241 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 4,
+      "directEvidenceCount": 6,
       "availablePoolExposureCount": 231,
+      "evalAttempts": 6,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "gemini-2.5-pro lacks read-only certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 82,
+      "evalAttempts": 5,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "glm-5.2 lacks workflow certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 82,
+      "evalAttempts": 5,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "glm-5.2 lacks patch certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 82,
+      "evalAttempts": 5,
+      "evalSuccesses": 2,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "glm-5.2 lacks read-only certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 3,
+      "availablePoolExposureCount": 12,
+      "evalAttempts": 3,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 3,
+      "availablePoolExposureCount": 12,
+      "evalAttempts": 3,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 3,
+      "availablePoolExposureCount": 12,
+      "evalAttempts": 3,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 643,
+      "availablePoolExposureCount": 874,
+      "evalAttempts": 643,
+      "evalSuccesses": 99,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 643,
+      "availablePoolExposureCount": 874,
+      "evalAttempts": 643,
+      "evalSuccesses": 99,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 643,
+      "availablePoolExposureCount": 874,
+      "evalAttempts": 643,
+      "evalSuccesses": 99,
+      "blockers": [],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 228,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "kimi-k2 lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 228,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "kimi-k2 lacks patch certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 228,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "kimi-k2 lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 4,
+      "availablePoolExposureCount": 81,
       "evalAttempts": 4,
       "evalSuccesses": 1,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "glm-5.2",
-      "openrouterId": "z-ai/glm-5.2",
-      "family": "glm",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 82,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "glm-5.2",
-      "openrouterId": "z-ai/glm-5.2",
-      "family": "glm",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "coding",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 82,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "glm-5.2",
-      "openrouterId": "z-ai/glm-5.2",
-      "family": "glm",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "review",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 82,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5",
-      "openrouterId": "openai/gpt-5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 12,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5",
-      "openrouterId": "openai/gpt-5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "coding",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 12,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5",
-      "openrouterId": "openai/gpt-5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "review",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 12,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5.5",
-      "openrouterId": "openai/gpt-5.5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 443,
-      "availablePoolExposureCount": 633,
-      "evalAttempts": 443,
-      "evalSuccesses": 58,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5.5",
-      "openrouterId": "openai/gpt-5.5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "coding",
-      "directEvidenceCount": 443,
-      "availablePoolExposureCount": 633,
-      "evalAttempts": 443,
-      "evalSuccesses": 58,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "gpt-5.5",
-      "openrouterId": "openai/gpt-5.5",
-      "family": "gpt",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "review",
-      "directEvidenceCount": 443,
-      "availablePoolExposureCount": 633,
-      "evalAttempts": 443,
-      "evalSuccesses": 58,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
-      "family": "kimi",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 228,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
-      "family": "kimi",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "coding",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 228,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
-      "family": "kimi",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "review",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 228,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "kimi-k2.7-code",
-      "openrouterId": "moonshotai/kimi-k2.7-code",
-      "family": "kimi",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 81,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "kimi-k2.7-code lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -472,11 +532,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "coding",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 81,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
+      "evalAttempts": 4,
+      "evalSuccesses": 1,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "kimi-k2.7-code lacks patch certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -486,67 +552,102 @@
       "launchPriorityStatus": "active",
       "priorityTier": 1,
       "role": "review",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 81,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
+      "evalAttempts": 4,
+      "evalSuccesses": 1,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "kimi-k2.7-code lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "planning",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 248,
+      "evalAttempts": 5,
+      "evalSuccesses": 1,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "qwen-3-coder lacks workflow certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "coding",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 248,
+      "evalAttempts": 5,
+      "evalSuccesses": 1,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "qwen-3-coder lacks patch certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "at-target"
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "launchPriorityStatus": "active",
+      "priorityTier": 1,
+      "role": "review",
+      "directEvidenceCount": 5,
+      "availablePoolExposureCount": 248,
+      "evalAttempts": 5,
+      "evalSuccesses": 1,
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "qwen-3-coder lacks read-only certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
       "wavemillAlias": "qwen-2.5-coder-32b",
       "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
       "family": "qwen",
-      "launchPriorityStatus": "active",
+      "launchPriorityStatus": "deprecated",
       "priorityTier": 1,
       "role": "coding",
       "directEvidenceCount": 3,
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "qwen-3-coder",
-      "openrouterId": "qwen/qwen3-coder",
-      "family": "qwen",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "planning",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 248,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "qwen-3-coder",
-      "openrouterId": "qwen/qwen3-coder",
-      "family": "qwen",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "coding",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 248,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "at-target"
-    },
-    {
-      "wavemillAlias": "qwen-3-coder",
-      "openrouterId": "qwen/qwen3-coder",
-      "family": "qwen",
-      "launchPriorityStatus": "active",
-      "priorityTier": 1,
-      "role": "review",
-      "directEvidenceCount": 3,
-      "availablePoolExposureCount": 248,
-      "evalAttempts": 3,
-      "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "qwen-2.5-coder-32b is deprecated"
+        },
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "qwen-2.5-coder-32b lacks patch certification (reason=identity_reidentified; modelId=qwen-2.5-coder-32b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:41.854Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen-2.5-coder-32b-instruct/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -584,11 +685,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 2,
       "role": "coding",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 5,
       "availablePoolExposureCount": 231,
-      "evalAttempts": 3,
+      "evalAttempts": 5,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "devstral-small lacks patch certification (reason=identity_reidentified; modelId=devstral-small; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:17.798Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-small-2603/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -598,11 +705,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 2,
       "role": "coding",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 231,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "gemini-2.5-flash lacks patch certification (reason=identity_reidentified; modelId=gemini-2.5-flash; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:35:46.327Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-flash/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -612,11 +725,17 @@
       "launchPriorityStatus": "active",
       "priorityTier": 2,
       "role": "review",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 231,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "gemini-2.5-flash lacks read-only certification (reason=identity_reidentified; modelId=gemini-2.5-flash; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:35:46.327Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-flash/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -658,7 +777,13 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "llama-3.3-70b lacks patch certification (reason=identity_reidentified; modelId=llama-3.3-70b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:31.442Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-3.3-70b-instruct/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "below-target"
     },
     {
@@ -672,7 +797,13 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "llama-3.3-70b lacks read-only certification (reason=identity_reidentified; modelId=llama-3.3-70b; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:31.442Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-3.3-70b-instruct/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "below-target"
     },
     {
@@ -686,7 +817,13 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "llama-4-maverick lacks workflow certification (reason=identity_reidentified; modelId=llama-4-maverick; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:33.024Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-maverick/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -700,7 +837,13 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "llama-4-maverick lacks patch certification (reason=identity_reidentified; modelId=llama-4-maverick; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:33.024Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-maverick/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -714,7 +857,13 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "mistral-large-2 lacks workflow certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -728,7 +877,13 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "mistral-large-2 lacks patch certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -742,22 +897,14 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "mistral-large-2 lacks read-only certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
-    },
-    {
-      "wavemillAlias": "deepseek-coder-v2",
-      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
-      "family": "deepseek",
-      "launchPriorityStatus": "watchlist",
-      "priorityTier": 2,
-      "role": "coding",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [],
-      "status": "zero-evidence"
     },
     {
       "wavemillAlias": "devstral-medium",
@@ -770,7 +917,13 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "devstral-medium lacks patch certification (reason=identity_reidentified; modelId=devstral-medium; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:37.501Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-medium-3-5/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -780,11 +933,17 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "planning",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "kimi-k2-thinking lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -794,11 +953,17 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "coding",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "kimi-k2-thinking lacks patch certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -808,11 +973,17 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "review",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "kimi-k2-thinking lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -822,11 +993,17 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "planning",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "planning",
+          "detail": "qwen-3-235b lacks workflow certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -836,11 +1013,17 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "coding",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "qwen-3-235b lacks patch certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
@@ -850,18 +1033,63 @@
       "launchPriorityStatus": "watchlist",
       "priorityTier": 2,
       "role": "review",
-      "directEvidenceCount": 3,
+      "directEvidenceCount": 4,
       "availablePoolExposureCount": 51,
-      "evalAttempts": 3,
+      "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "review",
+          "detail": "qwen-3-235b lacks read-only certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
-      "wavemillAlias": "gemini-2.0-flash",
-      "openrouterId": "google/gemini-2.0-flash-001",
-      "family": "gemini",
-      "launchPriorityStatus": "watchlist",
+      "wavemillAlias": "deepseek-coder-v2",
+      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
+      "family": "deepseek",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 2,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "deepseek-coder-v2 is deprecated"
+        },
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "deepseek-coder-v2 lacks patch certification (reason=identity_reidentified; modelId=deepseek-coder-v2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:14.170Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/deepseek/deepseek-coder-v2-instruct/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
+      "family": "glm",
+      "launchPriorityStatus": "active",
+      "priorityTier": 3,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
+      "family": "glm",
+      "launchPriorityStatus": "active",
       "priorityTier": 3,
       "role": "coding",
       "directEvidenceCount": 0,
@@ -872,12 +1100,12 @@
       "status": "zero-evidence"
     },
     {
-      "wavemillAlias": "grok-code-fast",
-      "openrouterId": "x-ai/grok-code-fast-1",
-      "family": "grok",
-      "launchPriorityStatus": "watchlist",
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
+      "family": "glm",
+      "launchPriorityStatus": "active",
       "priorityTier": 3,
-      "role": "coding",
+      "role": "review",
       "directEvidenceCount": 0,
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
@@ -896,7 +1124,13 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "llama-4-scout lacks patch certification (reason=identity_reidentified; modelId=llama-4-scout; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:34.521Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-scout/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "zero-evidence"
     },
     {
@@ -910,13 +1144,19 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "mistral-medium-3 lacks patch certification (reason=identity_reidentified; modelId=mistral-medium-3; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:37.501Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-medium-3-5/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
       "status": "at-target"
     },
     {
-      "wavemillAlias": "qwen-2.5-72b",
-      "openrouterId": "qwen/qwen-2.5-72b-instruct",
-      "family": "qwen",
+      "wavemillAlias": "o3-mini",
+      "openrouterId": "openai/o3-mini",
+      "family": "gpt",
       "launchPriorityStatus": "watchlist",
       "priorityTier": 3,
       "role": "coding",
@@ -924,13 +1164,19 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [],
+      "blockers": [
+        {
+          "reason": "agent-resolution-fails-closed",
+          "role": "coding",
+          "detail": "o3-mini is missing or disabled in the active model registry"
+        }
+      ],
       "status": "zero-evidence"
     },
     {
-      "wavemillAlias": "o3-mini",
-      "openrouterId": "openai/o3-mini",
-      "family": "gpt",
+      "wavemillAlias": "gemini-2.0-flash",
+      "openrouterId": "google/gemini-2.0-flash-001",
+      "family": "gemini",
       "launchPriorityStatus": "deprecated",
       "priorityTier": 3,
       "role": "coding",
@@ -942,99 +1188,160 @@
         {
           "reason": "deprecated",
           "role": "coding",
-          "detail": "o3-mini is deprecated"
+          "detail": "gemini-2.0-flash is deprecated"
         },
         {
-          "reason": "agent-resolution-fails-closed",
+          "reason": "missing-native-certification",
           "role": "coding",
-          "detail": "o3-mini is missing or disabled in the active model registry"
+          "detail": "gemini-2.0-flash lacks patch certification (reason=identity_reidentified; modelId=gemini-2.0-flash; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:19.514Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.0-flash-001/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "grok-code-fast",
+      "openrouterId": "x-ai/grok-code-fast-1",
+      "family": "grok",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "grok-code-fast is deprecated"
+        },
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "grok-code-fast lacks patch certification (reason=identity_reidentified; modelId=grok-code-fast; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:24.941Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/x-ai/grok-code-fast-1/v3.json; artifactScope=global; subject=current-registry)"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "planning",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "planning",
+          "detail": "ox-alpha is deprecated"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "ox-alpha is deprecated"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "review",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "review",
+          "detail": "ox-alpha is deprecated"
+        }
+      ],
+      "status": "zero-evidence"
+    },
+    {
+      "wavemillAlias": "qwen-2.5-72b",
+      "openrouterId": "qwen/qwen-2.5-72b-instruct",
+      "family": "qwen",
+      "launchPriorityStatus": "deprecated",
+      "priorityTier": 3,
+      "role": "coding",
+      "directEvidenceCount": 0,
+      "availablePoolExposureCount": 0,
+      "evalAttempts": 0,
+      "evalSuccesses": 0,
+      "blockers": [
+        {
+          "reason": "deprecated",
+          "role": "coding",
+          "detail": "qwen-2.5-72b is deprecated"
+        },
+        {
+          "reason": "missing-native-certification",
+          "role": "coding",
+          "detail": "qwen-2.5-72b lacks patch certification (reason=identity_reidentified; modelId=qwen-2.5-72b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:40.337Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen-2.5-72b-instruct/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "zero-evidence"
     }
   ],
+  "excludedRecords": 0,
+  "exclusionReasonCounts": {},
   "zeroEvidence": [
-    "deepseek-coder-v2",
-    "gemini-2.0-flash",
-    "grok-code-fast",
-    "kimi-k2",
-    "llama-4-scout",
-    "qwen-2.5-72b"
+    "glm-5.3-flash"
   ],
   "belowTarget": [
-    "claude-opus-4-7",
-    "llama-3.3-70b"
+    "claude-opus-4-7"
   ],
   "samplingPlan": [
     {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
       "role": "planning",
       "tier": "zero-evidence-active",
-      "reason": "kimi-k2 has zero direct evidence for planning",
+      "reason": "glm-5.3-flash has zero direct evidence for planning",
       "gap": 3,
       "cost": null
     },
     {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
       "role": "coding",
       "tier": "zero-evidence-active",
-      "reason": "kimi-k2 has zero direct evidence for coding",
+      "reason": "glm-5.3-flash has zero direct evidence for coding",
       "gap": 3,
       "cost": null
     },
     {
-      "wavemillAlias": "kimi-k2",
-      "openrouterId": "moonshotai/kimi-k2",
+      "wavemillAlias": "glm-5.3-flash",
+      "openrouterId": "z-ai/glm-5.3-flash",
       "role": "review",
       "tier": "zero-evidence-active",
-      "reason": "kimi-k2 has zero direct evidence for review",
-      "gap": 3,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "deepseek-coder-v2",
-      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
-      "role": "coding",
-      "tier": "zero-evidence-watchlist",
-      "reason": "deepseek-coder-v2 has zero direct evidence for coding",
-      "gap": 3,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "gemini-2.0-flash",
-      "openrouterId": "google/gemini-2.0-flash-001",
-      "role": "coding",
-      "tier": "zero-evidence-watchlist",
-      "reason": "gemini-2.0-flash has zero direct evidence for coding",
-      "gap": 3,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "grok-code-fast",
-      "openrouterId": "x-ai/grok-code-fast-1",
-      "role": "coding",
-      "tier": "zero-evidence-watchlist",
-      "reason": "grok-code-fast has zero direct evidence for coding",
-      "gap": 3,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "llama-4-scout",
-      "openrouterId": "meta-llama/llama-4-scout",
-      "role": "coding",
-      "tier": "zero-evidence-watchlist",
-      "reason": "llama-4-scout has zero direct evidence for coding",
-      "gap": 3,
-      "cost": null
-    },
-    {
-      "wavemillAlias": "qwen-2.5-72b",
-      "openrouterId": "qwen/qwen-2.5-72b-instruct",
-      "role": "coding",
-      "tier": "zero-evidence-watchlist",
-      "reason": "qwen-2.5-72b has zero direct evidence for coding",
+      "reason": "glm-5.3-flash has zero direct evidence for review",
       "gap": 3,
       "cost": null
     },
@@ -1055,25 +1362,34 @@
       "reason": "claude-opus-4-7 is below target for coding",
       "gap": 2,
       "cost": null
+    },
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "role": "review",
+      "tier": "below-target",
+      "reason": "claude-opus-4-7 is below target for review",
+      "gap": 2,
+      "cost": null
     }
   ],
   "summary": {
-    "totalLaunchPriority": 31,
-    "blockedCount": 1,
-    "sampledCount": 10,
+    "totalLaunchPriority": 33,
+    "blockedCount": 43,
+    "sampledCount": 6,
     "byRole": {
       "planning": {
-        "zero": 1,
+        "zero": 3,
         "below": 1,
         "at": 14
       },
       "coding": {
-        "zero": 7,
+        "zero": 9,
         "below": 2,
         "at": 22
       },
       "review": {
-        "zero": 1,
+        "zero": 3,
         "below": 2,
         "at": 17
       }

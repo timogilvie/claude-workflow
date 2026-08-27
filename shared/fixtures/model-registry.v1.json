@@ -2839,10 +2839,10 @@
         "nativeCapability": {
           "nativeProvider": "openrouter",
           "piTransportKind": "openai-completions",
-          "readOnlyNative": "partial",
+          "readOnlyNative": "certified",
           "certification": {
             "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-08-24T22:22:00.000Z",
+            "certifiedAt": "2026-08-27T23:03:41.432Z",
             "certificationSuiteVersion": "v3"
           },
           "compatFlags": {
@@ -2875,8 +2875,8 @@
           "compatibilityFlags": {
             "thinkingFormat": "openrouter"
           },
-          "launchEligible": false,
-          "routingEligible": false
+          "launchEligible": true,
+          "routingEligible": true
         },
         "identity": {
           "status": "verified",
@@ -2884,7 +2884,7 @@
           "fingerprint": "3c802dd32ce613afa81237cadf556fb97fa815aa9c095f69145dd4a57e331ae3",
           "displayName": "GLM 5.3 Flash",
           "family": "glm",
-          "evidencePolicy": "held",
+          "evidencePolicy": "eligible",
           "verification": {
             "source": "https://openrouter.ai/api/v1/models",
             "observedAt": "2026-08-27T22:55:48.000Z",
