@@ -159,6 +159,37 @@ test('detectCrossPrReverts flags restoring the parent version of a file modified
   }
 });
 
+test('detectCrossPrReverts ignores a revert that already landed on the integration branch', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    git(repoDir, 'checkout -b pr-440');
+    commitFile(repoDir, 'liveness.test.sh', 'liveness\n', 'Add liveness test');
+    commitFile(repoDir, 'common.sh', 'patched\n', 'Patch common');
+    git(repoDir, 'checkout auto/integration');
+    mergePrBranch(repoDir, 'pr-440', 440, 'Fix blocked-completion liveness check');
+
+    // A later commit on integration itself drops PR #440's work. Every branch cut from
+    // this tip inherits the removal without having authored it.
+    git(repoDir, 'rm liveness.test.sh');
+    commitFile(repoDir, 'common.sh', 'base\n', 'revert: drop duplicated liveness work');
+
+    git(repoDir, 'checkout -b task/unrelated auto/integration');
+    const baseRef = git(repoDir, 'rev-parse auto/integration');
+    commitFile(repoDir, 'unrelated.ts', 'unrelated work\n', 'Unrelated task work');
+
+    const findings = detectCrossPrReverts({
+      repoDir,
+      baseRef,
+      headRef: 'HEAD',
+      integrationRef: 'auto/integration',
+    });
+
+    assert.deepEqual(findings, []);
+  } finally {
+    cleanup();
+  }
+});
+
 test('detectCrossPrReverts ignores non-merge integration commits even when their subject mentions a PR number', () => {
   const { repoDir, cleanup } = makeRepo();
   try {

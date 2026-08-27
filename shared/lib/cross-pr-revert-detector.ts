@@ -84,7 +84,7 @@ export function detectCrossPrReverts(
           `git diff --name-status ${escapeShellArg(commit.parent)} ${escapeShellArg(commit.commit)}`,
         ),
       )
-        .map((entry) => classifyRevertedPrFile(shellRunner, options.repoDir, options.headRef, commit, entry, deletedPaths))
+        .map((entry) => classifyRevertedPrFile(shellRunner, options.repoDir, options.integrationRef, options.headRef, commit, entry, deletedPaths))
         .filter((entry): entry is CrossPrRevertFile => entry !== null);
 
       if (revertedFiles.length === 0) {
@@ -250,11 +250,23 @@ function fileExistsAtRef(
 function classifyRevertedPrFile(
   shellRunner: ShellRunner,
   repoDir: string,
+  integrationRef: string,
   headRef: string,
   commit: RecentPrCommit,
   entry: NameStatusEntry,
   deletedPaths: ReadonlySet<string>,
 ): CrossPrRevertFile | null {
+  const headBlob = blobIdAtRef(shellRunner, repoDir, headRef, entry.path);
+
+  // The guard's question is whether merging this branch undoes work that is still on
+  // the integration branch. When the integration tip and the head agree on a path
+  // (including both missing it), the merge changes nothing there — the deletion or
+  // rollback already landed upstream. Without this, one upstream revert commit blocks
+  // every PR branched off that integration tip until the merge leaves the scan window.
+  if (blobIdAtRef(shellRunner, repoDir, integrationRef, entry.path) === headBlob) {
+    return null;
+  }
+
   if (entry.status === 'A' && deletedPaths.has(entry.path)) {
     return {
       path: entry.path,
@@ -264,7 +276,6 @@ function classifyRevertedPrFile(
   }
 
   const prBlob = blobIdAtRef(shellRunner, repoDir, commit.commit, entry.path);
-  const headBlob = blobIdAtRef(shellRunner, repoDir, headRef, entry.path);
   if (!headBlob) {
     if (entry.status === 'A' || entry.status === 'M' || entry.status === 'R') {
       return {

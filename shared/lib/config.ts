@@ -445,6 +445,7 @@ export interface IntegrationConfig {
   requiredChecks: string[];
   highRiskPolicy: 'block' | 'manual' | 'allow';
   useMillSession: boolean;
+  mergeLockTimeoutMinutes: number;
   readyPolicy?: IntegrationReadyPolicyConfig;
 }
 
@@ -814,6 +815,7 @@ export const INTEGRATION_DEFAULTS: IntegrationConfig = {
   requiredChecks: [],
   highRiskPolicy: 'manual',
   useMillSession: true,
+  mergeLockTimeoutMinutes: 45,
 };
 
 export const OBSERVER_DEFAULTS: ObserverConfig = {

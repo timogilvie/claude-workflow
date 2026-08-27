@@ -11,7 +11,7 @@ The implementation is complete. Your job is to review and create a PR.
    IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. Configure your tool's built-in timeout (for Claude Code's Bash tool: `timeout: 600000` — 600000 ms = 10 minutes) so the call is not killed at the default cap. Do NOT prefix the command with the external `timeout` binary — it is not installed by default on macOS and will fail with `command not found: timeout`.
    npx tsx {{TOOLS_DIR}}/review-changes.ts {{BASE_BRANCH}} --json --operating-mode {{OPERATING_MODE}}
    {{REVIEWER_NOTE}}
-   Track `FINAL_REVIEW_EXIT_CODE`, `REVIEW_ITERATIONS`, final verdict, blocker count, warning count, and any review-tool stderr for the last run.
+   Track `FINAL_REVIEW_EXIT_CODE`, `REVIEW_ITERATIONS`, final verdict, blocker count, warning count, the `failureCategory` field from the final review JSON when present, and any review-tool stderr for the last run.
    - Exit code 0 = review passed → proceed to step 3
    - Exit code 1 = issues found → fix blockers and re-run (step 2)
    - Exit code 2 = error → log comprehensive diagnostics, record `verdict: "error"`, and proceed to PR creation in step 3 without readiness certification
@@ -41,7 +41,8 @@ The implementation is complete. Your job is to review and create a PR.
    - Make targeted fixes only — do not refactor unrelated code
    - Run the review scope guard immediately before committing:
      `npx tsx {{TOOLS_DIR}}/check-review-scope.ts --repo-dir .`
-   - If the guard exits non-zero, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+   - If the guard exits 1, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+   - If the guard exits 2, scope could not be verified (tool/git failure — infrastructure, not a violation): capture the guard's stderr, note "review scope unverified (infrastructure)" in the commit message body and PR body, and proceed with the commit. Do not treat exit 2 as a scope violation.
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
    - Re-run the review tool (step 1)
 
@@ -88,6 +89,7 @@ The implementation is complete. Your job is to review and create a PR.
    - If the final run exited 0 with verdict `ready` and zero blockers, record `exitCode: 0`, `verdict: "ready"`, `iterations: <count>`, `blockerCount: 0`, and `warningCount`.
    - If the final run exited 1, record `exitCode: 1`, `verdict: "not_ready"`, `iterations`, `blockerCount`, and `warningCount`.
    - If the final run exited 2, record `exitCode: 2`, `verdict: "error"`, `iterations`, `blockerCount: 0`, `warningCount: 0`, `reviewToolError`, and `diagnostics`.
+   - If the final review JSON contains a `failureCategory`, you MUST record it verbatim in the artifacts (and `reviewToolError` when present). The orchestrator uses `failureCategory` to decide whether a failed review is retryable infrastructure (e.g. `review-scope-unverifiable`) rather than a genuine defect — dropping it stalls the task permanently.
    Example:
    ```bash
    REVIEW_ARTIFACTS=$(jq -cn \
@@ -97,7 +99,9 @@ The implementation is complete. Your job is to review and create a PR.
      --argjson iterations "$REVIEW_ITERATIONS" \
      --argjson blockers "$FINAL_BLOCKER_COUNT" \
      --argjson warnings "$FINAL_WARNING_COUNT" \
-     '{type:"review",prNumber:$pr,exitCode:$exitCode,verdict:$verdict,iterations:$iterations,blockerCount:$blockers,warningCount:$warnings}')
+     --arg failureCategory "${FINAL_FAILURE_CATEGORY:-}" \
+     '{type:"review",prNumber:$pr,exitCode:$exitCode,verdict:$verdict,iterations:$iterations,blockerCount:$blockers,warningCount:$warnings}
+      + (if $failureCategory != "" then {failureCategory:$failureCategory} else {} end)')
    npx tsx {{TOOLS_DIR}}/stage-result-cli.ts update "{{FEATURE_DIR}}" review \
      --status completed \
      --notes "PR #$PR_NUMBER created" \
