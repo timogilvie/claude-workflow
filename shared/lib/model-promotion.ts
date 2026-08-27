@@ -296,6 +296,16 @@ export function isTransitionSpecShape(value: unknown): boolean {
     && !!record.disclosure && typeof record.disclosure === 'object';
 }
 
+function contentMentionsIdentities(content: string, spec: ModelTransitionSpec): boolean {
+  const needles = [
+    spec.provisional.alias,
+    spec.provisional.providerNativeId,
+    spec.final.alias,
+    spec.final.providerNativeId,
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+  return needles.some((needle) => content.includes(needle));
+}
+
 export function planModelPromotion(options: PlanPromotionOptions): PromotionManifest {
   return buildPromotionPlan(options).manifest;
 }
@@ -450,9 +460,23 @@ function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
     const kind = path === catalogPath ? 'catalog' : path.endsWith('.jsonl') ? 'jsonl' : 'json';
     const beforeContent = readFileSync(path, 'utf-8');
     const beforeHash = sha256(beforeContent);
-    const beforeRecords = kind === 'jsonl'
-      ? parseStrictJsonl(path, beforeContent).records
-      : [parseStrictJson(path, beforeContent)];
+    let beforeRecords: unknown[];
+    try {
+      beforeRecords = kind === 'jsonl'
+        ? parseStrictJsonl(path, beforeContent).records
+        : [parseStrictJson(path, beforeContent)];
+    } catch (error) {
+      if (contentMentionsIdentities(beforeContent, spec)) {
+        // A broken file that names either identity cannot be transformed
+        // safely, so the whole promotion refuses rather than skipping it.
+        throw error;
+      }
+      diagnostics.push(
+        `Skipped unparseable ${kind} file ${relative(repoDir, path)} (mentions neither identity): `
+        + `${error instanceof Error ? error.message : String(error)}`,
+      );
+      continue;
+    }
     if (kind === 'json' && isTransitionSpecShape(beforeRecords[0])) {
       // Checked-in transition specs intentionally reference both identities in
       // structured keys; they describe the promotion and are never a corpus.
@@ -1084,19 +1108,32 @@ function parseStrictJsonl(path: string, content: string): ParsedJsonl {
   const records: unknown[] = [];
   const lines = content.split('\n');
   let lineCount = 0;
+  // Some writers emit pretty-printed JSON documents back to back instead of
+  // one document per line, so accumulate lines until the buffer parses. A
+  // single-line record parses immediately, keeping strict JSONL strict.
+  let buffer = '';
+  let bufferStartLine = 0;
   for (const line of lines) {
     if (line.length === 0 && line === lines[lines.length - 1]) {
       continue;
     }
-    if (line.trim().length === 0) {
+    if (buffer.length === 0 && line.trim().length === 0) {
       continue;
     }
     lineCount++;
-    try {
-      records.push(JSON.parse(line));
-    } catch (error) {
-      throw new Error(`Malformed JSONL in ${path} line ${lineCount}: ${error instanceof Error ? error.message : String(error)}`);
+    if (buffer.length === 0) {
+      bufferStartLine = lineCount;
     }
+    buffer = buffer.length === 0 ? line : `${buffer}\n${line}`;
+    try {
+      records.push(JSON.parse(buffer));
+      buffer = '';
+    } catch {
+      // Keep accumulating; leftover content at the end is malformed.
+    }
+  }
+  if (buffer.length > 0) {
+    throw new Error(`Malformed JSONL in ${path} line ${bufferStartLine}: unparseable record`);
   }
   return { records, lineCount };
 }
@@ -1110,8 +1147,11 @@ function discoverPromotionFiles(repoDir: string, catalogPath?: string): string[]
   function walk(dir: string): void {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name) && entry.name !== 'model-promotions') {
-          walk(join(dir, entry.name));
+        const childDir = join(dir, entry.name);
+        // Never cross into a nested repository (e.g. worktrees checked out
+        // under the main repo): those files belong to other branches.
+        if (!SKIP_DIRS.has(entry.name) && entry.name !== 'model-promotions' && !existsSync(join(childDir, '.git'))) {
+          walk(childDir);
         }
         continue;
       }

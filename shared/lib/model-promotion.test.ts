@@ -324,6 +324,85 @@ describe('model promotion', () => {
     }
   });
 
+  it('skips unparseable files that mention neither identity, refuses ones that do', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'tests', 'fixtures'), { recursive: true });
+      const brokenUnrelated = join(repoDir, 'tests', 'fixtures', 'broken-unrelated.json');
+      writeFileSync(brokenUnrelated, '{"planner":"broken"\n');
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      assert.ok(plan.diagnostics.some((line) => line.includes('broken-unrelated.json')));
+
+      writeFileSync(join(repoDir, 'tests', 'fixtures', 'broken-related.json'), '{"planner":"ox-alpha"\n');
+      assert.throws(
+        () => planModelPromotion({ spec: spec(), repoDir }),
+        /Malformed JSON/,
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('parses pretty-printed JSON stream .jsonl trace files without refusing', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1'), { recursive: true });
+      const tracePath = join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1', 'trace.jsonl');
+      // Two pretty-printed documents back to back; free-text mention only.
+      writeFileSync(tracePath, [
+        '{',
+        '  "schemaVersion": "1.0",',
+        '  "slug": "onboard-ox-alpha-for-routing",',
+        '  "event": "task_launched"',
+        '}',
+        '{',
+        '  "schemaVersion": "1.0",',
+        '  "planner": "ox-alpha",',
+        '  "event": "routing_complete"',
+        '}',
+        '',
+      ].join('\n'));
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      const traceManifest = plan.files.find((file) => file.relativePath.endsWith('trace.jsonl'));
+      assert.ok(traceManifest);
+      assert.equal(traceManifest.recordCount, 2);
+      // The structured planner reference counts and is rewritten; the slug stays free text.
+      assert.equal(traceManifest.oldReferencesBefore, 1);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      const rewritten = readFileSync(tracePath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(rewritten[0].slug, 'onboard-ox-alpha-for-routing');
+      assert.equal(rewritten[1].planner, 'gpt-9-test');
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('does not cross into nested repositories (worktrees under the repo dir)', () => {
+    const repoDir = makeRepo();
+    try {
+      const nested = join(repoDir, 'worktrees', 'some-branch');
+      mkdirSync(join(nested, '.git'), { recursive: true });
+      const nestedFixture = join(nested, 'routing.json');
+      const nestedContent = `${JSON.stringify({ planner: 'ox-alpha' }, null, 2)}\n`;
+      writeFileSync(nestedFixture, nestedContent);
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.files.some((file) => file.relativePath.includes('worktrees')), false);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(nestedFixture, 'utf-8'), nestedContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
   it('refuses malformed JSONL before creating backups', () => {
     const repoDir = makeRepo();
     try {
