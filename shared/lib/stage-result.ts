@@ -87,9 +87,15 @@ export interface PlanningArtifacts {
 
 /** Artifacts produced during the review stage. */
 export type ReviewOutcomeVerdict = 'ready' | 'not_ready' | 'error';
+/**
+ * The review scope guard could not evaluate scope (tool/git failure) — an
+ * infrastructure condition, never evidence of a scope violation (HOK-2889).
+ */
+export const REVIEW_SCOPE_UNVERIFIABLE_FAILURE_CATEGORY = 'review-scope-unverifiable';
 export const INFRA_REVIEW_FAILURE_CATEGORIES = [
   'native-runtime-unavailable',
   'native-review-prompt-missing',
+  REVIEW_SCOPE_UNVERIFIABLE_FAILURE_CATEGORY,
 ] as const;
 export type InfrastructureReviewFailureCategory = typeof INFRA_REVIEW_FAILURE_CATEGORIES[number];
 

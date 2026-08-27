@@ -636,6 +636,39 @@ describe('review outcome helpers', () => {
     assert.equal(isInfrastructureReviewFailure(nested), true);
   });
 
+  it('classifies review-scope-unverifiable as retryable infrastructure in both artifact shapes', () => {
+    const flat = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 1,
+        blockerCount: 1,
+        failureCategory: 'review-scope-unverifiable',
+      },
+    });
+    assert.equal(extractReviewOutcome(flat)?.failureCategory, 'review-scope-unverifiable');
+    assert.equal(isInfrastructureReviewFailure(flat), true);
+
+    const nested = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        review: {
+          exitCode: 1,
+          verdict: 'not_ready',
+          iterations: 1,
+          blockerCount: 1,
+          failureCategory: 'review-scope-unverifiable',
+        },
+      } as StageResult['artifacts'],
+    });
+    assert.equal(extractReviewOutcome(nested)?.failureCategory, 'review-scope-unverifiable');
+    assert.equal(isInfrastructureReviewFailure(nested), true);
+  });
+
   it('classifies only retryable infrastructure review failures', () => {
     assert.equal(isInfrastructureReviewFailure({
       type: 'review',
@@ -645,6 +678,11 @@ describe('review outcome helpers', () => {
     assert.equal(isInfrastructureReviewFailure({
       verdict: 'error',
       reviewToolError: 'spawnSync /bin/bash ETIMEDOUT',
+    }), true);
+    assert.equal(isInfrastructureReviewFailure({
+      type: 'review',
+      verdict: 'not_ready',
+      failureCategory: 'review-scope-unverifiable',
     }), true);
     assert.equal(isInfrastructureReviewFailure({
       type: 'review',

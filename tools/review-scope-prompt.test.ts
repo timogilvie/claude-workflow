@@ -29,6 +29,33 @@ function assertGuardBeforeCommit(content: string, guardCommand: string, label: s
     /No review commit may be created/i,
     `${label} must include the fail-closed no-commit contract`,
   );
+  assertExitCodeDistinction(interveningText, label);
+}
+
+// Exit 1 (policy violation) fails closed; exit 2 (scope unverified —
+// infrastructure) must NOT be treated as a violation, or the arm stalls
+// permanently one step before the review verdict (HOK-2889).
+function assertExitCodeDistinction(text: string, label: string): void {
+  assert.match(
+    text,
+    /If the guard exits 1/,
+    `${label} must scope the fail-closed contract to guard exit 1`,
+  );
+  assert.match(
+    text,
+    /exits 2/,
+    `${label} must describe guard exit 2 separately from exit 1`,
+  );
+  assert.match(
+    text,
+    /exits 2[\s\S]*?(infrastructure, not a violation)/i,
+    `${label} must classify guard exit 2 as infrastructure, not a violation`,
+  );
+  assert.match(
+    text,
+    /Do not treat exit 2 as a scope violation/i,
+    `${label} must forbid treating guard exit 2 as a scope violation`,
+  );
 }
 
 test('review-phase prompt requires review scope guard immediately before review-fix commits', () => {
@@ -72,4 +99,5 @@ test('workflow command Phase 4 requires review scope guard before review-fix com
     /No review commit may be created/i,
     'workflow.md must include the fail-closed no-commit contract',
   );
+  assertExitCodeDistinction(followingText, 'workflow.md');
 });
