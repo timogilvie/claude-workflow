@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -134,6 +135,23 @@ describe('intervention-detector', () => {
     it('returns defaults when no config file exists', () => {
       const penalties = loadPenalties('/nonexistent/path');
       assert.deepEqual(penalties, DEFAULT_PENALTIES);
+    });
+
+    it('picks up a configured unknownAttribution penalty', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'penalties-unknown-attribution-'));
+      try {
+        writeFileSync(
+          join(tmpDir, '.wavemill-config.json'),
+          JSON.stringify({ eval: { interventionPenalties: { unknownAttribution: 0.33 } } }),
+          'utf-8',
+        );
+        clearConfigCache(tmpDir);
+        const penalties = loadPenalties(tmpDir);
+        assert.equal(penalties.unknown_attribution, 0.33);
+      } finally {
+        clearConfigCache(tmpDir);
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -673,8 +691,112 @@ describe('intervention-detector', () => {
     });
   });
 
-  describe('detectManualEdits skips wavemill-managed branches', () => {
-    it('returns zero manual edits for wavemill-managed branches even without co-author tags', () => {
+  describe('detectManualEdits attribution on wavemill-managed branches (HOK-2894)', () => {
+    // HOK-2894: a wavemill-managed branch is no longer a blanket exemption —
+    // every mill task branch satisfies isWavemillManagedBranch by construction,
+    // so treating it as one disabled manual-edit detection for the entire
+    // fleet. These pin the replacement: window/interval-based attribution.
+
+    it('flags an operator handoff commit as manual_edit (high) but does not flag the agent\'s own in-window commit (HOK-2769 regression pin)', () => {
+      // Mirrors the HOK-2888_c timeline: coding.finishedAt is stamped only
+      // after the handoff guard clears, i.e. after the operator's commit —
+      // so a naive [startedAt, finishedAt] window alone would swallow it.
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-attribution-handoff-'));
+      try {
+        const featureDir = join(tmpDir, 'features', 'devstral-demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-27T10:00:00Z',
+          finishedAt: '2026-08-27T10:55:00Z', // stamped after the operator's 10:45 commit
+          agent: 'native-openrouter',
+          model: 'devstral-small',
+          notes: '',
+        }));
+        writeFileSync(join(featureDir, '.coding-uncommitted-output.resolved.jsonl'), JSON.stringify({
+          detectedAt: '2026-08-27T10:30:00Z',
+          resolvedAt: '2026-08-27T10:50:00Z',
+          dirtyPaths: ['src/foo.ts'],
+        }) + '\n');
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: 'aaaaaaa1111111111111',
+            message: 'wip: partial implementation', // agent commit, under the user's git identity, no trailer
+            author: 'timogilvie',
+            date: '2026-08-27T10:15:00Z',
+          },
+          {
+            sha: '192f095b22222222222',
+            message: 'chore: commit agent output', // operator completes the handoff
+            author: 'timogilvie',
+            date: '2026-08-27T10:45:00Z',
+          },
+        ];
+
+        const result = detectManualEdits({
+          branchName: 'task/devstral-demo',
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          prNumber: '99',
+          prCommits,
+          agentType: 'native-openrouter',
+        });
+
+        assert.equal(result.manualEdit.count, 1, 'Only the operator commit should be flagged');
+        assert.match(result.manualEdit.details[0], /192f095/);
+        assert.match(result.manualEdit.details[0], /operator handoff commit/);
+        assert.equal(result.manualEdit.severities?.[0], 'high');
+        assert.equal(result.unknownAttribution.count, 0);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('flags a commit outside every recorded agent activity window as manual_edit (med)', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-attribution-outside-'));
+      try {
+        const featureDir = join(tmpDir, 'features', 'outside-demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-27T10:00:00Z',
+          finishedAt: '2026-08-27T10:30:00Z',
+          agent: 'codex',
+          model: 'gpt-5.5-codex',
+          notes: '',
+        }));
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: 'bbbbbbb3333333333333',
+            message: 'fix: typo well after coding finished',
+            author: 'timogilvie',
+            date: '2026-08-27T12:00:00Z', // far outside [10:00, 10:30] + grace
+          },
+        ];
+
+        const result = detectManualEdits({
+          branchName: 'task/outside-demo',
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          prNumber: '100',
+          prCommits,
+          agentType: 'codex',
+        });
+
+        assert.equal(result.manualEdit.count, 1);
+        assert.match(result.manualEdit.details[0], /outside all recorded agent activity windows/);
+        assert.equal(result.manualEdit.severities?.[0], 'med');
+        assert.equal(result.unknownAttribution.count, 0);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('emits unknown_attribution instead of a silent zero when no stage-result data exists at all', () => {
       const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-managed-'));
       try {
         const taskDir = join(tmpDir, 'features', 'extract-business-logic');
@@ -690,10 +812,148 @@ describe('intervention-detector', () => {
           },
         ];
 
-        const event = detectManualEdits(
-          'task/extract-business-logic', 'main', tmpDir, '177', prCommits
-        );
-        assert.equal(event.count, 0, 'Should not flag agent commits on wavemill-managed branch');
+        const result = detectManualEdits({
+          branchName: 'task/extract-business-logic',
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          prNumber: '177',
+          prCommits,
+        });
+
+        assert.equal(result.manualEdit.count, 0, 'No attribution evidence — must not be silently scored as manual edit');
+        assert.equal(result.unknownAttribution.count, 1, 'Must fail loud instead of a silent zero');
+        assert.equal(result.unknownAttribution.severities?.[0], 'low');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('honors the 120s grace margin around a window boundary', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-attribution-grace-'));
+      try {
+        const featureDir = join(tmpDir, 'features', 'grace-demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'running',
+          startedAt: '2026-08-27T10:00:00Z',
+          finishedAt: null,
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: '',
+        }));
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: 'ccccccc4444444444444',
+            message: 'setup commit just before the recorded start',
+            author: 'timogilvie',
+            date: '2026-08-27T09:59:00Z', // 60s before startedAt — inside AGENT_WINDOW_GRACE_MS
+          },
+        ];
+
+        const result = detectManualEdits({
+          branchName: 'task/grace-demo',
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          prNumber: '101',
+          prCommits,
+          agentType: 'native',
+        });
+
+        assert.equal(result.manualEdit.count, 0, 'Commit within the grace margin should be treated as agent-authored');
+        assert.equal(result.unknownAttribution.count, 0);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('honors windows recorded in a stage result\'s history[] entries', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-attribution-history-'));
+      try {
+        const featureDir = join(tmpDir, 'features', 'history-demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-27T14:00:00Z',
+          finishedAt: '2026-08-27T14:30:00Z',
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: '',
+          history: [
+            {
+              status: 'failed',
+              startedAt: '2026-08-27T10:00:00Z',
+              finishedAt: '2026-08-27T10:20:00Z',
+              agent: 'native',
+              model: 'glm-5.2',
+              notes: 'earlier attempt',
+            },
+          ],
+        }));
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: 'ddddddd5555555555555',
+            message: 'commit made during the earlier failed attempt',
+            author: 'timogilvie',
+            date: '2026-08-27T10:10:00Z', // inside the history[] window, outside the current one
+          },
+        ];
+
+        const result = detectManualEdits({
+          branchName: 'task/history-demo',
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          prNumber: '102',
+          prCommits,
+          agentType: 'native',
+        });
+
+        assert.equal(result.manualEdit.count, 0, 'Commit inside a history[] window should be treated as agent-authored');
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('reads stage results from the archived (dotless) route-artifact dir when the worktree has been reaped', () => {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'wavemill-attribution-archive-'));
+      try {
+        const issueId = 'HOK-9999';
+        const archiveDir = join(tmpDir, '.wavemill', 'evals', 'artifacts', issueId);
+        mkdirSync(archiveDir, { recursive: true });
+        writeFileSync(join(archiveDir, 'coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-27T10:00:00Z',
+          finishedAt: '2026-08-27T10:30:00Z',
+          agent: 'native',
+          model: 'glm-5.2',
+          notes: '',
+        }));
+
+        const prCommits: PrCommit[] = [
+          {
+            sha: 'eeeeeee6666666666666',
+            message: 'commit inside the archived window',
+            author: 'timogilvie',
+            date: '2026-08-27T10:10:00Z',
+          },
+        ];
+
+        const result = detectManualEdits({
+          branchName: 'task/reaped-demo', // no features/reaped-demo dir on disk — worktree is gone
+          baseBranch: 'main',
+          repoDir: tmpDir,
+          issueId,
+          prNumber: '103',
+          prCommits,
+          agentType: 'native',
+        });
+
+        assert.equal(result.manualEdit.count, 0, 'Archived (dotless) stage result should still classify the commit as agent-authored');
+        assert.equal(result.unknownAttribution.count, 0);
       } finally {
         rmSync(tmpDir, { recursive: true, force: true });
       }
@@ -864,10 +1124,10 @@ describe('intervention-detector', () => {
         },
       ];
 
-      const event = detectManualEdits('task/test', 'main', undefined, '42', prCommits);
-      assert.equal(event.count, 1);
-      assert.ok(event.details[0].includes('bbb2222'));
-      assert.ok(event.details[0].includes('manual fix for styling'));
+      const result = detectManualEdits({ branchName: 'task/test', baseBranch: 'main', prNumber: '42', prCommits });
+      assert.equal(result.manualEdit.count, 1);
+      assert.ok(result.manualEdit.details[0].includes('bbb2222'));
+      assert.ok(result.manualEdit.details[0].includes('manual fix for styling'));
     });
 
     it('returns zero when all PR commits are agent commits', () => {
@@ -886,8 +1146,8 @@ describe('intervention-detector', () => {
         },
       ];
 
-      const event = detectManualEdits('task/test', 'main', undefined, '42', prCommits);
-      assert.equal(event.count, 0);
+      const result = detectManualEdits({ branchName: 'task/test', baseBranch: 'main', prNumber: '42', prCommits });
+      assert.equal(result.manualEdit.count, 0);
     });
 
     it('does not pick up commits from other PRs (the HOK-740 bug)', () => {
@@ -902,8 +1162,8 @@ describe('intervention-detector', () => {
       ];
       // Commits from PR #135 and #136 would NOT be in prCommits — that's the fix
 
-      const event = detectManualEdits('task/test', 'main', undefined, '137', prCommits);
-      assert.equal(event.count, 0, 'Should not detect agent commit as manual edit');
+      const result = detectManualEdits({ branchName: 'task/test', baseBranch: 'main', prNumber: '137', prCommits });
+      assert.equal(result.manualEdit.count, 0, 'Should not detect agent commit as manual edit');
     });
   });
 
@@ -1075,6 +1335,72 @@ describe('intervention-detector', () => {
         rmSync(repo, { recursive: true, force: true });
         rmSync(process.env.HOME || '', { recursive: true, force: true });
         process.env.HOME = oldHome;
+      }
+    });
+  });
+
+  describe('detectAllInterventions manual-edit gate removal (HOK-2894)', () => {
+    // Previously detectAllInterventions skipped manual-edit detection outright
+    // for every agentCommitsAsUser agent (codex, native*), stacking with the
+    // isWavemillManagedBranch short-circuit inside detectManualEdits so no
+    // operator commit on a mill branch could ever be detected. This pins that
+    // both an in-window agent commit and an out-of-window operator commit are
+    // now classified correctly when routed through the full orchestrator.
+    it('classifies commits for a native-openrouter agent instead of skipping manual-edit detection entirely', () => {
+      // No prNumber here — detectAllInterventions always re-fetches PR commits
+      // for itself via the real `gh` CLI, so a real git repo with real commit
+      // dates (via the git-log fallback path) is the only way to exercise
+      // this end-to-end without a network dependency.
+      const repo = mkdtempSync(join(tmpdir(), 'intervention-gate-removal-'));
+      try {
+        execSync('git init', { cwd: repo, stdio: 'ignore' });
+        execSync('git config user.name "timogilvie"', { cwd: repo, stdio: 'ignore' });
+        execSync('git config user.email "tim@example.com"', { cwd: repo, stdio: 'ignore' });
+        writeFileSync(join(repo, 'README.md'), 'init\n');
+        execSync('git add README.md', { cwd: repo, stdio: 'ignore' });
+        execSync('git commit -m "init"', { cwd: repo, stdio: 'ignore' });
+        execSync('git branch -M main', { cwd: repo, stdio: 'ignore' });
+        execSync('git checkout -b task/gate-removal-demo', { cwd: repo, stdio: 'ignore' });
+
+        const featureDir = join(repo, 'features', 'gate-removal-demo');
+        mkdirSync(featureDir, { recursive: true });
+        writeFileSync(join(featureDir, '.coding-result.json'), JSON.stringify({
+          stage: 'coding',
+          status: 'completed',
+          startedAt: '2026-08-27T10:00:00Z',
+          finishedAt: '2026-08-27T10:30:00Z',
+          agent: 'native-openrouter',
+          model: 'devstral-small',
+          notes: '',
+        }));
+
+        const commitAt = (file: string, message: string, iso: string) => {
+          writeFileSync(join(repo, file), `${message}\n`);
+          execSync(`git add ${file}`, { cwd: repo, stdio: 'ignore' });
+          execSync(`git commit -m "${message}"`, {
+            cwd: repo,
+            stdio: 'ignore',
+            env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+          });
+        };
+
+        commitAt('in-window.ts', 'in-window commit under the agent identity', '2026-08-27T10:10:00Z');
+        commitAt('out-of-window.ts', 'out-of-window operator commit', '2026-08-27T14:00:00Z');
+
+        const summary = detectAllInterventions({
+          repoDir: repo,
+          branchName: 'task/gate-removal-demo',
+          baseBranch: 'main',
+          agentType: 'native-openrouter',
+        }, DEFAULT_PENALTIES);
+
+        const manualEdit = summary.interventions.find((event) => event.type === 'manual_edit');
+        assert.ok(manualEdit, 'manual_edit event should be present');
+        assert.equal(manualEdit!.count, 1, 'Only the out-of-window commit should be flagged');
+        assert.match(manualEdit!.details[0], /out-of-window operator commit/);
+        assert.match(manualEdit!.details[0], /outside all recorded agent activity windows/);
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
       }
     });
   });
