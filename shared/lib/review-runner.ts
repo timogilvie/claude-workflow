@@ -29,7 +29,9 @@ import { escapeShellArg, execShellCommand } from './shell-utils.ts';
 import {
   validateReviewScope,
   type ReviewScopeGuardFinding,
+  type ReviewScopeGuardToolError,
 } from './review-scope-guard.ts';
+import { REVIEW_SCOPE_UNVERIFIABLE_FAILURE_CATEGORY } from './stage-result.ts';
 
 // ────────────────────────────────────────────────────────────────
 // Types
@@ -136,11 +138,12 @@ export async function reviewChanges(
     sinceCommit: options.sinceCommit,
   });
 
-  const deterministicFindings = await collectDeterministicReviewFindings({
+  const deterministic = await collectDeterministicReviewFindings({
     repoDir,
     featureDir: options.featureDir,
     sinceCommit: options.sinceCommit,
   });
+  const deterministicFindings = deterministic.findings;
   const reviewContextWithDeterministicFindings = deterministicFindings.length > 0
     ? {
       ...context,
@@ -179,40 +182,87 @@ export async function reviewChanges(
     featureDir: options.featureDir,
   });
 
-  return mergeDeterministicFindings(result, deterministicFindings);
+  return mergeDeterministicFindings(result, deterministic);
+}
+
+interface DeterministicReviewFindings {
+  findings: ReviewFinding[];
+  /**
+   * True when the review scope guard could not evaluate scope at all
+   * (status 'error'). Surfaced on the ReviewResult as
+   * `failureCategory: 'review-scope-unverifiable'` so the orchestrator's
+   * infrastructure-retry path can act on it (HOK-2889). Never set for a
+   * guard that ran and found violations.
+   */
+  scopeUnverifiable: boolean;
 }
 
 async function collectDeterministicReviewFindings(input: {
   repoDir: string;
   featureDir?: string;
   sinceCommit?: string;
-}): Promise<ReviewFinding[]> {
-  const findings: ReviewFinding[] = [];
-  findings.push(...collectReviewScopeGuardFindings(input));
+}): Promise<DeterministicReviewFindings> {
+  const scopeGuard = collectReviewScopeGuardFindings(input);
+  const findings: ReviewFinding[] = [...scopeGuard.findings];
   findings.push(...await collectCrossPrRevertReviewFindings(input));
-  return deduplicateReviewFindings(findings);
+  return {
+    findings: deduplicateReviewFindings(findings),
+    scopeUnverifiable: scopeGuard.scopeUnverifiable,
+  };
 }
 
 function collectReviewScopeGuardFindings(input: {
   repoDir: string;
   featureDir?: string;
   sinceCommit?: string;
-}): ReviewFinding[] {
+}): DeterministicReviewFindings {
   // The guard always evaluates: without sinceCommit/featureDir it derives
   // scope from git (merge base against the integration branch), so there is
   // no "cannot evaluate" skip path any more (HOK-2887). Verified on this
   // branch: validateReviewScope with neither input returns ok with
   // baselineSource "git merge-base auto/integration".
-  const result = reviewRunnerDeps.validateReviewScope({
-    repoDir: input.repoDir,
-    featureDir: input.featureDir,
-    sinceCommit: input.sinceCommit,
-    headRef: 'HEAD',
-    includeWorkingTree: false,
-    writeBaseline: true,
-  });
+  let result;
+  try {
+    result = reviewRunnerDeps.validateReviewScope({
+      repoDir: input.repoDir,
+      featureDir: input.featureDir,
+      sinceCommit: input.sinceCommit,
+      headRef: 'HEAD',
+      includeWorkingTree: false,
+      writeBaseline: true,
+    });
+  } catch (error) {
+    // validateReviewScope's contract is to return status 'error' rather than
+    // throw, but a crash here must degrade to "unverifiable", not take down
+    // the whole review.
+    return {
+      findings: [buildScopeUnverifiableFinding({
+        commandClass: 'review-scope-guard',
+        command: 'validateReviewScope',
+        stderr: error instanceof Error ? error.message : String(error),
+      })],
+      scopeUnverifiable: true,
+    };
+  }
 
-  return result.findings.map(buildReviewScopeFinding);
+  if (result.status === 'error') {
+    // The guard could not verify scope (tool/git failure). "Cannot evaluate"
+    // is not evidence of a violation, so this is a warning, never a blocker:
+    // a blocker here poisons the verdict and permanently blocks the ready
+    // gate with no retry (HOK-2889).
+    return {
+      findings: [
+        ...result.findings.map(buildReviewScopeFinding),
+        buildScopeUnverifiableFinding(result.toolError),
+      ],
+      scopeUnverifiable: true,
+    };
+  }
+
+  return {
+    findings: result.findings.map(buildReviewScopeFinding),
+    scopeUnverifiable: false,
+  };
 }
 
 async function collectCrossPrRevertReviewFindings(input: {
@@ -393,6 +443,21 @@ function buildReviewScopeFinding(finding: ReviewScopeGuardFinding): ReviewFindin
   };
 }
 
+function buildScopeUnverifiableFinding(toolError?: ReviewScopeGuardToolError): ReviewFinding {
+  const detail = toolError
+    ? ` (${toolError.commandClass}: ${toolError.stderr || `exit ${toolError.exitCode ?? 'unknown'}`})`
+    : '';
+  return {
+    severity: 'warning',
+    location: 'review-scope',
+    category: 'review-scope',
+    description:
+      `Review scope could not be verified${detail}. ` +
+      'This is a review-infrastructure condition, not a code defect: nothing was found wrong with the change. ' +
+      `It is surfaced as failureCategory "${REVIEW_SCOPE_UNVERIFIABLE_FAILURE_CATEGORY}" so the orchestrator can retry the review.`,
+  };
+}
+
 function prependCrossPrRevertContext(diff: string, findings: ReviewFinding[]): string {
   const advisory = [
     'Cross-PR revert detector findings:',
@@ -402,19 +467,29 @@ function prependCrossPrRevertContext(diff: string, findings: ReviewFinding[]): s
   return `${advisory}${diff}`;
 }
 
-function mergeDeterministicFindings(result: ReviewResult, findings: ReviewFinding[]): ReviewResult {
+function mergeDeterministicFindings(
+  result: ReviewResult,
+  deterministic: DeterministicReviewFindings,
+): ReviewResult {
+  const { findings, scopeUnverifiable } = deterministic;
+  // An existing category (e.g. native-runtime-unavailable) describes the
+  // bigger failure and must win; only fill in the scope classification when
+  // nothing else claimed the failure.
+  const merged: ReviewResult = scopeUnverifiable
+    ? { ...result, failureCategory: result.failureCategory ?? REVIEW_SCOPE_UNVERIFIABLE_FAILURE_CATEGORY }
+    : result;
   if (findings.length === 0) {
-    return result;
+    return merged;
   }
 
   const codeReviewFindings = deduplicateReviewFindings([
     ...findings,
-    ...result.codeReviewFindings,
+    ...merged.codeReviewFindings,
   ]);
 
   return {
-    ...result,
-    verdict: codeReviewFindings.some((finding) => finding.severity === 'blocker') ? 'not_ready' : result.verdict,
+    ...merged,
+    verdict: codeReviewFindings.some((finding) => finding.severity === 'blocker') ? 'not_ready' : merged.verdict,
     codeReviewFindings,
   };
 }

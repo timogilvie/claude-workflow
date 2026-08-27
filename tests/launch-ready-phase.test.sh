@@ -165,6 +165,16 @@ EOF
 {"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":1,"blockerCount":0,"warningCount":0,"reviewToolError":"spawnSync /bin/bash ETIMEDOUT"}}
 EOF
         ;;
+      infra_retry_scope_unverifiable)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":1,"failureCategory":"review-scope-unverifiable","terminalReason":"review_complete"}}
+EOF
+        ;;
+      review_not_ready_no_category)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"terminalReason":"review_complete"}}
+EOF
+        ;;
     esac
 
     WRITE_STAGE_CALLS=""
@@ -830,6 +840,21 @@ check_contains "infra retry capped writes manual attention" "$output" "manual re
 output="$(run_launch_case infra_retry_error_tool)"
 check_contains "infra retry tool timeout retries review" "$output" "rc=6"
 check_contains "infra retry tool timeout launches review" "$output" "review_launch_calls=1"
+
+# HOK-2889: a not_ready verdict whose failure is classified as
+# review-scope-unverifiable is retryable infrastructure, not a permanent refusal.
+output="$(run_launch_case infra_retry_scope_unverifiable)"
+check_contains "scope unverifiable retries review" "$output" "rc=6"
+check_contains "scope unverifiable launches review" "$output" "review_launch_calls=1"
+check_contains "scope unverifiable increments infra retry" "$output" "infra_retry_count=1"
+
+# HOK-2889 (other direction): a plain not_ready with no failure category is a
+# genuine review failure and must refuse without any infra retry.
+output="$(run_launch_case review_not_ready_no_category)"
+check_contains "plain not_ready refuses ready" "$output" "rc=1"
+check_contains "plain not_ready does not launch review" "$output" "review_launch_calls=0"
+check_not_contains "plain not_ready does not increment infra retry" "$output" "infra_retry_count=1"
+check_contains "plain not_ready writes readiness attention" "$output" "Review verdict does not pass readiness gate"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"
