@@ -2056,7 +2056,6 @@ function toBlockedCandidate(pr: GhPrListEntry, reason: string): BlockedCandidate
   };
 }
 
-function resolveOwnerRepoFromRemote(repoDir: string): string | null;
 async function resolveOwnerRepoFromRemote(repoDir: string, shellRunner?: MergeExecutionDeps['shellRunner']): Promise<[string, string] | null>;
 async function resolveOwnerRepoFromRemote(
   repoDir: string,
