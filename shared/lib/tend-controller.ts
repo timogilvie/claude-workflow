@@ -120,7 +120,7 @@ export type CrossPrGuardChecker = (input: {
   repoDir: string;
 }) => Promise<CrossPrGuardCheckResult>;
 
-export type BlockedLabelClearer = (prNumber: number, repoDir: string) => void;
+export type BlockedLabelClearer = (prNumber: number, repoDir: string) => Promise<void>;
 
 interface EligibleWorkItem {
   pr: GhPrListEntry;
@@ -1527,10 +1527,10 @@ async function defaultCrossPrGuardChecker(input: {
   };
 }
 
-function defaultBlockedLabelClearer(prNumber: number, repoDir: string): void {
+async function defaultBlockedLabelClearer(prNumber: number, repoDir: string): Promise<void> {
   let repo: string | undefined;
   try {
-    const ownerRepo = resolveOwnerRepoFromRemote(repoDir);
+    const ownerRepo = await resolveOwnerRepoFromRemote(repoDir);
     if (ownerRepo) {
       const [owner, r] = ownerRepo;
       repo = `${owner}/${r}`;
@@ -1731,7 +1731,7 @@ async function resolveBlockedLabelReason(
   const currentHeadSha = pr.headRefOid ?? '';
 
   if (metadata && currentHeadSha && labels.has(WM_LABELS.ready) && readyResultIsCurrentPass(readyResult, currentHeadSha)) {
-    return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+    return await clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
   }
 
   const evidence = extractCrossPrGuardEvidence(readyResult);
@@ -1770,17 +1770,17 @@ async function resolveBlockedLabelReason(
     return 'blocked-label:cross-pr-guard-tool-error';
   }
 
-  return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+  return await clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
 }
 
-function clearGuardBlockedLabel(
+async function clearGuardBlockedLabel(
   pr: GhPrListEntry,
   blockedLabelClearer: BlockedLabelClearer,
   repoDir: string,
   failureReason: string,
-): string | null {
+): Promise<string | null> {
   try {
-    blockedLabelClearer(pr.number, repoDir);
+    await blockedLabelClearer(pr.number, repoDir);
     return null;
   } catch (error) {
     return `${failureReason}:${truncateReason(errorMessage(error))}`;
