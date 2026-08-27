@@ -58,6 +58,7 @@ export interface MergeExecutionResult {
   phase?: string;
   failureExcerpt?: string;
   haltLoop: boolean;
+  laneHolders?: number[];
 }
 
 export interface MergeExecutionDeps {
@@ -221,7 +222,11 @@ export async function defaultHealthChecker(integrationBranch: string, repoDir: s
     validateIntegrationBranch(integrationBranch);
 
     const resolution = resolveIntegrationBranchSha(integrationBranch, repoDir);
-    const repo = resolveOwnerRepoFromRemote(repoDir);
+    const ownerRepo = await resolveOwnerRepoFromRemote(repoDir);
+  if (!ownerRepo) {
+    throw new Error('tend: unable to resolve owner/repo');
+  }
+  const [owner, repo] = ownerRepo;
 
     if (!repo) {
       return { state: 'unhealthy', reason: 'health-check-error: unable to resolve origin repo' };
@@ -460,8 +465,114 @@ export async function executeMerge(
       haltLoop: false,
     };
   }
+  
   if (activeMerges.length > 0) {
-    return { status: 'skipped', prNumber: candidate.number, haltLoop: false };
+    // Check for stale locks and attempt to reclaim them
+    const timeoutMinutes = integrationConfig.mergeLockTimeoutMinutes ?? 45;
+    const thresholdMs = timeoutMinutes * 60 * 1000;
+    const nowMs = deps.currentTimeMs();
+    const staleHolders: number[] = [];
+    const liveHolders: number[] = [];
+    
+    for (const holder of activeMerges) {
+      const appliedAtMs = await mergingLabelAppliedAtMs(holder, options.repoDir, deps);
+      if (appliedAtMs === null) {
+        // Failed to determine age; treat as live to fail closed
+        liveHolders.push(holder);
+        continue;
+      }
+      
+      const ageMs = nowMs - appliedAtMs;
+      const ageMinutes = ageMs / (60 * 1000);
+      
+      if (ageMs > thresholdMs) {
+        staleHolders.push(holder);
+      } else {
+        liveHolders.push(holder);
+      }
+    }
+    
+    // Attempt to reclaim stale holders
+    if (staleHolders.length > 0) {
+      console.log(
+        `tend: Checking ${staleHolders.length} stale merge lock(s) from PR(s) #${staleHolders.join(', #')}` +
+        ` (threshold: ${timeoutMinutes}m)`,
+      );
+      
+      let allReclaimed = true;
+      for (const holder of staleHolders) {
+        const holderAppliedAtMs = await mergingLabelAppliedAtMs(holder, options.repoDir, deps);
+        if (holderAppliedAtMs === null) {
+          console.warn(`tend: Cannot determine age for PR #${holder}; treating as live`);
+          allReclaimed = false;
+          continue;
+        }
+        
+        try {
+          console.log(
+            `tend: Reclaiming stale merge lock from PR #${holder}` +
+            ` (held ${Math.round((nowMs - holderAppliedAtMs) / (60 * 1000))}m, threshold ${timeoutMinutes}m)`,
+          );
+          await deps.restoreReady(holder);
+        } catch (error) {
+          console.warn(`tend: Failed to reclaim stale lock from PR #${holder}: ${errorMessage(error)}`);
+          allReclaimed = false;
+        }
+      }
+      
+      // After reclaiming, check if lane is now free
+      if (allReclaimed) {
+        // Re-check active merges after reclaiming
+        try {
+          const activeAfterReclaim = await listMergingPrs(options.repoDir, deps);
+          if (activeAfterReclaim.length === 0) {
+            // Successfully reclaimed all stale locks; proceed with merge
+            console.log(`tend: Successfully reclaimed all stale merge locks; proceeding with merge`);
+          } else {
+            // Some new holder appeared during reclaim
+            return {
+              status: 'skipped',
+              prNumber: candidate.number,
+              phase: 'merge-lane-held',
+              failureExcerpt: `merge lane held by PR #${activeAfterReclaim.join(', #')}`,
+              haltLoop: false,
+              laneHolders: activeAfterReclaim,
+            };
+          }
+        } catch (error) {
+          console.warn(`tend: Failed to verify merge lane after reclaim: ${errorMessage(error)}`);
+          return {
+            status: 'skipped',
+            prNumber: candidate.number,
+            phase: 'merge-lane-probe',
+            failureExcerpt: truncateOutput(outputFromError(error)),
+            haltLoop: false,
+          };
+        }
+      } else {
+        // Failed to reclaim all; lane still held
+        return {
+          status: 'skipped',
+          prNumber: candidate.number,
+          phase: 'merge-lane-held',
+          failureExcerpt: `merge lane held by PR #${liveHolders.join(', #')}`,
+          haltLoop: false,
+          laneHolders: liveHolders,
+        };
+      }
+    }
+    
+    // If we have live holders that aren't stale, skip
+    if (liveHolders.length > 0) {
+      return {
+        status: 'skipped',
+        prNumber: candidate.number,
+        phase: 'merge-lane-held',
+        failureExcerpt: `merge lane held by PR #${liveHolders.join(', #')}`,
+        haltLoop: false,
+        laneHolders: liveHolders,
+      };
+    }
   }
 
   try {
@@ -492,9 +603,12 @@ export async function executeMerge(
       // Comment posting failure is non-fatal; always release the PR from merging state.
     }
     try {
-      deps.releaseToBlocked(candidate.number);
-    } catch {
-      // Label update failure is non-fatal; PR will be manually reviewed or auto-retried on next cycle.
+      await retryTransient(
+        () => deps.releaseToBlocked(candidate.number),
+        { label: 'release merging label', sleep: deps.retrySleep },
+      );
+    } catch (error) {
+      console.warn(`tend: Failed to release merging label after failure: ${errorMessage(error)}`);
     }
     return { status: 'blocked', prNumber: candidate.number, phase, failureExcerpt, haltLoop: false };
   };
@@ -644,6 +758,30 @@ async function withScratchWorktree<T>(
   })).trim();
   const worktreePath = join(commonGitDir, 'wavemill-tend', String(prNumber));
 
+  // Idempotent worktree creation: clean up any stale worktree left over from a
+  // previous crashed run before attempting to create a new one.
+  if (existsSync(worktreePath)) {
+    console.warn(`tend: cleaning up stale worktree for PR #${prNumber} at ${worktreePath}`);
+    try {
+      shellRunner(
+        `git worktree remove --force ${escapeShellArg(worktreePath)}`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
+      );
+    } catch {
+      // Best-effort; worktree may not exist or may be corrupted
+    }
+    try {
+      shellRunner(`git worktree prune`, { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS });
+    } catch {
+      // Ignore prune failures
+    }
+    try {
+      rmSync(worktreePath, { recursive: true, force: true });
+    } catch {
+      // Ignore removal failures; git worktree remove should have handled it
+    }
+  }
+
   // Fetch the latest remote tip for the PR branch so the detached worktree
   // operates on what GitHub considers the branch's current state, not a
   // possibly-stale local ref.
@@ -674,6 +812,79 @@ async function withScratchWorktree<T>(
     } catch {
       // A cleanup failure should not change the PR's merge outcome.
     }
+  }
+}
+
+/**
+ * Reap stale tend worktrees left over from crashed or interrupted runs.
+ * Called at tend loop startup to clean up orphaned worktrees in .git/wavemill-tend/.
+ * Skips any worktree whose PR currently holds the wm:merging label (authoritative
+ * "in active use" signal).
+ */
+export async function reapStaleTendWorktrees(repoDir: string, deps: MergeExecutionDeps): Promise<void> {
+  try {
+    const commonGitDir = String(deps.shellRunner('git rev-parse --git-common-dir', {
+      encoding: 'utf-8',
+      cwd: repoDir,
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+    })).trim();
+    const tendDir = join(commonGitDir, 'wavemill-tend');
+    
+    if (!existsSync(tendDir)) {
+      return;
+    }
+    
+    // List all PR-numbered subdirectories
+    const entries = await deps.shellRunner(
+      `ls -1 ${escapeShellArg(tendDir)}`,
+      { encoding: 'utf-8', cwd: repoDir, timeout: GIT_COMMAND_TIMEOUT_MS },
+    );
+    const prDirs = entries
+      .split('\n')
+      .map((e) => e.trim())
+      .filter((e) => /^\d+$/.test(e));
+    
+    if (prDirs.length === 0) {
+      return;
+    }
+    
+    // Check which PRs currently hold the merging label
+    const activeMerges = await listMergingPrs(repoDir, deps);
+    const activeSet = new Set(activeMerges);
+    
+    // Reap all non-active worktrees
+    for (const prDir of prDirs) {
+      const prNumber = parseInt(prDir, 10);
+      if (activeSet.has(prNumber)) {
+        // Skip live holders
+        continue;
+      }
+      
+      const worktreePath = join(tendDir, prDir);
+      console.log(`tend: reaping stale worktree for PR #${prNumber} at ${worktreePath}`);
+      
+      try {
+        deps.shellRunner(
+          `git worktree remove --force ${escapeShellArg(worktreePath)}`,
+          { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
+        );
+      } catch {
+        // Best-effort; worktree may not exist or may be corrupted
+      }
+      try {
+        deps.shellRunner(`git worktree prune`, { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS });
+      } catch {
+        // Ignore prune failures
+      }
+      try {
+        rmSync(worktreePath, { recursive: true, force: true });
+      } catch (error) {
+        console.warn(`tend: failed to remove stale worktree for PR #${prNumber}: ${errorMessage(error)}`);
+      }
+    }
+  } catch (error) {
+    console.warn(`tend: failed to reap stale tend worktrees: ${errorMessage(error)}`);
+    // Best-effort cleanup; never block loop startup
   }
 }
 
@@ -1118,6 +1329,51 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
 }
 
 /**
+ * Fetch the timestamp when the wm:merging label was applied to a PR via GitHub's timeline API.
+ * Returns null if the label was never applied, the event cannot be found, or the API call fails.
+ */
+async function mergingLabelAppliedAtMs(
+  prNumber: number,
+  repoDir: string,
+  deps: MergeExecutionDeps,
+): Promise<number | null> {
+  try {
+    const ownerRepo = await resolveOwnerRepoFromRemote(repoDir, deps.shellRunner);
+    if (!ownerRepo) {
+      console.warn(`tend: unable to resolve owner/repo for PR #${prNumber} during staleness check`);
+      return null;
+    }
+    const [owner, repo] = ownerRepo;
+
+    const timelineOutput = await retryTransient(
+      () => deps.shellRunner(
+        `gh api repos/${owner}/${repo}/issues/${prNumber}/timeline --paginate` +
+        ` --jq '[.[] | select(.event=="labeled" and .label.name=="wm:merging") | .created_at] | last'`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+      ),
+      { label: `fetch wm:merging timestamp for PR #${prNumber}`, sleep: deps.retrySleep },
+    );
+
+    const lastLabeled = timelineOutput.trim();
+    if (!lastLabeled) {
+      console.warn(`tend: no wm:merging label event found for PR #${prNumber}`);
+      return null;
+    }
+
+    const createdAtMs = Date.parse(lastLabeled);
+    if (Number.isNaN(createdAtMs)) {
+      console.warn(`tend: unable to parse wm:merging timestamp for PR #${prNumber}: ${lastLabeled}`);
+      return null;
+    }
+
+    return createdAtMs;
+  } catch (error) {
+    console.warn(`tend: failed to fetch wm:merging timestamp for PR #${prNumber}: ${errorMessage(error)}`);
+    return null;
+  }
+}
+
+/**
  * Absolute path to the cross-process marker that records an active transient
  * merge-retry window for a PR. Written by the tend process (which knows the PR
  * number and repo dir) and read by the shell mill loop's merge-queue tick, which
@@ -1274,7 +1530,11 @@ async function defaultCrossPrGuardChecker(input: {
 function defaultBlockedLabelClearer(prNumber: number, repoDir: string): void {
   let repo: string | undefined;
   try {
-    repo = resolveOwnerRepoFromRemote(repoDir) ?? undefined;
+    const ownerRepo = resolveOwnerRepoFromRemote(repoDir);
+    if (ownerRepo) {
+      const [owner, r] = ownerRepo;
+      repo = `${owner}/${r}`;
+    }
   } catch {
     repo = undefined;
   }
@@ -1796,15 +2056,21 @@ function toBlockedCandidate(pr: GhPrListEntry, reason: string): BlockedCandidate
   };
 }
 
-function resolveOwnerRepoFromRemote(repoDir: string): string | null {
-  const remoteUrl = String(execShellCommand('git remote get-url origin', {
+function resolveOwnerRepoFromRemote(repoDir: string): string | null;
+async function resolveOwnerRepoFromRemote(repoDir: string, shellRunner?: MergeExecutionDeps['shellRunner']): Promise<[string, string] | null>;
+async function resolveOwnerRepoFromRemote(
+  repoDir: string,
+  shellRunner?: MergeExecutionDeps['shellRunner'],
+): Promise<[string, string] | null> {
+  const runner = shellRunner ?? ((cmd, opts) => String(execShellCommand(cmd, opts)));
+  const remoteUrl = String(runner('git remote get-url origin', {
     encoding: 'utf-8',
     cwd: repoDir,
     timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
   const match = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
 
-  return match?.[1] ?? null;
+  return match?.[1] ? [match[1].split('/')[0], match[1].split('/')[1]] : null;
 }
 
 function errorMessage(error: unknown): string {

@@ -2456,6 +2456,12 @@
             "type": "object",
             "description": "Settings for autonomous integration mode (opt-in). Task branches are promoted to an integration branch before merging to main.",
             "properties": {
+                "mergeLockTimeoutMinutes": {
+                    "type": "integer",
+                    "default": 45,
+                    "minimum": 1,
+                    "description": "Minutes after which a stale wm:merging label is reclaimed to unblock the merge lane. Default: 45 minutes."
+                },
                 "enabled": {
                     "type": "boolean",
                     "default": false,

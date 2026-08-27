@@ -277,10 +277,74 @@ export function detectIncidentsForTask(taskPath: string, taskId: string, context
   ];
 }
 
+/**
+ * Detector for merge lane deadlocks caused by stale wm:merging labels.
+ * Emits an incident when the same PR(s) hold the merge lane for multiple consecutive polls.
+ */
+export class MergeLaneStallDetector {
+  detectRepo(repoDir: string, context: DetectorContext): IncidentRecord[] {
+    try {
+      const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
+      if (!existsSync(healthPath)) {
+        return [];
+      }
+      
+      const content = readFileSync(healthPath, 'utf-8');
+      const health = JSON.parse(content) as { services?: { tend?: Record<string, unknown> } };
+      const tend = health.services?.tend as Record<string, unknown>;
+      
+      if (!tend || typeof tend !== 'object') {
+        return [];
+      }
+      
+      const consecutivePolls = Number(tend.laneHeldConsecutivePolls);
+      const holders = Array.isArray(tend.laneHolders) ? tend.laneHolders.filter((n): n is number => typeof n === 'number') : [];
+      const heldSince = typeof tend.laneHeldSince === 'string' ? tend.laneHeldSince : null;
+      
+      // Only trigger at the configured threshold
+      const threshold = 3;
+      if (consecutivePolls < threshold || holders.length === 0) {
+        return [];
+      }
+      
+      const holderNumbers = holders.join(', #');
+      const timestamp = context.now?.toISOString() ?? new Date().toISOString();
+      
+      return [createIncidentDraft({
+        taskId: 'tend-loop',
+        session: context.session ?? null,
+        category: 'stale_orphaned_state',
+        severity: 'high',
+        confidence: 'high',
+        lifecycle: 'observed',
+        rootCauseClass: 'merge_lane_stalled_lock',
+        summary: `Potential merge lane deadlock detected for PR #${holderNumbers}`,
+        operatorAction: 'Investigate why PR #${holderNumbers} is stuck with wm:merging label. Check for merge conflicts, CI failures, or process crashes. Manually clear the wm:merging label if necessary.',
+        evidence: [{
+          type: 'health_file',
+          source: healthPath,
+          timestamp,
+          redactedData: redactIncidentData(`consecutive_polls=${consecutivePolls} holders=${holderNumbers} held_since=${heldSince ?? 'unknown'}`),
+          key: 'merge_lane_stall',
+        }],
+        metadata: {
+          consecutivePolls,
+          holders,
+          heldSince,
+        },
+      })];
+    } catch (error) {
+      console.warn(`incident-detector: failed to read backstage-health.json for merge lane stall detection: ${error}`);
+      return [];
+    }
+  }
+}
+
 export function detectIncidentsForRepo(repoDir: string, context: DetectorContext, dependencyThreshold = 3): IncidentRecord[] {
   return [
     ...new JobFailureDetector().detect(repoDir, null, context),
     ...new DependencyHealthDetector({ thresholdConsecutiveFailures: dependencyThreshold }).detectRepo(repoDir, context),
+    ...new MergeLaneStallDetector().detectRepo(repoDir, context),
   ];
 }
 

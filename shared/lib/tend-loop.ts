@@ -1,14 +1,21 @@
 import { join } from 'node:path';
 import { mutateJsonState } from './state-mutex.ts';
-import { executeMerge, formatStatusLine, selectNextCandidate, type MergeExecutionResult } from './tend-controller.ts';
+import { 
+  executeMerge, 
+  formatStatusLine, 
+  selectNextCandidate, 
+  type MergeExecutionResult,
+  reapStaleTendWorktrees,
+} from './tend-controller.ts';
 import type { StatusRenderer } from './tend-status-renderer.ts';
-import { computeBackoffDelayMs, isTransientError } from './transient-retry.ts';
+import { computeBackoffDelayMs, isTransientError, execShellCommand } from './transient-retry.ts';
 
 export const TEND_LOOP_INTERVAL_MS = 60_000;
 export const TEND_LOOP_ERROR_BACKOFF_BASE_MS = 30_000;
 // Keep this below BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS in wavemill-mill.sh.
 export const TEND_LOOP_ERROR_BACKOFF_MAX_MS = 120_000;
 export const TEND_MAX_CONSECUTIVE_UNKNOWN_FAILURES = 3;
+export const TEND_MERGE_LANE_WARN_POLLS = 3;
 
 export type TendLoopErrorClass = 'transient' | 'terminal' | 'unknown';
 
@@ -78,10 +85,21 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   let lastErrorAt: string | null = null;
   let iteration = 0;
 
+  // Call startup sweep to clean up stale worktrees
+  await reapStaleTendWorktrees(options.repoDir, {
+    ...deps,
+    shellRunner: (cmd, opts) => String(execShellCommand(cmd, opts)),
+  });
+
   while (true) {
     iteration += 1;
     const pollStartedAt = deps.now().toISOString();
     let pollCompletedAt: string | null = null;
+    
+    // Track consecutive lane-held skips for deadlock detection
+    let laneHeldConsecutivePolls = 0;
+    let currentLaneHolders: number[] = [];
+    let laneHeldSince: string | null = null;
 
     try {
       const decision = await deps.selectNextCandidate({ repoDir: options.repoDir });
@@ -134,6 +152,10 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       const result = await deps.executeMerge(candidate, { repoDir: options.repoDir });
       if (result.status === 'merged') {
         lastMergedPR = result.prNumber;
+        // Reset lane stall tracking on successful merge
+        laneHeldConsecutivePolls = 0;
+        currentLaneHolders = [];
+        laneHeldSince = null;
       }
 
       options.renderer.write(formatStatusLine(decision, {
@@ -146,6 +168,52 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
         options.renderer.finalize();
         return { reason: 'halted', lastMergedPR };
       }
+
+      // Handle merge-lane-held skips for deadlock detection
+      if (result.status === 'skipped' && result.phase === 'merge-lane-held') {
+        const holders = result.laneHolders ?? [];
+        
+        // Check if holders changed or we have a new stall
+        const holdersChanged = JSON.stringify(holders.sort()) !== JSON.stringify(currentLaneHolders.sort());
+        
+        if (holdersChanged) {
+          // New set of holders; reset counter
+          laneHeldConsecutivePolls = 1;
+          currentLaneHolders = holders;
+          laneHeldSince = pollStartedAt;
+        } else if (holders.length > 0) {
+          // Same holders as before; increment counter
+          laneHeldConsecutivePolls += 1;
+        } else {
+          // No holders but still skipped for other reasons; reset
+          laneHeldConsecutivePolls = 0;
+          currentLaneHolders = [];
+          laneHeldSince = null;
+        }
+        
+        // Warn if lane has been held for multiple consecutive polls
+        if (laneHeldConsecutivePolls >= TEND_MERGE_LANE_WARN_POLLS) {
+          deps.log(
+            `tend: warning: merge lane held by PR #${holders.join(', #')} for ${laneHeldConsecutivePolls} consecutive polls; candidates skipped without progress`,
+          );
+        }
+      } else {
+        // Reset tracking for any other result
+        laneHeldConsecutivePolls = 0;
+        currentLaneHolders = [];
+        laneHeldSince = null;
+      }
+
+      await deps.writePollHeartbeat(options.repoDir, {
+        failureCount: consecutiveFailures,
+        lastError,
+        lastErrorAt,
+        timestamp: pollCompletedAt,
+        ...pollMetadata,
+        laneHeldConsecutivePolls: laneHeldConsecutivePolls > 0 ? laneHeldConsecutivePolls : undefined,
+        laneHolders: currentLaneHolders.length > 0 ? currentLaneHolders : undefined,
+        laneHeldSince,
+      });
 
       await deps.sleep(intervalMs);
     } catch (error) {
@@ -282,6 +350,9 @@ export async function writeTendHeartbeat(
     iteration?: number;
     pollStartedAt?: string;
     pollCompletedAt?: string | null;
+    laneHeldConsecutivePolls?: number;
+    laneHolders?: number[];
+    laneHeldSince?: string | null;
   },
 ): Promise<void> {
   const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
@@ -305,6 +376,9 @@ export async function writeTendHeartbeat(
         iteration: health.iteration,
         pollStartedAt: health.pollStartedAt,
         pollCompletedAt: health.pollCompletedAt ?? timestamp,
+        laneHeldConsecutivePolls: health.laneHeldConsecutivePolls,
+        laneHolders: health.laneHolders,
+        laneHeldSince: health.laneHeldSince,
       };
       next.updatedAt = timestamp;
       next.status = 'healthy';
@@ -370,6 +444,9 @@ export async function writeTendPollHeartbeatBestEffort(
     iteration?: number;
     pollStartedAt?: string;
     pollCompletedAt?: string | null;
+    laneHeldConsecutivePolls?: number;
+    laneHolders?: number[];
+    laneHeldSince?: string | null;
   } = {},
 ): Promise<void> {
   try {
@@ -383,6 +460,9 @@ export async function writeTendPollHeartbeatBestEffort(
         iteration: options.iteration,
         pollStartedAt: options.pollStartedAt,
         pollCompletedAt: options.pollCompletedAt,
+        laneHeldConsecutivePolls: options.laneHeldConsecutivePolls,
+        laneHolders: options.laneHolders,
+        laneHeldSince: options.laneHeldSince,
       },
     );
   } catch (error) {
