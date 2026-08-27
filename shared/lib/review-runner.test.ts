@@ -11,6 +11,7 @@ import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { reviewChanges, reviewRunnerDeps, type ReviewOptions } from './review-runner.ts';
+import type { ReviewScopeGuardResult } from './review-scope-guard.ts';
 
 // Test constants
 const TEST_DIR = join(tmpdir(), `review-runner-test-${Date.now()}`);
@@ -220,6 +221,154 @@ describe('review-runner', () => {
       const evidenceFindings = result.codeReviewFindings.filter((f) => f.category === 'cross-pr-revert');
       assert.equal(evidenceFindings.length, 1);
       assert.match(evidenceFindings[0].description, /Unable to prove/);
+    });
+  });
+
+  describe('Review Scope Guard Classification (HOK-2889)', () => {
+    function makeGuardResult(overrides: Partial<ReviewScopeGuardResult>): ReviewScopeGuardResult {
+      return {
+        ok: false,
+        status: 'error',
+        baselinePaths: [],
+        declaredScope: [],
+        baselineSource: 'unresolved',
+        baselineIsArtifact: false,
+        featureDir: null,
+        integrationRef: 'auto/integration',
+        mergeBase: null,
+        taskPaths: [],
+        stagedPaths: [],
+        allowedCompanionPaths: [],
+        outOfScopePaths: [],
+        findings: [],
+        crossPrReverts: [],
+        message: 'review scope guard result',
+        ...overrides,
+      };
+    }
+
+    function mockReviewPipeline(runReviewResult: Record<string, unknown>): void {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/scope-guard');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b/app.ts');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/app.ts b/app.ts',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/scope-guard',
+          files: ['app.ts'],
+          hasUiChanges: false,
+        },
+      }));
+      mock.method(reviewRunnerDeps, 'execShellCommand', (command: string) => {
+        if (command.includes('git merge-base')) {
+          return 'base-sha\n';
+        }
+        if (command.includes('gh pr view')) {
+          return '';
+        }
+        if (command.includes('git log --format=%B')) {
+          return '';
+        }
+        throw new Error(`unexpected command: ${command}`);
+      });
+      mock.method(reviewRunnerDeps, 'detectCrossPrReverts', () => []);
+      mock.method(reviewRunnerDeps, 'runReview', async () => ({
+        verdict: 'ready',
+        codeReviewFindings: [],
+        metadata: {
+          branch: 'task/scope-guard',
+          files: ['app.ts'],
+          hasUiChanges: false,
+          designContextAvailable: false,
+          uiVerificationRun: false,
+        },
+        ...runReviewResult,
+      }));
+    }
+
+    it('surfaces an unverifiable scope guard as a warning plus failureCategory, never a blocker', async () => {
+      mockReviewPipeline({});
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => makeGuardResult({
+        status: 'error',
+        toolError: {
+          commandClass: 'git-diff-baseline',
+          command: 'git diff --name-only',
+          exitCode: 128,
+          stderr: 'fatal: bad object',
+        },
+      }));
+
+      const result = await reviewChanges({ repoDir: TEST_DIR });
+
+      assert.equal(result.verdict, 'ready');
+      assert.equal(result.failureCategory, 'review-scope-unverifiable');
+      const scopeFindings = result.codeReviewFindings.filter((f) => f.category === 'review-scope');
+      assert.equal(scopeFindings.length, 1);
+      assert.equal(scopeFindings[0].severity, 'warning');
+      assert.match(scopeFindings[0].description, /could not be verified/);
+      assert.match(scopeFindings[0].description, /not a code defect/);
+      const blockers = result.codeReviewFindings.filter((f) => f.severity === 'blocker');
+      assert.equal(blockers.length, 0);
+    });
+
+    it('still blocks on a real scope violation without an infra failure category', async () => {
+      mockReviewPipeline({});
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => makeGuardResult({
+        ok: false,
+        status: 'fail',
+        outOfScopePaths: ['rogue.ts'],
+        findings: [{
+          severity: 'blocker',
+          kind: 'violation',
+          category: 'review-scope',
+          path: 'rogue.ts',
+          message: 'Unexpected review change outside task scope: rogue.ts (M).',
+        }],
+      }));
+
+      const result = await reviewChanges({ repoDir: TEST_DIR });
+
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.failureCategory, undefined);
+      const scopeFindings = result.codeReviewFindings.filter((f) => f.category === 'review-scope');
+      assert.equal(scopeFindings.length, 1);
+      assert.equal(scopeFindings[0].severity, 'blocker');
+    });
+
+    it('never clobbers an existing failure category from the review engine', async () => {
+      mockReviewPipeline({ failureCategory: 'native-runtime-unavailable' });
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => makeGuardResult({
+        status: 'error',
+        toolError: {
+          commandClass: 'git-diff-baseline',
+          command: 'git diff --name-only',
+          stderr: 'fatal: bad object',
+        },
+      }));
+
+      const result = await reviewChanges({ repoDir: TEST_DIR });
+
+      assert.equal(result.failureCategory, 'native-runtime-unavailable');
+    });
+
+    it('treats a thrown guard as unverifiable instead of failing the review', async () => {
+      mockReviewPipeline({});
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => {
+        throw new Error('unexpected guard crash');
+      });
+
+      const result = await reviewChanges({ repoDir: TEST_DIR });
+
+      assert.equal(result.verdict, 'ready');
+      assert.equal(result.failureCategory, 'review-scope-unverifiable');
+      const scopeFindings = result.codeReviewFindings.filter((f) => f.category === 'review-scope');
+      assert.equal(scopeFindings.length, 1);
+      assert.equal(scopeFindings[0].severity, 'warning');
+      assert.match(scopeFindings[0].description, /unexpected guard crash/);
     });
   });
 
