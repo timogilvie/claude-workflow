@@ -657,6 +657,56 @@ describe('review outcome helpers', () => {
       failureCategory: 'native-review-malformed-response',
     }), false);
   });
+
+  it('recognizes review-scope-unverifiable as an infrastructure failure', () => {
+    const flat = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 1,
+        blockerCount: 0,
+        failureCategory: 'review-scope-unverifiable',
+      },
+    });
+    assert.equal(extractReviewOutcome(flat)?.failureCategory, 'review-scope-unverifiable');
+    assert.equal(isInfrastructureReviewFailure(flat), true);
+
+    const nested = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        review: {
+          exitCode: 1,
+          verdict: 'not_ready',
+          iterations: 1,
+          blockerCount: 0,
+          failureCategory: 'review-scope-unverifiable',
+        },
+      } as StageResult['artifacts'],
+    });
+    assert.equal(extractReviewOutcome(nested)?.failureCategory, 'review-scope-unverifiable');
+    assert.equal(isInfrastructureReviewFailure(nested), true);
+  });
+
+  it('classifies ReviewOutcome with review-scope-unverifiable', () => {
+    assert.equal(isInfrastructureReviewFailure({
+      exitCode: 1,
+      verdict: 'not_ready',
+      iterations: 1,
+      blockerCount: 0,
+      failureCategory: 'review-scope-unverifiable',
+    }), true);
+    assert.equal(isInfrastructureReviewFailure({
+      exitCode: 1,
+      verdict: 'not_ready',
+      iterations: 1,
+      blockerCount: 1,
+      failureCategory: 'review-scope-unverifiable',
+    }), true);
+  });
 });
 
 // ────────────────────────────────────────────────────────────────

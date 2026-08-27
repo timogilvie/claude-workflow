@@ -9628,6 +9628,7 @@ review_result_infra_failure() {
     | (
       (($review.failureCategory // "") == "native-runtime-unavailable") or
       (($review.failureCategory // "") == "native-review-prompt-missing") or
+      (($review.failureCategory // "") == "review-scope-unverifiable") or
       ((($review.verdict // "") == "error") and ((($review.reviewToolError // "") | tostring | length) > 0))
     )
   ' "$review_file" >/dev/null 2>&1
@@ -9729,7 +9730,8 @@ review_result_summary() {
         "verdict=" + (($review.verdict // "missing") | tostring),
         "iterations=" + (($review.iterations // "missing") | tostring),
         "blockers=" + ((($review.blockerCount // $review.blockingIssues // $review.blockingCount // "missing")) | tostring),
-        (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end)
+        (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end),
+        (if ($review.failureCategory // "") != "" then "failureCategory=" + ($review.failureCategory | tostring) else empty end)
       ]
       | join(", ")
   ' "$review_file" 2>/dev/null || printf '%s\n' "review result unreadable"

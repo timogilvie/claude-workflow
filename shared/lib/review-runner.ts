@@ -136,7 +136,7 @@ export async function reviewChanges(
     sinceCommit: options.sinceCommit,
   });
 
-  const deterministicFindings = await collectDeterministicReviewFindings({
+  const { deterministicFindings, scopeUnverifiable } = await collectDeterministicReviewFindings({
     repoDir,
     featureDir: options.featureDir,
     sinceCommit: options.sinceCommit,
@@ -179,25 +179,29 @@ export async function reviewChanges(
     featureDir: options.featureDir,
   });
 
-  return mergeDeterministicFindings(result, deterministicFindings);
+  return mergeDeterministicFindings(result, deterministicFindings, scopeUnverifiable);
 }
 
 async function collectDeterministicReviewFindings(input: {
   repoDir: string;
   featureDir?: string;
   sinceCommit?: string;
-}): Promise<ReviewFinding[]> {
+}): Promise<{ findings: ReviewFinding[]; scopeUnverifiable: boolean }> {
   const findings: ReviewFinding[] = [];
-  findings.push(...collectReviewScopeGuardFindings(input));
+  const scopeGuard = await collectReviewScopeGuardFindings(input);
+  findings.push(...scopeGuard.findings);
   findings.push(...await collectCrossPrRevertReviewFindings(input));
-  return deduplicateReviewFindings(findings);
+  return {
+    findings: deduplicateReviewFindings(findings),
+    scopeUnverifiable: scopeGuard.scopeUnverifiable,
+  };
 }
 
 function collectReviewScopeGuardFindings(input: {
   repoDir: string;
   featureDir?: string;
   sinceCommit?: string;
-}): ReviewFinding[] {
+}): { findings: ReviewFinding[]; scopeUnverifiable: boolean } {
   // The guard always evaluates: without sinceCommit/featureDir it derives
   // scope from git (merge base against the integration branch), so there is
   // no "cannot evaluate" skip path any more (HOK-2887). Verified on this
@@ -212,7 +216,25 @@ function collectReviewScopeGuardFindings(input: {
     writeBaseline: true,
   });
 
-  return result.findings.map(buildReviewScopeFinding);
+  const findings = result.findings.map(buildReviewScopeFinding);
+  
+  // When the guard returns status: 'error', we need to surface this as a
+  // warning finding and signal that scope is unverifiable
+  if (result.status === 'error') {
+    const toolError = result.toolError;
+    findings.push({
+      severity: 'warning',
+      location: 'review-scope',
+      category: 'review-scope',
+      description:
+        'Review scope could not be verified due to infrastructure failure. ' +
+        'This is not a code defect; the review may proceed but scope verification was unavailable. ' +
+        (toolError ? `Tool error: ${toolError.commandClass} - ${toolError.stderr}` : 'Unknown error'),
+    });
+    return { findings, scopeUnverifiable: true };
+  }
+
+  return { findings, scopeUnverifiable: false };
 }
 
 async function collectCrossPrRevertReviewFindings(input: {
@@ -402,7 +424,7 @@ function prependCrossPrRevertContext(diff: string, findings: ReviewFinding[]): s
   return `${advisory}${diff}`;
 }
 
-function mergeDeterministicFindings(result: ReviewResult, findings: ReviewFinding[]): ReviewResult {
+function mergeDeterministicFindings(result: ReviewResult, findings: ReviewFinding[], scopeUnverifiable: boolean): ReviewResult {
   if (findings.length === 0) {
     return result;
   }
@@ -412,11 +434,22 @@ function mergeDeterministicFindings(result: ReviewResult, findings: ReviewFindin
     ...result.codeReviewFindings,
   ]);
 
-  return {
+  const resultWithFindings = {
     ...result,
     verdict: codeReviewFindings.some((finding) => finding.severity === 'blocker') ? 'not_ready' : result.verdict,
     codeReviewFindings,
   };
+
+  // When scope is unverifiable due to guard infrastructure failure, set the
+  // retryable failure category so the infra-retry path can be triggered
+  if (scopeUnverifiable) {
+    return {
+      ...resultWithFindings,
+      failureCategory: 'review-scope-unverifiable',
+    };
+  }
+
+  return resultWithFindings;
 }
 
 function deduplicateReviewFindings(findings: ReviewFinding[]): ReviewFinding[] {

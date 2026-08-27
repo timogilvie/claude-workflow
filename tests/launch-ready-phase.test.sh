@@ -165,6 +165,21 @@ EOF
 {"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":2,"verdict":"error","iterations":1,"blockerCount":0,"warningCount":0,"reviewToolError":"spawnSync /bin/bash ETIMEDOUT"}}
 EOF
         ;;
+      infra_retry_review_scope_unverifiable)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":1,"failureCategory":"review-scope-unverifiable"}}
+EOF
+        ;;
+      infra_retry_review_scope_unverifiable_no_blockers)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0,"warningCount":1,"failureCategory":"review-scope-unverifiable"}}
+EOF
+        ;;
+      infra_retry_not_unverifiable)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0}}
+EOF
+        ;;
     esac
 
     WRITE_STAGE_CALLS=""
@@ -830,6 +845,22 @@ check_contains "infra retry capped writes manual attention" "$output" "manual re
 output="$(run_launch_case infra_retry_error_tool)"
 check_contains "infra retry tool timeout retries review" "$output" "rc=6"
 check_contains "infra retry tool timeout launches review" "$output" "review_launch_calls=1"
+
+output="$(run_launch_case infra_retry_review_scope_unverifiable)"
+check_contains "infra retry review-scope-unverifiable retries review" "$output" "rc=6"
+check_contains "infra retry review-scope-unverifiable probes runtime" "$output" "agent_validate_calls=1"
+check_contains "infra retry review-scope-unverifiable launches review" "$output" "review_launch_calls=1"
+check_contains "infra retry review-scope-unverifiable increments counter" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_review_scope_unverifiable_no_blockers)"
+check_contains "infra retry review-scope-unverifiable ready passes gate" "$output" "rc=0"
+check_contains "infra retry review-scope-unverifiable ready writes completed" "$output" "|ready|completed|"
+check_not_contains "infra retry review-scope-unverifiable ready does not retry" "$output" "rc=6"
+
+output="$(run_launch_case infra_retry_not_unverifiable)"
+check_contains "infra retry not-unverifiable does not trigger infra path" "$output" "rc=1"
+check_contains "infra retry not-unverifiable does not launch review" "$output" "review_launch_calls=0"
+check_contains "infra retry not-unverifiable writes waiting attention" "$output" "waiting for reviewer"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"

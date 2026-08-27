@@ -233,7 +233,9 @@ The review tool auto-detects `reviewBaseCommit` from `selected-task.json` (recor
 2. If the command times out (`124`), convert it to exit code `2`.
 3. If exit code is `0`, mark review passed and break.
 4. If exit code is `2`, log the required diagnostics from the canonical template, record the final verdict as `error`, treat PR/validation continuation as non-blocking, and do not certify readiness.
-5. If exit code is `1`, read the findings JSON, fix blocker findings and straightforward warnings, run `npx tsx tools/check-review-scope.ts --repo-dir .` immediately before committing, and commit the fixes only if the guard passes. If the guard exits non-zero, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+5. If exit code is `1`, read the findings JSON, fix blocker findings and straightforward warnings, run `npx tsx tools/check-review-scope.ts --repo-dir .` immediately before committing, and commit the fixes only if the guard passes. If the guard exits 1 (policy violation), preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+
+6. If exit code is `2` from the scope guard (scope unverified - infrastructure failure), do NOT commit review fixes. Note the guard tool error, proceed to PR creation without `wm:ready`, and record `failureCategory: "review-scope-unverifiable"` in the final review evidence using `stage-result-cli.ts`.
 
 #### 5. Check Iteration Limit
 ```bash

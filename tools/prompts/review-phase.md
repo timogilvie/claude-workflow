@@ -41,7 +41,8 @@ The implementation is complete. Your job is to review and create a PR.
    - Make targeted fixes only — do not refactor unrelated code
    - Run the review scope guard immediately before committing:
      `npx tsx {{TOOLS_DIR}}/check-review-scope.ts --repo-dir .`
-   - If the guard exits non-zero, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+   - If the guard exits 1 (policy violation), preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+   - If the guard exits 2 (scope unverified - infrastructure failure), do NOT commit review fixes. Note the guard tool error, proceed to PR creation without `wm:ready`, and record `failureCategory: "review-scope-unverifiable"` in the final review evidence.
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
    - Re-run the review tool (step 1)
 
@@ -88,7 +89,7 @@ The implementation is complete. Your job is to review and create a PR.
    - If the final run exited 0 with verdict `ready` and zero blockers, record `exitCode: 0`, `verdict: "ready"`, `iterations: <count>`, `blockerCount: 0`, and `warningCount`.
    - If the final run exited 1, record `exitCode: 1`, `verdict: "not_ready"`, `iterations`, `blockerCount`, and `warningCount`.
    - If the final run exited 2, record `exitCode: 2`, `verdict: "error"`, `iterations`, `blockerCount: 0`, `warningCount: 0`, `reviewToolError`, and `diagnostics`.
-   Example:
+   Example (exit code 0/1):
    ```bash
    REVIEW_ARTIFACTS=$(jq -cn \
      --argjson pr "$PR_NUMBER" \
@@ -101,6 +102,24 @@ The implementation is complete. Your job is to review and create a PR.
    npx tsx {{TOOLS_DIR}}/stage-result-cli.ts update "{{FEATURE_DIR}}" review \
      --status completed \
      --notes "PR #$PR_NUMBER created" \
+     --artifacts "$REVIEW_ARTIFACTS"
+   ```
+   
+   Example (exit code 2 with failureCategory):
+   ```bash
+   REVIEW_ARTIFACTS=$(jq -cn \
+     --argjson pr "$PR_NUMBER" \
+     --argjson exitCode "$FINAL_REVIEW_EXIT_CODE" \
+     --arg verdict "$FINAL_REVIEW_VERDICT" \
+     --argjson iterations "$REVIEW_ITERATIONS" \
+     --argjson blockers "$FINAL_BLOCKER_COUNT" \
+     --argjson warnings "$FINAL_WARNING_COUNT" \
+     --arg failureCategory "review-scope-unverifiable" \
+     --arg reviewToolError "$(echo "$REVIEW_TOOL_STDERR" | jq -Rs .)" \
+     '{type:"review",prNumber:$pr,exitCode:$exitCode,verdict:$verdict,iterations:$iterations,blockerCount:$blockers,warningCount:$warnings,failureCategory:$failureCategory,reviewToolError:$reviewToolError}')
+   npx tsx {{TOOLS_DIR}}/stage-result-cli.ts update "{{FEATURE_DIR}}" review \
+     --status completed \
+     --notes "PR #$PR_NUMBER created (scope unverified)" \
      --artifacts "$REVIEW_ARTIFACTS"
    ```
 

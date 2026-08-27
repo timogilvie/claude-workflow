@@ -306,5 +306,202 @@ describe('review-runner', () => {
 
       assert.equal(['ready', 'not_ready'].includes(invalidResponse.verdict), false);
     });
+    });
+
+  describe('Guard Infrastructure Failures', () => {
+    it('Guard error → fail open with signal: sets failureCategory and warning finding', async () => {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/test-guard-error');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b/app.ts');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/app.ts b/app.ts',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/test-guard-error',
+          files: ['app.ts'],
+          hasUiChanges: false,
+        },
+      }));
+      
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => ({
+        ok: false,
+        status: 'error',
+        baselinePaths: [],
+        declaredScope: [],
+        baselineSource: 'unresolved',
+        baselineIsArtifact: false,
+        featureDir: null,
+        integrationRef: 'auto/integration',
+        mergeBase: null,
+        taskPaths: [],
+        stagedPaths: [],
+        allowedCompanionPaths: [],
+        outOfScopePaths: [],
+        findings: [],
+        crossPrReverts: [],
+        message: 'Review scope could not be verified',
+        toolError: {
+          commandClass: 'git-merge-base',
+          command: 'git merge-base auto/integration HEAD',
+          exitCode: 128,
+          stderr: 'fatal: Not a valid object name auto/integration',
+        },
+      }));
+      
+      mock.method(reviewRunnerDeps, 'runReview', async () => ({
+        verdict: 'ready',
+        codeReviewFindings: [],
+        metadata: {
+          branch: 'task/test-guard-error',
+          files: ['app.ts'],
+          hasUiChanges: false,
+          designContextAvailable: false,
+          uiVerificationRun: false,
+        },
+      }));
+
+      const result = await reviewChanges({
+        repoDir: TEST_DIR,
+      });
+
+      assert.equal(result.verdict, 'ready');
+      assert.equal(result.failureCategory, 'review-scope-unverifiable');
+      
+      const scopeFindings = result.codeReviewFindings.filter((f) => f.category === 'review-scope');
+      assert.equal(scopeFindings.length, 1);
+      assert.equal(scopeFindings[0].severity, 'warning');
+      assert.match(scopeFindings[0].description, /could not be verified/);
+      assert.match(scopeFindings[0].description, /git-merge-base/);
+      
+      const blockerFindings = result.codeReviewFindings.filter((f) => f.severity === 'blocker');
+      assert.equal(blockerFindings.length, 0);
+    });
+
+    it('Real violation → still blocks and has no failureCategory', async () => {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/test-violation');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b/app.ts');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/app.ts b.app.ts',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/test-violation',
+          files: ['app.ts'],
+          hasUiChanges: false,
+        },
+      }));
+      
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => ({
+        ok: false,
+        status: 'fail',
+        baselinePaths: [],
+        declaredScope: [],
+        baselineSource: 'git merge-base',
+        baselineIsArtifact: false,
+        featureDir: null,
+        integrationRef: 'auto/integration',
+        mergeBase: 'abc123',
+        taskPaths: [],
+        stagedPaths: [],
+        allowedCompanionPaths: [],
+        outOfScopePaths: ['unrelated.txt'],
+        findings: [{
+          severity: 'blocker',
+          category: 'review-scope',
+          kind: 'violation',
+          path: 'unrelated.txt',
+          status: 'A',
+          message: 'Unexpected review change outside task scope: unrelated.txt (A)',
+          details: { baselineSource: 'git merge-base', declaredScope: [] },
+        }],
+        crossPrReverts: [],
+        message: 'Review scope guard failed',
+      }));
+      
+      mock.method(reviewRunnerDeps, 'runReview', async () => ({
+        verdict: 'not_ready',
+        codeReviewFindings: [],
+        metadata: {
+          branch: 'task/test-violation',
+          files: ['app.ts'],
+          hasUiChanges: false,
+          designContextAvailable: false,
+          uiVerificationRun: false,
+        },
+      }));
+
+      const result = await reviewChanges({
+        repoDir: TEST_DIR,
+      });
+
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.failureCategory, undefined);
+      
+      const blockerFindings = result.codeReviewFindings.filter((f) => f.severity === 'blocker');
+      assert.equal(blockerFindings.length, 1);
+      assert.equal(blockerFindings[0].category, 'review-scope');
+    });
+
+    it('Guard pass → no failureCategory', async () => {
+      mock.method(reviewRunnerDeps, 'getCurrentBranch', () => 'task/test-pass');
+      mock.method(reviewRunnerDeps, 'getGitDiff', () => 'diff --git a/app.ts b.app.ts');
+      mock.method(reviewRunnerDeps, 'assertReviewableDiff', () => undefined);
+      mock.method(reviewRunnerDeps, 'ensureClaudeAvailable', async () => undefined);
+      mock.method(reviewRunnerDeps, 'gatherReviewContextAsync', async () => ({
+        diff: 'diff --git a/app.ts b.app.ts',
+        plan: 'plan',
+        taskPacket: 'packet',
+        designContext: null,
+        metadata: {
+          branch: 'task/test-pass',
+          files: ['app.ts'],
+          hasUiChanges: false,
+        },
+      }));
+      
+      mock.method(reviewRunnerDeps, 'validateReviewScope', () => ({
+        ok: true,
+        status: 'pass',
+        baselinePaths: ['app.ts'],
+        declaredScope: ['app.ts'],
+        baselineSource: 'git merge-base',
+        baselineIsArtifact: false,
+        featureDir: null,
+        integrationRef: 'auto/integration',
+        mergeBase: 'abc123',
+        taskPaths: ['app.ts'],
+        stagedPaths: [],
+        allowedCompanionPaths: [],
+        outOfScopePaths: [],
+        findings: [],
+        crossPrReverts: [],
+        message: 'Review scope guard passed',
+      }));
+      
+      mock.method(reviewRunnerDeps, 'runReview', async () => ({
+        verdict: 'ready',
+        codeReviewFindings: [],
+        metadata: {
+          branch: 'task/test-pass',
+          files: ['app.ts'],
+          hasUiChanges: false,
+          designContextAvailable: false,
+          uiVerificationRun: false,
+        },
+      }));
+
+      const result = await reviewChanges({
+        repoDir: TEST_DIR,
+      });
+
+      assert.equal(result.verdict, 'ready');
+      assert.equal(result.failureCategory, undefined);
+    });
   });
 });

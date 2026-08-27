@@ -90,6 +90,7 @@ export type ReviewOutcomeVerdict = 'ready' | 'not_ready' | 'error';
 export const INFRA_REVIEW_FAILURE_CATEGORIES = [
   'native-runtime-unavailable',
   'native-review-prompt-missing',
+  'review-scope-unverifiable',
 ] as const;
 export type InfrastructureReviewFailureCategory = typeof INFRA_REVIEW_FAILURE_CATEGORIES[number];
 
