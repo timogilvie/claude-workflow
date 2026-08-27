@@ -255,6 +255,75 @@ describe('model promotion', () => {
     }
   });
 
+  it('rewrites provider ids in launch-priority-style mapping rows (openrouterId)', () => {
+    const repoDir = makeRepo();
+    try {
+      const mappingPath = join(repoDir, 'shared', 'fixtures', 'launch-priority.json');
+      writeFileSync(mappingPath, `${JSON.stringify({
+        schemaVersion: '1',
+        models: [
+          {
+            wavemillAlias: 'ox-alpha',
+            openrouterId: 'stealth/ox-alpha',
+            family: 'unknown',
+            status: 'provisional',
+            priorityTier: 3,
+          },
+          {
+            wavemillAlias: 'other-model',
+            openrouterId: 'other/model',
+            family: 'gpt',
+            status: 'active',
+            priorityTier: 1,
+          },
+        ],
+      }, null, 2)}\n`);
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      const mappingManifest = plan.files.find((file) => file.relativePath.endsWith('launch-priority.json'));
+      assert.ok(mappingManifest);
+      // Both the alias and the provider id count as old references and both are rewritten.
+      assert.equal(mappingManifest.oldReferencesBefore, 2);
+      assert.ok(mappingManifest.fieldChanges >= 2);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      const rewritten = JSON.parse(readFileSync(mappingPath, 'utf-8'));
+      assert.deepEqual(
+        rewritten.models.map((row: { wavemillAlias: string; openrouterId: string }) => [row.wavemillAlias, row.openrouterId]),
+        [
+          ['gpt-9-test', 'openai/gpt-9-test'],
+          ['other-model', 'other/model'],
+        ],
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('skips checked-in transition spec files instead of treating them as corpora', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'transitions'), { recursive: true });
+      const specPath = join(repoDir, 'transitions', 'ox-to-gpt-9-test.json');
+      const specContent = `${JSON.stringify(spec(), null, 2)}\n`;
+      writeFileSync(specPath, specContent);
+
+      // Without the skip this refuses: the spec holds the provisional identity in
+      // `alias`/`providerNativeId` keys and the final identity in the same keys.
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      assert.equal(plan.files.some((file) => file.relativePath.endsWith('ox-to-gpt-9-test.json')), false);
+      assert.ok(plan.diagnostics.some((line) => line.includes('transition spec')));
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(specPath, 'utf-8'), specContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
   it('refuses malformed JSONL before creating backups', () => {
     const repoDir = makeRepo();
     try {

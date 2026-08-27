@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import Ajv from 'ajv';
 import type { EvalRecord, RoutingRole } from './eval-schema.ts';
 import {
@@ -220,6 +220,7 @@ const PROVIDER_ID_KEYS = new Set([
   'providerReturnedModel',
   'requestedWireId',
   'providerId',
+  'openrouterId',
 ]);
 
 const HOKUSAI_NAME = /hokusai/i;
@@ -275,6 +276,24 @@ export function validateModelTransitionSpec(value: unknown): ModelTransitionSpec
     throw new Error(`Invalid model transition spec: ${detail}`);
   }
   return value as ModelTransitionSpec;
+}
+
+/**
+ * Structural check for checked-in model transition specs. Spec files carry the
+ * provisional alias/providerNativeId in structured keys (`alias`,
+ * `providerNativeId`) by design, so corpus discovery must not treat them as
+ * promotable data: counting them would trip the "both provisional and final
+ * references present" refusal and applying would rewrite the spec itself.
+ */
+export function isTransitionSpecShape(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record.promotionId === 'string'
+    && !!record.provisional && typeof record.provisional === 'object'
+    && !!record.final && typeof record.final === 'object'
+    && !!record.disclosure && typeof record.disclosure === 'object';
 }
 
 export function planModelPromotion(options: PlanPromotionOptions): PromotionManifest {
@@ -434,16 +453,25 @@ function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
     const beforeRecords = kind === 'jsonl'
       ? parseStrictJsonl(path, beforeContent).records
       : [parseStrictJson(path, beforeContent)];
+    if (kind === 'json' && isTransitionSpecShape(beforeRecords[0])) {
+      // Checked-in transition specs intentionally reference both identities in
+      // structured keys; they describe the promotion and are never a corpus.
+      diagnostics.push(`Skipped transition spec ${relative(repoDir, path)} (promotion input, not a corpus).`);
+      continue;
+    }
     refuseAcceptedHokusaiRows(path, beforeRecords, spec);
     const transformed = kind === 'catalog'
       ? transformCatalogFile(path, spec, now)
       : transformRecords(beforeRecords, spec, now);
+    // transformRecords always yields an array; a plain JSON file holds exactly
+    // one document, which must be written back unwrapped.
+    const afterValue = kind === 'json' ? (transformed.value as unknown[])[0] : transformed.value;
     const afterRecords = kind === 'jsonl'
       ? (transformed.value as unknown[])
-      : [transformed.value];
+      : [afterValue];
     const afterContent = kind === 'jsonl'
       ? serializeJsonl(transformed.value as unknown[])
-      : `${JSON.stringify(transformed.value, null, 2)}\n`;
+      : `${JSON.stringify(afterValue, null, 2)}\n`;
     const afterHash = sha256(afterContent);
     const recordCount = kind === 'jsonl' ? beforeRecords.length : 1;
     totalRecordsBefore += recordCount;
@@ -1277,7 +1305,9 @@ function backupPathFor(repoDir: string, spec: ModelTransitionSpec, filePath: str
 }
 
 function tempPathFor(path: string, spec: ModelTransitionSpec): string {
-  return join(dirname(path), `.${spec.promotionId}.${process.pid}.promotion-tmp`);
+  // The basename keeps staged temp files distinct when several planned files
+  // share a directory; a promotion-id-only name would clobber earlier stages.
+  return join(dirname(path), `.${basename(path)}.${spec.promotionId}.${process.pid}.promotion-tmp`);
 }
 
 function cleanupTemps(files: PlannedFile[]): void {
