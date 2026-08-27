@@ -176,6 +176,7 @@ TESTS=(
   shared/lib/harness-id-backfill.test.ts
   shared/lib/harness-diff.test.ts
   shared/lib/quota-state.test.ts
+  shared/lib/template-curly-checker.test.ts
   shared/lib/wavemill-incident-artifact-diagnostics.test.ts
   shared/lib/wavemill-incident-detector.test.ts
   shared/lib/wavemill-incident-store.test.ts
