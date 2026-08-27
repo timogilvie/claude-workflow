@@ -1515,7 +1515,14 @@ function assertIdentityInvariants(registry: ModelRegistry): void {
       if (identity.family !== 'unknown' && !identity.verification) {
         throw new ModelValidationError(modelId, `model ${modelId}: provisional identity family must remain unknown without verification`);
       }
-      if (identity.lineage?.successor) {
+      // A live provisional identity cannot pre-declare a successor. Once the
+      // standard promotion path retires the entry (lifecycle deprecated or
+      // blocked, unlaunchable, not routable) the successor lineage written by
+      // the promotion is exactly the retained historical record.
+      const lifecycle = capabilities.supportedModel?.lifecycle ?? 'supported';
+      const retiredHistorical = (lifecycle === 'deprecated' || lifecycle === 'blocked')
+        && capabilities.supportedModel?.launchEligible === false;
+      if (identity.lineage?.successor && !retiredHistorical) {
         throw new ModelValidationError(modelId, `model ${modelId}: provisional identity cannot declare a successor before promotion`);
       }
       for (const [taskType, ladder] of Object.entries(registry.ladders)) {

@@ -276,6 +276,7 @@ describe('model-registry', () => {
       'gemini-2.5-flash',
       'gemini-2.5-pro',
       'glm-5.2',
+      'glm-5.3-flash',
       'gpt-4.1',
       'gpt-5',
       'gpt-5-mini',
@@ -1256,6 +1257,55 @@ describe('model-registry', () => {
               limitations: ['missing thinkingFormat=openrouter compat flag'],
             } as any,
           }),
+        },
+        ladders: {},
+      }));
+    });
+
+    it('allows successor lineage only on retired provisional identities', () => {
+      const successorCapabilities = makeCapabilities({
+        identity: identityFor('final-model'),
+        supportedModel: { wavemillAlias: 'final-model' },
+      });
+      const provisionalBase = {
+        defaultLadderEligible: false,
+        identity: identityFor('old-model', {
+          status: 'provisional' as const,
+          family: 'unknown' as const,
+          evidencePolicy: 'held' as const,
+          lineage: { successor: 'final-model' },
+        }),
+      };
+
+      // A live provisional identity must not pre-declare a successor.
+      assert.throws(
+        () => assertRegistryConsistency({
+          models: {
+            'old-model': makeCapabilities({
+              ...provisionalBase,
+              supportedModel: { wavemillAlias: 'old-model', routingEligible: false },
+            }),
+            'final-model': successorCapabilities,
+          },
+          ladders: {},
+        }),
+        /cannot declare a successor before promotion/,
+      );
+
+      // The retained historical record after promotion (deprecated, unlaunchable)
+      // is exactly what the promotion tool writes and must validate.
+      assert.doesNotThrow(() => assertRegistryConsistency({
+        models: {
+          'old-model': makeCapabilities({
+            ...provisionalBase,
+            supportedModel: {
+              wavemillAlias: 'old-model',
+              routingEligible: false,
+              launchEligible: false,
+              lifecycle: 'deprecated',
+            },
+          }),
+          'final-model': successorCapabilities,
         },
         ladders: {},
       }));
@@ -2516,11 +2566,12 @@ describe('canonical supported-model helpers', () => {
     assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].toolSupport, 'none');
   });
 
-  it('keeps provisional Ox Alpha pinnable metadata out of automatic stage lists', () => {
+  it('retains promoted Ox Alpha as blocked historical lineage resolving to GLM 5.3 Flash', () => {
     const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'ox-alpha');
     const rawIdentity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'stealth/ox-alpha');
     const model = DEFAULT_MODEL_REGISTRY.models['ox-alpha'];
 
+    // Historical provisional identity is preserved, deprecated, and unlaunchable.
     assert.equal(identity.status, 'provisional');
     assert.equal(identity.revision, 1);
     assert.equal(identity.evidencePolicy, 'held');
@@ -2529,27 +2580,67 @@ describe('canonical supported-model helpers', () => {
     assert.deepEqual(rawIdentity, identity);
     assert.equal(model.vendor, 'unknown');
     assert.deepEqual(model.qualityScores, makeScores(0));
-    assert.equal(model.contextWindowTokens, 1_048_576);
-    assert.equal(model.pricing?.inputCostPerMTok, 0);
-    assert.equal(model.pricing?.outputCostPerMTok, 0);
-    assert.equal(model.pricing?.cacheReadCostPerMTok, undefined);
-    assert.equal(model.pricing?.cacheWriteCostPerMTok, undefined);
-    assert.equal(model.multimodal.text, true);
-    assert.equal(model.multimodal.image, true);
-    assert.equal(model.multimodal.video, true);
-    assert.equal(model.toolSupport, 'basic');
+    assert.equal(model.supportedModel?.lifecycle, 'deprecated');
+    assert.equal(model.supportedModel?.launchEligible, false);
+    assert.equal(model.supportedModel?.routingEligible, false);
     assert.equal(model.supportedModel?.providerNativeId, 'stealth/ox-alpha');
     assert.equal(resolveProviderNativeModelId('ox-alpha')?.providerNativeId, 'stealth/ox-alpha');
     assert.equal(resolveProviderNativeModelId('stealth/ox-alpha')?.wavemillAlias, 'ox-alpha');
-    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'planner'), 'workflow');
-    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'coder'), 'workflow');
-    assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'reviewer'), 'workflow');
-    assert.ok(!JSON.stringify(model).toLowerCase().includes('glm'));
     assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'provisional-identity');
     assert.equal(explainModelSupportExclusion('stealth/ox-alpha', 'coding'), 'provisional-identity');
     assert.equal(listSupportedModelsForStage('planning').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('coding').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('review').includes('ox-alpha'), false);
+
+    // Successor lineage written by the promotion resolves future route intent.
+    assert.equal(model.identity?.lineage?.successor, 'glm-5.3-flash');
+    assert.equal(model.identity?.lineage?.disclosureSource, 'https://openrouter.ai/z-ai/glm-5.3-flash');
+    for (const stage of ['planning', 'coding', 'review'] as const) {
+      assert.equal(resolveModelSuccessor('ox-alpha', DEFAULT_MODEL_REGISTRY, { stage }), 'glm-5.3-flash');
+    }
+  });
+
+  it('registers verified GLM 5.3 Flash with lineage back to Ox Alpha', () => {
+    const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'glm-5.3-flash');
+    const model = DEFAULT_MODEL_REGISTRY.models['glm-5.3-flash'];
+
+    assert.equal(identity.status, 'verified');
+    assert.equal(identity.revision, 2);
+    assert.equal(identity.family, 'glm');
+    assert.equal(identity.displayName, 'GLM 5.3 Flash');
+    assert.equal(identity.evidencePolicy, 'eligible');
+    assert.equal(
+      model.identity?.fingerprint,
+      computeIdentityFingerprint({
+        alias: 'glm-5.3-flash',
+        providerNativeId: 'z-ai/glm-5.3-flash',
+        provider: 'openrouter',
+        revision: 2,
+      }),
+    );
+    assert.deepEqual(model.identity?.lineage?.predecessors, ['ox-alpha']);
+    assert.deepEqual(model.identity?.lineage?.formerIds, ['stealth/ox-alpha']);
+    assert.equal(model.pricing?.inputCostPerMTok, 0.075);
+    assert.equal(model.pricing?.outputCostPerMTok, 0.25);
+    assert.equal(model.pricing?.cacheReadCostPerMTok, 0.015);
+    assert.equal(model.pricing?.cacheWriteCostPerMTok, 0);
+    assert.equal(model.contextWindowTokens, 1_310_720);
+    assert.equal(model.supportedModel?.providerNativeId, 'z-ai/glm-5.3-flash');
+    assert.equal(model.supportedModel?.launchEligible, true);
+    assert.equal(model.supportedModel?.routingEligible, true);
+    assert.equal(model.nativeCapability?.readOnlyNative, 'certified');
+    // Quality priors stay conservative until canonical evals accumulate.
+    assert.deepEqual(model.qualityScores, makeScores(0));
+    assert.equal(model.defaultLadderEligible, false);
+    assert.equal(resolveProviderNativeModelId('glm-5.3-flash')?.providerNativeId, 'z-ai/glm-5.3-flash');
+    assert.equal(resolveProviderNativeModelId('z-ai/glm-5.3-flash')?.wavemillAlias, 'glm-5.3-flash');
+    assert.equal(getRequiredCertificationPhaseForStage('glm-5.3-flash', 'planner'), 'workflow');
+    assert.equal(getRequiredCertificationPhaseForStage('glm-5.3-flash', 'coder'), 'workflow');
+    assert.equal(getRequiredCertificationPhaseForStage('glm-5.3-flash', 'reviewer'), 'workflow');
+    assert.equal(explainModelSupportExclusion('glm-5.3-flash', 'coding', DEFAULT_MODEL_REGISTRY), undefined);
+    assert.equal(listSupportedModelsForStage('planning', DEFAULT_MODEL_REGISTRY).includes('glm-5.3-flash'), true);
+    assert.equal(listSupportedModelsForStage('coding', DEFAULT_MODEL_REGISTRY).includes('glm-5.3-flash'), true);
+    assert.equal(listSupportedModelsForStage('review', DEFAULT_MODEL_REGISTRY).includes('glm-5.3-flash'), true);
   });
 
   it('requires tool support for every supported Wavemill stage', () => {
