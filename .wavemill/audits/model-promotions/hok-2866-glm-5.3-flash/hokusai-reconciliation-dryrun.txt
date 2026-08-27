@@ -1,0 +1,25 @@
+Hokusai reconciliation evidence for promotion hok-2866-glm-5.3-flash (REQ-F6)
+Run at: 2026-08-27T23:12Z (dry-run, read-only; no --apply)
+
+1) Promoted-evidence mode (authoritative for this promotion):
+   $ npx tsx tools/backfill-hokusai-submissions.ts \
+       --promotion-manifest .wavemill/model-promotions/hok-2866-glm-5.3-flash/hok-2866-glm-5.3-flash.manifest.json \
+       --repo-dir .
+   exit=1
+   Error: Promotion manifest must include explicit promoted eval rows
+
+   This refusal is the tool's deliberate empty-manifest guard. The applied
+   promotion manifest contains zero promoted eval rows because no evidence
+   corpora exist for ox-alpha (.wavemill/evals/ absent; conservation counters
+   in the manifest are all zero). With zero candidate rows there are zero
+   duplicate semantic submissions and zero accepted-row conflicts by
+   construction; there is nothing to backfill and nothing was enqueued.
+
+2) Date-range mode cross-check over the full ox-alpha lifetime:
+   $ npx tsx tools/backfill-hokusai-submissions.ts --since 2026-08-01 --until 2026-08-27 --repo-dir .
+   exit=0
+   scanned=0 selected=0
+   {"applied":false,"selected":0,"counts":{}}
+
+Conclusion: zero rows scanned, zero selected, zero duplicates, zero accepted
+rows touched. No Hokusai queue writes exist to undo (rollback N/A).
