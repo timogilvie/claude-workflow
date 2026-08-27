@@ -2252,6 +2252,7 @@ test('getIntegrationConfig returns a full valid integration block', () => {
     requiredChecks: ['ci'],
     highRiskPolicy: 'allow' as const,
     useMillSession: false,
+    mergeLockTimeoutMinutes: 60,
   };
   try {
     clearConfigCache();

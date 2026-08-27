@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
   classifyTendLoopError,
+  formatLaneStallWarning,
   runTendLoop,
   tendLoopBackoffMs,
   writeTendFailureState,
@@ -12,7 +13,7 @@ import {
   type TendLoopDeps,
 } from './tend-loop.ts';
 import type { StatusRenderer } from './tend-status-renderer.ts';
-import type { TendDecision } from './tend-controller.ts';
+import type { MergeExecutionResult, TendDecision } from './tend-controller.ts';
 
 function renderer(): StatusRenderer & { lines: string[]; finalized: boolean } {
   return {
@@ -175,6 +176,103 @@ describe('runTendLoop', () => {
     const result = await runTendLoop({ repoDir: '/tmp/repo', renderer: r, deps: d });
     assert.equal(result.reason, 'halted');
     assert.equal(r.finalized, true);
+  });
+
+  it('warns about a stalled merge lane after 3 consecutive lane-held skips', async () => {
+    const r = renderer();
+    let polls = 0;
+    const d = deps({
+      selectNextCandidate: async () => candidateDecision(1245),
+      executeMerge: async () => laneHeldSkip(1245, [1243]),
+      sleep: async () => {
+        polls += 1;
+        if (polls >= 5) {
+          throw new TypeError('stop');
+        }
+      },
+    });
+
+    await assert.rejects(runTendLoop({ repoDir: '/tmp/repo', renderer: r, deps: d }), TypeError);
+
+    assert.deepEqual(
+      r.lines.filter((line) => line.startsWith('warn=merge-lane-stalled')),
+      [
+        'warn=merge-lane-stalled holder=#1243 candidate=#1245 consecutive=3',
+        'warn=merge-lane-stalled holder=#1243 candidate=#1245 consecutive=4',
+        'warn=merge-lane-stalled holder=#1243 candidate=#1245 consecutive=5',
+      ],
+    );
+    // The regular status line still appears every poll alongside the warning.
+    assert.equal(r.lines.filter((line) => line.includes('action=skipped-#1245')).length, 5);
+  });
+
+  it('resets the lane-stall streak when a poll produces any other result', async () => {
+    const r = renderer();
+    const results: MergeExecutionResult[] = [
+      laneHeldSkip(1245, [1243]),
+      laneHeldSkip(1245, [1243]),
+      { status: 'merged', prNumber: 1243, haltLoop: false },
+      laneHeldSkip(1245, [1243]),
+      laneHeldSkip(1245, [1243]),
+    ];
+    let polls = 0;
+    const d = deps({
+      selectNextCandidate: async () => candidateDecision(1245),
+      executeMerge: async () => results[polls] ?? laneHeldSkip(1245, [1243]),
+      sleep: async () => {
+        polls += 1;
+        if (polls >= results.length) {
+          throw new TypeError('stop');
+        }
+      },
+    });
+
+    await assert.rejects(runTendLoop({ repoDir: '/tmp/repo', renderer: r, deps: d }), TypeError);
+
+    assert.deepEqual(
+      r.lines.filter((line) => line.startsWith('warn=merge-lane-stalled')),
+      [],
+      'a non-lane-held result between skips must reset the streak below the warning threshold',
+    );
+  });
+});
+
+function candidateDecision(prNumber: number): TendDecision {
+  return {
+    integrationHealth: { state: 'healthy' },
+    eligible: [{
+      number: prNumber,
+      title: 'PR',
+      headBranch: 'task/pr',
+      createdAt: '2026-08-18T00:00:00Z',
+      dependencyDepth: 0,
+    }],
+    blocked: [],
+    nextPR: prNumber,
+  };
+}
+
+function laneHeldSkip(prNumber: number, heldBy: number[]): MergeExecutionResult {
+  return { status: 'skipped', prNumber, phase: 'merge-lane-held', heldBy, haltLoop: false };
+}
+
+describe('formatLaneStallWarning', () => {
+  it('formats holder, candidate, and streak', () => {
+    assert.equal(
+      formatLaneStallWarning({ holders: [1243], candidate: 1245, consecutive: 5 }),
+      'warn=merge-lane-stalled holder=#1243 candidate=#1245 consecutive=5',
+    );
+  });
+
+  it('joins multiple holders and tolerates an unknown holder list', () => {
+    assert.equal(
+      formatLaneStallWarning({ holders: [7, 9], candidate: 42, consecutive: 3 }),
+      'warn=merge-lane-stalled holder=#7,#9 candidate=#42 consecutive=3',
+    );
+    assert.equal(
+      formatLaneStallWarning({ holders: [], candidate: 42, consecutive: 3 }),
+      'warn=merge-lane-stalled holder=unknown candidate=#42 consecutive=3',
+    );
   });
 });
 
