@@ -160,6 +160,16 @@ function makeCatalog() {
       review: ['other-model'],
       classify: ['other-model'],
     },
+    openrouterMappings: [
+      {
+        wavemillAlias: 'ox-alpha',
+        openrouterId: 'stealth/ox-alpha',
+        family: 'unknown',
+        status: 'provisional',
+        priorityTier: 3,
+        roleEligibility: ['planning', 'coding', 'review'],
+      },
+    ],
   };
 }
 
@@ -247,6 +257,16 @@ describe('model promotion', () => {
       assert.equal(evalRecord.normalizedEvaluationCost.coverage, 'complete');
       assert.equal(evalRecord.trainingEligible, false);
       assert.equal(evalRecord.modelIdentityAttribution.finalization.finalAlias, 'gpt-9-test');
+
+      const catalog = JSON.parse(readFileSync(join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json'), 'utf-8'));
+      const mappingByAlias = Object.fromEntries(
+        catalog.openrouterMappings.map((row: { wavemillAlias: string }) => [row.wavemillAlias, row]),
+      );
+      // The historical row stays resolvable but terminal; the final row is active.
+      assert.equal(mappingByAlias['ox-alpha'].status, 'deprecated');
+      assert.equal(mappingByAlias['ox-alpha'].openrouterId, 'stealth/ox-alpha');
+      assert.equal(mappingByAlias['gpt-9-test'].status, 'active');
+      assert.equal(mappingByAlias['gpt-9-test'].openrouterId, 'openai/gpt-9-test');
 
       const second = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
       assert.equal(second.status, 'already_applied');
@@ -398,6 +418,41 @@ describe('model promotion', () => {
       const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
       assert.equal(applied.status, 'applied');
       assert.equal(readFileSync(nestedFixture, 'utf-8'), nestedContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('never treats certification artifacts as corpora (no re-keying, no refusal)', () => {
+    const repoDir = makeRepo();
+    try {
+      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'stealth', 'ox-alpha');
+      mkdirSync(certDir, { recursive: true });
+      const oldCertPath = join(certDir, 'v3.json');
+      const oldCert = `${JSON.stringify({
+        schemaVersion: 3,
+        suiteVersion: 'v3',
+        phase: 'workflow',
+        subject: { registryKey: 'ox-alpha', providerNativeId: 'stealth/ox-alpha' },
+      }, null, 2)}\n`;
+      writeFileSync(oldCertPath, oldCert);
+      // A final-subject artifact can legitimately pre-exist an apply (e.g. a
+      // re-apply after rollback); it must not count as a final reference.
+      const finalCertDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'gpt-9-test');
+      mkdirSync(finalCertDir, { recursive: true });
+      const finalCertPath = join(finalCertDir, 'v3.json');
+      const finalCert = `${JSON.stringify({
+        schemaVersion: 3,
+        suiteVersion: 'v3',
+        phase: 'workflow',
+        subject: { registryKey: 'gpt-9-test', providerNativeId: 'openai/gpt-9-test' },
+      }, null, 2)}\n`;
+      writeFileSync(finalCertPath, finalCert);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(oldCertPath, 'utf-8'), oldCert);
+      assert.equal(readFileSync(finalCertPath, 'utf-8'), finalCert);
     } finally {
       cleanup(repoDir);
     }

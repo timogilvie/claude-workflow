@@ -3300,7 +3300,7 @@
       "wavemillAlias": "ox-alpha",
       "openrouterId": "stealth/ox-alpha",
       "family": "unknown",
-      "status": "provisional",
+      "status": "deprecated",
       "priorityTier": 3,
       "roleEligibility": [
         "planning",

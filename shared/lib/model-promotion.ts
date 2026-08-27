@@ -166,6 +166,10 @@ const SKIP_DIRS = new Set([
   '.next',
   'dist',
   'coverage',
+  // Certification artifacts are subject records, never promotable corpora:
+  // re-keying one would fabricate a certificate for the final identity
+  // instead of requiring fresh certification of the promoted subject.
+  'native-agent-certifications',
 ]);
 
 const MODEL_ID_KEYS = new Set([
@@ -877,6 +881,15 @@ function buildFinalCatalogEntry(
 function updateOpenRouterMappings(openrouterMappings: unknown[] | undefined, spec: ModelTransitionSpec): unknown[] | undefined {
   if (!openrouterMappings) return openrouterMappings;
   const cloned = JSON.parse(JSON.stringify(openrouterMappings)) as unknown[];
+  for (const row of cloned) {
+    if (!row || typeof row !== 'object') continue;
+    const mapping = row as Record<string, unknown>;
+    // The historical mapping row stays resolvable but must read as terminal:
+    // coverage/watchlist tooling excludes deprecated rows from follow-ups.
+    if (mapping.wavemillAlias === spec.provisional.alias) {
+      mapping.status = 'deprecated';
+    }
+  }
   cloned.push({
     wavemillAlias: spec.final.alias,
     openrouterId: spec.final.providerNativeId,
