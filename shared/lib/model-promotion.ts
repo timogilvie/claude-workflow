@@ -166,6 +166,12 @@ const SKIP_DIRS = new Set([
   '.next',
   'dist',
   'coverage',
+  // Fixture directories hold test/reference data, not runtime evidence corpora.
+  // Skipping them keeps deliberately-malformed test fixtures from refusing the
+  // run and keeps reference tables out of the rewrite set. The declarative
+  // catalog (shared/fixtures/model-registry.v1.json) is unaffected: it is
+  // explicitly re-added via the catalogPath argument to discoverPromotionFiles.
+  'fixtures',
 ]);
 
 const MODEL_ID_KEYS = new Set([
@@ -434,6 +440,13 @@ function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
     const beforeRecords = kind === 'jsonl'
       ? parseStrictJsonl(path, beforeContent).records
       : [parseStrictJson(path, beforeContent)];
+    // A checked-in transition spec is promotion tooling input, not evidence.
+    // Its provisional/final blocks would otherwise count as both old and final
+    // structured references (refusing every run) and be rewritten by apply.
+    if (kind === 'json' && isModelTransitionSpecShape(beforeRecords[0])) {
+      diagnostics.push(`skipped model transition spec input at ${relative(repoDir, path)}`);
+      continue;
+    }
     refuseAcceptedHokusaiRows(path, beforeRecords, spec);
     const transformed = kind === 'catalog'
       ? transformCatalogFile(path, spec, now)
@@ -1014,6 +1027,16 @@ function transformValue(value: unknown, spec: ModelTransitionSpec, parentKey?: s
     }
   }
   return { value: record, changed };
+}
+
+function isModelTransitionSpecShape(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return record.schemaVersion === '1'
+    && typeof record.promotionId === 'string'
+    && typeof record.provisional === 'object' && record.provisional !== null
+    && typeof record.final === 'object' && record.final !== null
+    && typeof record.disclosure === 'object' && record.disclosure !== null;
 }
 
 function countReferences(records: unknown[], spec: ModelTransitionSpec, target: 'old' | 'final'): number {

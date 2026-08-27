@@ -282,6 +282,76 @@ describe('model promotion', () => {
     }
   });
 
+  it('ignores fixture directories: malformed test fixtures cannot refuse the run', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'tests', 'fixtures', 'artifacts'), { recursive: true });
+      writeFileSync(join(repoDir, 'tests', 'fixtures', 'artifacts', 'routing-complete.json'), '{deliberately malformed\n');
+      const manifest = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(manifest.status, 'planned');
+      assert.equal(
+        manifest.files.some((file) => file.relativePath.includes('routing-complete.json')),
+        false,
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('ignores fixture directories: structured fixture references are not transformed or counted', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'tests', 'fixtures'), { recursive: true });
+      const fixturePath = join(repoDir, 'tests', 'fixtures', 'launch-priority.json');
+      const fixtureContent = `${JSON.stringify({ models: [{ wavemillAlias: 'ox-alpha', openrouterId: 'stealth/ox-alpha' }] }, null, 2)}\n`;
+      writeFileSync(fixturePath, fixtureContent);
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(
+        applied.files.some((file) => file.relativePath.includes('launch-priority.json')),
+        false,
+      );
+      assert.equal(readFileSync(fixturePath, 'utf-8'), fixtureContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('skips a checked-in transition spec instead of counting or rewriting it', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'transitions'), { recursive: true });
+      const specPath = join(repoDir, 'transitions', 'ox-alpha-to-gpt-9-test.json');
+      const specContent = `${JSON.stringify(spec(), null, 2)}\n`;
+      writeFileSync(specPath, specContent);
+      const manifest = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(manifest.status, 'planned');
+      assert.equal(
+        manifest.files.some((file) => file.relativePath.includes('ox-alpha-to-gpt-9-test.json')),
+        false,
+      );
+      assert.ok(manifest.diagnostics.some((line) => line.includes('skipped model transition spec input')));
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(specPath, 'utf-8'), specContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('still discovers and transforms the declarative catalog despite the fixtures skip', () => {
+    const repoDir = makeRepo();
+    try {
+      const manifest = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      const catalog = manifest.files.find((file) => file.relativePath.endsWith(join('shared', 'fixtures', 'model-registry.v1.json')));
+      assert.ok(catalog, 'catalog must be discovered via explicit catalogPath re-add');
+      assert.ok(catalog.fieldChanges > 0, 'catalog must be transformed');
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
   it('rebuilds derived aggregated corpora from re-keyed raw evals and rolls them back on rollback', () => {
     const repoDir = makeRepo();
     try {
