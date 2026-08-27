@@ -19,6 +19,8 @@ type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
 type Confidence = 'high' | 'medium' | 'low';
 const DEFAULT_OBSERVER_PANE_TITLE = 'Wavemill Observer';
+const READY_RECHECK_LOOP_THRESHOLD = 3;
+const READY_RECHECK_LOOP_URGENT_THRESHOLD = 6;
 
 interface ObserverOptions {
   loop: boolean;
@@ -98,6 +100,12 @@ interface ReadyWatchdogLogEntry {
   label: string;
   action: string;
   detail: string;
+}
+
+interface ReadyRecheckLogEntry {
+  line: string;
+  issue: string;
+  pr: string;
 }
 
 type MillLogLevel = 'error' | 'warn' | 'status' | 'debug' | 'info' | string;
@@ -887,6 +895,41 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    const readyRecheckLines = new Set<string>();
+    const readyRecheckGroups = new Map<string, ReadyRecheckLogEntry[]>();
+    for (const line of logLines) {
+      const entry = parseReadyRecheckLine(line);
+      if (!entry) continue;
+      const key = `${entry.issue}\0${entry.pr}`;
+      const group = readyRecheckGroups.get(key) ?? [];
+      group.push(entry);
+      readyRecheckGroups.set(key, group);
+    }
+    for (const group of readyRecheckGroups.values()) {
+      if (group.length < READY_RECHECK_LOOP_THRESHOLD) continue;
+      for (const entry of group) readyRecheckLines.add(entry.line);
+      const latest = group[group.length - 1];
+      const failureReason = readReadyFailureReason(repo, latest.issue);
+      findings.push({
+        id: `ready-recheck-loop-${repo.session}-${latest.issue}-${latest.pr}`,
+        severity: group.length >= READY_RECHECK_LOOP_URGENT_THRESHOLD ? 'urgent' : 'high',
+        category: 'stuck',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        issue: latest.issue,
+        title: `${latest.issue} has re-run failed ready checks ${group.length} times for PR #${latest.pr} without progressing`,
+        evidence: [
+          `occurrences=${group.length}`,
+          `pr=#${latest.pr}`,
+          `failureReason=${failureReason ?? 'unknown (no .ready-result.json failureReason)'}`,
+          ...group.slice(-4).map((entry) => entry.line),
+        ],
+        recommendation: 'The failed-ready re-check has no retry ceiling or backoff, so a deterministic gate failure loops forever and the PR never reaches the merge lane. Resolve the gate named in failureReason, or terminalize the task. An identical reason repeating every cycle is a Wavemill defect, not a transient failure.',
+        occurrenceCount: group.length,
+      });
+    }
+
     const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
       const parsed = parseMillLogLine(line);
@@ -895,6 +938,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       if (parsed.level !== 'error' && parsed.level !== 'warn') continue;
       if (parsed.level === 'warn') {
         if (repeatedReadyWatchdogLines.has(line)) continue;
+        if (readyRecheckLines.has(line)) continue;
         if (queueHealthDegraded && /queue analysis unavailable/i.test(parsed.message)) continue;
       }
 
@@ -1039,6 +1083,30 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
     action: match[3],
     detail: match[4],
   };
+}
+
+function parseReadyRecheckLine(line: string): ReadyRecheckLogEntry | null {
+  const match = line.match(/(\S+)\s+\u2192\s+Re-running failed ready checks for PR #(\d+)/);
+  if (!match) return null;
+  return {
+    line,
+    issue: match[1],
+    pr: match[2],
+  };
+}
+
+function readReadyFailureReason(repo: RepoSnapshot, issue: string): string | undefined {
+  const task = repo.tasks?.find((candidate) => candidate.issue === issue);
+  if (!task?.worktree || !task.slug) return undefined;
+  const resultPath = join(task.worktree, 'features', task.slug, '.ready-result.json');
+  if (!existsSync(resultPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as { failureReason?: unknown; notes?: unknown };
+    const reason = typeof parsed.failureReason === 'string' ? parsed.failureReason : parsed.notes;
+    return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseMillLogLine(line: string): MillLogLine | null {

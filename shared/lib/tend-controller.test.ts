@@ -159,6 +159,9 @@ function buildMergeTestOptions(overrides: {
       restoreReady: (prNumber) => {
         labels.push(`ready:${prNumber}`);
       },
+      reclaimStaleMerging: (prNumber) => {
+        labels.push(`ready-reclaim:${prNumber}`);
+      },
     },
     cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
   };
@@ -2111,7 +2114,13 @@ describe('executeMerge', () => {
     try {
       const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
 
-      assert.deepEqual(result, { status: 'skipped', prNumber: 42, haltLoop: false });
+      assert.deepEqual(result, {
+        status: 'skipped',
+        prNumber: 42,
+        phase: 'merge-lane-held',
+        heldBy: [7],
+        haltLoop: false,
+      });
       assert.ok(!hasCall(options.calls, /git worktree add/));
       assert.deepEqual(options.labels, []);
     } finally {
@@ -2275,6 +2284,374 @@ describe('executeMerge', () => {
       const addIdx = options.calls.findIndex((c) => c.includes('git worktree add'));
       const removeIdx = options.calls.findIndex((c) => c.includes('git worktree remove --force'));
       assert.ok(addIdx >= 0 && removeIdx > addIdx, 'worktree remove should happen after add');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('retries a transient blocked-label release on the rebase failure path', async () => {
+    const options = buildMergeTestOptions();
+    const sleeps: number[] = [];
+    let releaseAttempts = 0;
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      if (cmd.includes('git rebase')) {
+        throw new Error('rebase conflict');
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          releaseToBlocked: (prNumber) => {
+            releaseAttempts += 1;
+            if (releaseAttempts === 1) {
+              throw Object.assign(new Error('HTTP 503 Service Unavailable'), { stderr: 'HTTP 503 Service Unavailable' });
+            }
+            options.labels.push(`blocked:${prNumber}`);
+          },
+          retrySleep: async (ms) => { sleeps.push(ms); },
+        },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'rebase');
+      assert.equal(releaseAttempts, 2);
+      assert.equal(sleeps.length, 1);
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('still returns blocked and warns when the blocked-label release persistently fails', async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    const options = buildMergeTestOptions();
+    const shellRunner: MergeExecutionDeps['shellRunner'] = (cmd, opts) => {
+      options.calls.push(cmd);
+      if (cmd.includes('git rebase')) {
+        throw new Error('rebase conflict');
+      }
+      const defaultRunner = options.deps.shellRunner as MergeExecutionDeps['shellRunner'];
+      return defaultRunner(cmd, opts);
+    };
+
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          releaseToBlocked: () => {
+            throw new Error('label update failed');
+          },
+        },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'rebase');
+      assert.ok(
+        warnings.some((warning) => warning.includes('wm:merging may be leaked')),
+        'expected a leak warning when the blocked-label release exhausts retries',
+      );
+    } finally {
+      console.warn = originalWarn;
+      options.cleanup();
+    }
+  });
+
+  it('warns instead of staying silent when the ready restore fails after acquisition failure', async () => {
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    const options = buildMergeTestOptions();
+
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(' '));
+    };
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          acquireMerging: () => {
+            throw new Error('label service down');
+          },
+          restoreReady: () => {
+            throw new Error('label update failed');
+          },
+        },
+      });
+
+      assert.equal(result.status, 'skipped');
+      assert.equal(result.phase, 'label');
+      assert.ok(
+        warnings.some((warning) => warning.includes('wm:merging may be leaked')),
+        'expected a leak warning when the ready restore fails',
+      );
+    } finally {
+      console.warn = originalWarn;
+      options.cleanup();
+    }
+  });
+
+  it('reaps stale tend worktrees before creating the scratch worktree', async () => {
+    const options = buildMergeTestOptions();
+    const tendDir = join(options.repoDir, '.git', 'wavemill-tend');
+    mkdirSync(join(tendDir, '42'), { recursive: true });
+    mkdirSync(join(tendDir, '937'), { recursive: true });
+    writeFileSync(join(tendDir, '937', 'stale.txt'), 'leftover from an interrupted run');
+
+    try {
+      const result = await executeMerge(candidate(), { repoDir: options.repoDir, deps: options.deps });
+
+      assert.equal(result.status, 'merged');
+      assert.ok(hasCall(options.calls, /git worktree remove --force '[^']*wavemill-tend\/42'/));
+      assert.ok(hasCall(options.calls, /git worktree remove --force '[^']*wavemill-tend\/937'/));
+      assert.ok(hasCall(options.calls, /^git worktree prune$/));
+      assert.equal(existsSync(join(tendDir, '42', 'stale.txt')), false);
+      assert.equal(existsSync(join(tendDir, '937')), false, 'stale worktree directories should be deleted');
+      // The reap (ending in prune) must happen before the new worktree is added.
+      const pruneIdx = options.calls.findIndex((c) => c === 'git worktree prune');
+      const addIdx = options.calls.findIndex((c) => c.includes('git worktree add'));
+      assert.ok(pruneIdx >= 0 && addIdx > pruneIdx, 'reap should complete before worktree add');
+    } finally {
+      options.cleanup();
+    }
+  });
+});
+
+describe('merge-lane stale lock reclaim', () => {
+  const NOW_MS = Date.parse('2026-08-27T12:00:00Z');
+
+  function minutesAgo(minutes: number): string {
+    return new Date(NOW_MS - minutes * 60_000).toISOString();
+  }
+
+  function eventLines(events: Array<{ name: string; at: string }>): string {
+    return events.map((event) => JSON.stringify(event)).join('\n');
+  }
+
+  function laneHolderShellRunner(
+    options: { calls: string[]; repoDir: string },
+    holderNumber: number,
+    events: string | Error,
+  ): MergeExecutionDeps['shellRunner'] {
+    return (cmd) => {
+      options.calls.push(cmd);
+      if (cmd.includes('gh pr list --label')) return JSON.stringify([{ number: holderNumber }]);
+      if (cmd.includes('git remote get-url origin')) return 'git@github.com:example/repo.git';
+      if (cmd.includes(`issues/${holderNumber}/events`)) {
+        if (events instanceof Error) throw events;
+        return events;
+      }
+      if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+      if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+      if (cmd.includes('git merge-base --is-ancestor')) {
+        const error = new Error('Command failed: git merge-base --is-ancestor');
+        (error as unknown as Record<string, unknown>).status = 1;
+        throw error;
+      }
+      if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+      return '';
+    };
+  }
+
+  it('reclaims a stale lock, posts an audit comment, and proceeds to merge', async () => {
+    const options = buildMergeTestOptions();
+    const shellRunner = laneHolderShellRunner(options, 99, eventLines([
+      { name: WM_LABELS.ready, at: minutesAgo(120) },
+      { name: WM_LABELS.merging, at: minutesAgo(70) },
+    ]));
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
+      assert.deepEqual(options.labels, ['ready-reclaim:99', 'merging:42', 'merged:42']);
+      assert.ok(hasCall(options.calls, /gh pr comment 99 --body/), 'expected an audit comment on the holder PR');
+      assert.ok(hasCall(options.calls, /merge-lane lock reclaimed/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('respects a fresh lock, measuring age from the latest labeled event', async () => {
+    const options = buildMergeTestOptions();
+    // An old application followed by a recent re-application: age must be
+    // measured from the most recent acquisition, so the lock is fresh.
+    const shellRunner = laneHolderShellRunner(options, 99, eventLines([
+      { name: WM_LABELS.merging, at: minutesAgo(300) },
+      { name: WM_LABELS.merging, at: minutesAgo(5) },
+    ]));
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.deepEqual(result, {
+        status: 'skipped',
+        prNumber: 42,
+        phase: 'merge-lane-held',
+        heldBy: [99],
+        haltLoop: false,
+      });
+      assert.deepEqual(options.labels, []);
+      assert.ok(!hasCall(options.calls, /gh pr comment/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails safe (keeps skipping) when the events query fails', async () => {
+    const options = buildMergeTestOptions();
+    const shellRunner = laneHolderShellRunner(
+      options,
+      99,
+      Object.assign(new Error('gh api failed'), { stderr: 'HTTP 500 Internal Server Error' }),
+    );
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.deepEqual(result, {
+        status: 'skipped',
+        prNumber: 42,
+        phase: 'merge-lane-held',
+        heldBy: [99],
+        haltLoop: false,
+      });
+      assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails safe when no merging labeled event is found', async () => {
+    const options = buildMergeTestOptions();
+    const shellRunner = laneHolderShellRunner(options, 99, eventLines([
+      { name: WM_LABELS.ready, at: minutesAgo(300) },
+    ]));
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.equal(result.status, 'skipped');
+      assert.equal(result.phase, 'merge-lane-held');
+      assert.deepEqual(result.heldBy, [99]);
+      assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('never queries events or reclaims when mergeLockTimeoutMinutes is 0', async () => {
+    const options = buildMergeTestOptions();
+    writeFileSync(
+      join(options.repoDir, '.wavemill-config.json'),
+      JSON.stringify({
+        integration: {
+          integrationBranch: 'auto/integration',
+          mergeMethod: 'squash',
+          mergeLockTimeoutMinutes: 0,
+        },
+      }),
+    );
+    const shellRunner = laneHolderShellRunner(options, 99, eventLines([
+      { name: WM_LABELS.merging, at: minutesAgo(1_000) },
+    ]));
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.equal(result.status, 'skipped');
+      assert.equal(result.phase, 'merge-lane-held');
+      assert.deepEqual(result.heldBy, [99]);
+      assert.ok(!hasCall(options.calls, /issues\/99\/events/), 'expiry disabled: the events API must not be queried');
+      assert.deepEqual(options.labels, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('keeps the holder in heldBy when the reclaim label call fails', async () => {
+    const options = buildMergeTestOptions();
+    const shellRunner = laneHolderShellRunner(options, 99, eventLines([
+      { name: WM_LABELS.merging, at: minutesAgo(70) },
+    ]));
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          reclaimStaleMerging: () => {
+            throw new Error('label update failed');
+          },
+          currentTimeMs: () => NOW_MS,
+          retrySleep: async () => {},
+        },
+      });
+
+      assert.deepEqual(result, {
+        status: 'skipped',
+        prNumber: 42,
+        phase: 'merge-lane-held',
+        heldBy: [99],
+        haltLoop: false,
+      });
+      assert.deepEqual(options.labels, []);
+      assert.ok(!hasCall(options.calls, /gh pr comment/));
     } finally {
       options.cleanup();
     }

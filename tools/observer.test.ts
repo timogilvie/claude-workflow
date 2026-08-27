@@ -824,3 +824,86 @@ test('incident sync caps live incident processing per pass', async () => {
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
+
+test('repeated failed-ready re-checks surface a stuck loop finding with the blocking reason', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-recheck-'));
+  const slug = 'ready-recheck-fixture';
+  const featureDir = join(repoDir, 'features', slug);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'failed',
+    failureReason: 'PR #1260 removes files from #1240 without explicit acknowledgement.',
+  }));
+
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  writeFileSync(logPath, [
+    '09:52:17 [status] ↻ HOK-2888 → Re-running failed ready checks for PR #1260',
+    '09:52:37 [status] ⛔ HOK-2888 → Cross-PR revert guard blocked ready phase for PR #1260',
+    '09:53:31 [status] ↻ HOK-2888 → Re-running failed ready checks for PR #1260',
+    '09:54:04 [status] ⛔ HOK-2888 → Cross-PR revert guard blocked ready phase for PR #1260',
+    '09:55:49 [status] ↻ HOK-2888 → Re-running failed ready checks for PR #1260',
+  ].join('\n'));
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-27T14:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        tasks: [{
+          issue: 'HOK-2888',
+          slug,
+          phase: 'ready',
+          status: 'active',
+          pr: '1260',
+          worktree: repoDir,
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const loop = findings.find((finding) => finding.id.startsWith('ready-recheck-loop-'));
+    assert.ok(loop);
+    assert.equal(loop.severity, 'high');
+    assert.equal(loop.category, 'stuck');
+    assert.equal(loop.issue, 'HOK-2888');
+    assert.equal(loop.evidence[0], 'occurrences=3');
+    assert.equal(loop.evidence[1], 'pr=#1260');
+    assert.match(loop.evidence[2], /without explicit acknowledgement/);
+    assert.match(loop.recommendation, /no retry ceiling/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('a single failed-ready re-check stays below the loop threshold', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-recheck-once-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  writeFileSync(logPath, [
+    '09:52:17 [status] ↻ HOK-2888 → Re-running failed ready checks for PR #1260',
+    '09:52:57 [status] ↻ HOK-2889 → Re-running failed ready checks for PR #1261',
+  ].join('\n'));
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-08-27T14:00:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        tasks: [],
+      }],
+    }, defaultObserverOptions());
+
+    assert.equal(findings.filter((finding) => finding.id.startsWith('ready-recheck-loop-')).length, 0);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});

@@ -9,6 +9,11 @@ export const TEND_LOOP_ERROR_BACKOFF_BASE_MS = 30_000;
 // Keep this below BACKSTAGE_TEND_HEARTBEAT_STALE_SECONDS in wavemill-mill.sh.
 export const TEND_LOOP_ERROR_BACKOFF_MAX_MS = 120_000;
 export const TEND_MAX_CONSECUTIVE_UNKNOWN_FAILURES = 3;
+// Consecutive merge-lane-held skips before the loop starts emitting an explicit
+// stall warning (~3 minutes at the 60 s poll interval). Without this the
+// deadlock is invisible: the stream keeps reporting health=ok with a
+// merging-#N / skipped-#N pair every poll.
+export const TEND_LANE_STALL_WARN_ITERATIONS = 3;
 
 export type TendLoopErrorClass = 'transient' | 'terminal' | 'unknown';
 
@@ -67,6 +72,23 @@ export function statusActionForResult(status: MergeExecutionResult['status'], pr
   return status === 'merged' ? `merged-#${prNumber}` : `${status}-#${prNumber}`;
 }
 
+/**
+ * Format the explicit merge-lane stall warning emitted when the same lane
+ * holder blocks candidate merges for TEND_LANE_STALL_WARN_ITERATIONS or more
+ * consecutive polls. Kept as an exported pure helper so the format (a
+ * greppable signal and a future observer-detector hook) is directly testable.
+ */
+export function formatLaneStallWarning(options: {
+  holders: number[];
+  candidate: number;
+  consecutive: number;
+}): string {
+  const holder = options.holders.length > 0
+    ? options.holders.map((prNumber) => `#${prNumber}`).join(',')
+    : 'unknown';
+  return `warn=merge-lane-stalled holder=${holder} candidate=#${options.candidate} consecutive=${options.consecutive}`;
+}
+
 export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExit> {
   const deps = tendLoopDeps(options.deps);
   const intervalMs = options.intervalMs ?? TEND_LOOP_INTERVAL_MS;
@@ -77,6 +99,7 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   let lastError: string | null = null;
   let lastErrorAt: string | null = null;
   let iteration = 0;
+  let laneStallStreak = 0;
 
   while (true) {
     iteration += 1;
@@ -98,6 +121,7 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
         consecutiveUnknown = 0;
         lastError = null;
         lastErrorAt = null;
+        laneStallStreak = 0;
         await deps.writePollHeartbeat(options.repoDir, {
           failureCount: consecutiveFailures,
           lastError,
@@ -142,6 +166,19 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
         ...pollMetadata,
       }));
 
+      if (result.status === 'skipped' && result.phase === 'merge-lane-held') {
+        laneStallStreak += 1;
+        if (laneStallStreak >= TEND_LANE_STALL_WARN_ITERATIONS) {
+          options.renderer.write(formatLaneStallWarning({
+            holders: result.heldBy ?? [],
+            candidate: result.prNumber,
+            consecutive: laneStallStreak,
+          }));
+        }
+      } else {
+        laneStallStreak = 0;
+      }
+
       if (result.haltLoop) {
         options.renderer.finalize();
         return { reason: 'halted', lastMergedPR };
@@ -166,6 +203,7 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       }
 
       consecutiveFailures += 1;
+      laneStallStreak = 0;
       if (classification === 'unknown') {
         consecutiveUnknown += 1;
       } else {

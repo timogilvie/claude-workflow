@@ -2520,6 +2520,12 @@
                     "default": true,
                     "description": "When true, the integration controller reuses the active mill tmux session for status reporting."
                 },
+                "mergeLockTimeoutMinutes": {
+                    "type": "number",
+                    "minimum": 0,
+                    "default": 45,
+                    "description": "Minutes after which another tend process may reclaim a wm:merging merge-lane lock as stale (measured from the label's most recent application on GitHub). 0 disables expiry. Must exceed the worst-case legitimate merge duration (rebase + 30 min check wait + 5 min merge retry window, roughly 40 minutes)."
+                },
                 "readyPolicy": {
                     "type": "object",
                     "description": "Eligibility guards for the autonomous merge controller",
