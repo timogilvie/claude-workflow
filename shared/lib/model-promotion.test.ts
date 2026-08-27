@@ -9,7 +9,8 @@ import {
   rollbackModelPromotion,
   type ModelTransitionSpec,
 } from './model-promotion.ts';
-import { computeIdentityFingerprint } from './model-registry.ts';
+import { assertRegistryConsistency, computeIdentityFingerprint } from './model-registry.ts';
+import { projectModelRegistryCatalog } from './model-registry-loader.ts';
 
 function makeRepo(): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'model-promotion-test-'));
@@ -267,6 +268,17 @@ describe('model promotion', () => {
       assert.equal(mappingByAlias['ox-alpha'].openrouterId, 'stealth/ox-alpha');
       assert.equal(mappingByAlias['gpt-9-test'].status, 'active');
       assert.equal(mappingByAlias['gpt-9-test'].openrouterId, 'openai/gpt-9-test');
+
+      // The historical entry is disclosed: verified member of the final
+      // family with successor lineage, evidence still held, and the whole
+      // catalog passes the effective-registry consistency gate.
+      const oxEntry = catalog.models.find((entry: { id: string }) => entry.id === 'ox-alpha');
+      assert.equal(oxEntry.capabilities.identity.status, 'verified');
+      assert.equal(oxEntry.capabilities.identity.family, 'gpt');
+      assert.equal(oxEntry.capabilities.identity.evidencePolicy, 'held');
+      assert.equal(oxEntry.capabilities.identity.lineage.successor, 'gpt-9-test');
+      assert.equal(oxEntry.capabilities.supportedModel.lifecycle, 'deprecated');
+      assert.doesNotThrow(() => assertRegistryConsistency(projectModelRegistryCatalog(catalog)));
 
       const second = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
       assert.equal(second.status, 'already_applied');

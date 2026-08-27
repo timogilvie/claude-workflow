@@ -753,17 +753,10 @@ function transformCatalogFile(path: string, spec: ModelTransitionSpec, now: stri
     }
     throw new Error(`Catalog does not contain provisional model ${spec.provisional.alias}`);
   }
-  if (provisional.capabilities.identity?.status !== 'provisional') {
-    throw new Error(`Catalog source ${spec.provisional.alias} must have identity.status=provisional`);
-  }
-  if (provisional.capabilities.identity.revision !== spec.provisional.identityRevision) {
-    throw new Error(`Catalog source ${spec.provisional.alias} identity revision mismatch`);
-  }
-  if (provisional.capabilities.identity.evidencePolicy !== 'held') {
-    throw new Error(`Catalog source ${spec.provisional.alias} must keep evidencePolicy=held`);
-  }
   if (catalog.models.some((entry) => entry.id === spec.final.alias)) {
-    if (provisional.capabilities.identity.lineage?.successor === spec.final.alias) {
+    // Already-applied detection must precede the provisional-shape checks:
+    // the applied catalog has flipped the source identity to verified.
+    if (provisional.capabilities.identity?.lineage?.successor === spec.final.alias) {
       return {
         value: catalog,
         fieldChanges: 0,
@@ -776,9 +769,25 @@ function transformCatalogFile(path: string, spec: ModelTransitionSpec, now: stri
     }
     throw new Error(`Catalog already contains final model ${spec.final.alias}`);
   }
+  if (provisional.capabilities.identity?.status !== 'provisional') {
+    throw new Error(`Catalog source ${spec.provisional.alias} must have identity.status=provisional`);
+  }
+  if (provisional.capabilities.identity.revision !== spec.provisional.identityRevision) {
+    throw new Error(`Catalog source ${spec.provisional.alias} identity revision mismatch`);
+  }
+  if (provisional.capabilities.identity.evidencePolicy !== 'held') {
+    throw new Error(`Catalog source ${spec.provisional.alias} must keep evidencePolicy=held`);
+  }
   const finalEntry = buildFinalCatalogEntry(provisional.capabilities, spec, now);
   provisional.capabilities.identity = {
     ...provisional.capabilities.identity,
+    // Disclosure verifies what the stealth identity was: the historical entry
+    // becomes a verified member of the final family (registry invariants
+    // forbid a provisional identity from declaring a successor), while its
+    // evidence stays held and its alias/wire-id/fingerprint stay untouched.
+    status: 'verified',
+    family: spec.final.family as NonNullable<ModelCapabilities['identity']>['family'],
+    verification: { ...spec.final.verification },
     lineage: {
       ...(provisional.capabilities.identity.lineage ?? {}),
       successor: spec.final.alias,

@@ -2700,16 +2700,16 @@
           "routingEligible": false
         },
         "identity": {
-          "status": "provisional",
+          "status": "verified",
           "revision": 1,
           "fingerprint": "4f6f8ce73fbcb352304542daa51b5d459a02061a90e630b48d7944f46e120a82",
           "displayName": "Ox Alpha",
-          "family": "unknown",
+          "family": "glm",
           "evidencePolicy": "held",
           "verification": {
             "source": "https://openrouter.ai/api/v1/models",
-            "observedAt": "2026-08-24T22:16:05.000Z",
-            "catalogHash": "45721528172e6489ce50462c3c5d6ff750c5cbc0dba8f315d23f81b84298579f"
+            "observedAt": "2026-08-27T22:55:48.000Z",
+            "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
           },
           "lineage": {
             "successor": "glm-5.3-flash",

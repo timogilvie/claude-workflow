@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-27T23:15:01.522Z",
+  "generatedAt": "2026-08-27T23:14:05.685Z",
   "schemaVersion": "1",
   "coverageTargetPerRole": 3,
   "models": [
@@ -252,13 +252,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 6,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "gemini-2.5-pro lacks workflow certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -272,13 +266,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 6,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "gemini-2.5-pro lacks patch certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -292,13 +280,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 6,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "gemini-2.5-pro lacks read-only certification (reason=identity_reidentified; modelId=gemini-2.5-pro; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:21.333Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-pro/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -312,13 +294,7 @@
       "availablePoolExposureCount": 82,
       "evalAttempts": 5,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "glm-5.2 lacks workflow certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -332,13 +308,7 @@
       "availablePoolExposureCount": 82,
       "evalAttempts": 5,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "glm-5.2 lacks patch certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -352,13 +322,7 @@
       "availablePoolExposureCount": 82,
       "evalAttempts": 5,
       "evalSuccesses": 2,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "glm-5.2 lacks read-only certification (reason=identity_reidentified; modelId=glm-5.2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:23.103Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -456,13 +420,7 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "kimi-k2 lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -476,13 +434,7 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "kimi-k2 lacks patch certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -496,13 +448,7 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "kimi-k2 lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:26.545Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -516,13 +462,7 @@
       "availablePoolExposureCount": 81,
       "evalAttempts": 4,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "kimi-k2.7-code lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -536,13 +476,7 @@
       "availablePoolExposureCount": 81,
       "evalAttempts": 4,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "kimi-k2.7-code lacks patch certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -556,13 +490,7 @@
       "availablePoolExposureCount": 81,
       "evalAttempts": 4,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "kimi-k2.7-code lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2.7-code; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:29.782Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2.7-code/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -576,13 +504,7 @@
       "availablePoolExposureCount": 248,
       "evalAttempts": 5,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "qwen-3-coder lacks workflow certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -596,13 +518,7 @@
       "availablePoolExposureCount": 248,
       "evalAttempts": 5,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "qwen-3-coder lacks patch certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -616,13 +532,7 @@
       "availablePoolExposureCount": 248,
       "evalAttempts": 5,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "qwen-3-coder lacks read-only certification (reason=identity_reidentified; modelId=qwen-3-coder; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:45.065Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-coder/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -641,11 +551,6 @@
           "reason": "deprecated",
           "role": "coding",
           "detail": "qwen-2.5-coder-32b is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "qwen-2.5-coder-32b lacks patch certification (reason=identity_reidentified; modelId=qwen-2.5-coder-32b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:41.854Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen-2.5-coder-32b-instruct/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "at-target"
@@ -689,13 +594,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 5,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "devstral-small lacks patch certification (reason=identity_reidentified; modelId=devstral-small; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:17.798Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-small-2603/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -709,13 +608,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "gemini-2.5-flash lacks patch certification (reason=identity_reidentified; modelId=gemini-2.5-flash; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:35:46.327Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-flash/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -729,13 +622,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "gemini-2.5-flash lacks read-only certification (reason=identity_reidentified; modelId=gemini-2.5-flash; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:35:46.327Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.5-flash/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -777,13 +664,7 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "llama-3.3-70b lacks patch certification (reason=identity_reidentified; modelId=llama-3.3-70b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:31.442Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-3.3-70b-instruct/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "below-target"
     },
     {
@@ -797,13 +678,7 @@
       "availablePoolExposureCount": 228,
       "evalAttempts": 1,
       "evalSuccesses": 1,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "llama-3.3-70b lacks read-only certification (reason=identity_reidentified; modelId=llama-3.3-70b; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:31.442Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-3.3-70b-instruct/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "below-target"
     },
     {
@@ -817,13 +692,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "llama-4-maverick lacks workflow certification (reason=identity_reidentified; modelId=llama-4-maverick; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:33.024Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-maverick/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -837,13 +706,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "llama-4-maverick lacks patch certification (reason=identity_reidentified; modelId=llama-4-maverick; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:33.024Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-maverick/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -857,13 +720,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "mistral-large-2 lacks workflow certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -877,13 +734,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "mistral-large-2 lacks patch certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -897,13 +748,7 @@
       "availablePoolExposureCount": 231,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "mistral-large-2 lacks read-only certification (reason=identity_reidentified; modelId=mistral-large-2; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:36.056Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-large-2407/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -937,13 +782,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "kimi-k2-thinking lacks workflow certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -957,13 +796,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "kimi-k2-thinking lacks patch certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -977,13 +810,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "kimi-k2-thinking lacks read-only certification (reason=identity_reidentified; modelId=kimi-k2-thinking; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:28.285Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/moonshotai/kimi-k2-thinking/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -997,13 +824,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "qwen-3-235b lacks workflow certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -1017,13 +838,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "qwen-3-235b lacks patch certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -1037,13 +852,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 4,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "qwen-3-235b lacks read-only certification (reason=identity_reidentified; modelId=qwen-3-235b; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:43.530Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen3-235b-a22b-2507/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -1062,73 +871,50 @@
           "reason": "deprecated",
           "role": "coding",
           "detail": "deepseek-coder-v2 is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "deepseek-coder-v2 lacks patch certification (reason=identity_reidentified; modelId=deepseek-coder-v2; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:14.170Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/deepseek/deepseek-coder-v2-instruct/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "zero-evidence"
     },
     {
-      "wavemillAlias": "glm-5.3-flash",
-      "openrouterId": "z-ai/glm-5.3-flash",
-      "family": "glm",
-      "launchPriorityStatus": "active",
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "provisional",
       "priorityTier": 3,
       "role": "planning",
       "directEvidenceCount": 0,
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "glm-5.3-flash lacks workflow certification (reason=identity_reidentified; modelId=glm-5.3-flash; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-27T23:08:42.789Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.3-flash/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
-      "wavemillAlias": "glm-5.3-flash",
-      "openrouterId": "z-ai/glm-5.3-flash",
-      "family": "glm",
-      "launchPriorityStatus": "active",
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "provisional",
       "priorityTier": 3,
       "role": "coding",
       "directEvidenceCount": 0,
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "glm-5.3-flash lacks patch certification (reason=identity_reidentified; modelId=glm-5.3-flash; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-27T23:08:42.789Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.3-flash/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
-      "wavemillAlias": "glm-5.3-flash",
-      "openrouterId": "z-ai/glm-5.3-flash",
-      "family": "glm",
-      "launchPriorityStatus": "active",
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "launchPriorityStatus": "provisional",
       "priorityTier": 3,
       "role": "review",
       "directEvidenceCount": 0,
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "glm-5.3-flash lacks read-only certification (reason=identity_reidentified; modelId=glm-5.3-flash; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-27T23:08:42.789Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.3-flash/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -1142,13 +928,7 @@
       "availablePoolExposureCount": 0,
       "evalAttempts": 0,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "llama-4-scout lacks patch certification (reason=identity_reidentified; modelId=llama-4-scout; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:34.521Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/meta-llama/llama-4-scout/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "zero-evidence"
     },
     {
@@ -1162,13 +942,7 @@
       "availablePoolExposureCount": 51,
       "evalAttempts": 3,
       "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "mistral-medium-3 lacks patch certification (reason=identity_reidentified; modelId=mistral-medium-3; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:37.501Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/mistralai/mistral-medium-3-5/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
+      "blockers": [],
       "status": "at-target"
     },
     {
@@ -1207,11 +981,6 @@
           "reason": "deprecated",
           "role": "coding",
           "detail": "gemini-2.0-flash is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "gemini-2.0-flash lacks patch certification (reason=identity_reidentified; modelId=gemini-2.0-flash; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:19.514Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/google/gemini-2.0-flash-001/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "zero-evidence"
@@ -1232,86 +1001,6 @@
           "reason": "deprecated",
           "role": "coding",
           "detail": "grok-code-fast is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "grok-code-fast lacks patch certification (reason=identity_reidentified; modelId=grok-code-fast; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:24.941Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/x-ai/grok-code-fast-1/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "ox-alpha",
-      "openrouterId": "stealth/ox-alpha",
-      "family": "unknown",
-      "launchPriorityStatus": "deprecated",
-      "priorityTier": 3,
-      "role": "planning",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "deprecated",
-          "role": "planning",
-          "detail": "ox-alpha is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "planning",
-          "detail": "ox-alpha lacks workflow certification (reason=identity_reidentified; modelId=ox-alpha; nativeCapability=certified; requiredPhase=workflow; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T22:22:48.642Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/stealth/ox-alpha/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "ox-alpha",
-      "openrouterId": "stealth/ox-alpha",
-      "family": "unknown",
-      "launchPriorityStatus": "deprecated",
-      "priorityTier": 3,
-      "role": "coding",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "deprecated",
-          "role": "coding",
-          "detail": "ox-alpha is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "ox-alpha lacks patch certification (reason=identity_reidentified; modelId=ox-alpha; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T22:22:48.642Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/stealth/ox-alpha/v3.json; artifactScope=global; subject=current-registry)"
-        }
-      ],
-      "status": "zero-evidence"
-    },
-    {
-      "wavemillAlias": "ox-alpha",
-      "openrouterId": "stealth/ox-alpha",
-      "family": "unknown",
-      "launchPriorityStatus": "deprecated",
-      "priorityTier": 3,
-      "role": "review",
-      "directEvidenceCount": 0,
-      "availablePoolExposureCount": 0,
-      "evalAttempts": 0,
-      "evalSuccesses": 0,
-      "blockers": [
-        {
-          "reason": "deprecated",
-          "role": "review",
-          "detail": "ox-alpha is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "review",
-          "detail": "ox-alpha lacks read-only certification (reason=identity_reidentified; modelId=ox-alpha; nativeCapability=certified; requiredPhase=read-only; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T22:22:48.642Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/stealth/ox-alpha/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "zero-evidence"
@@ -1332,11 +1021,6 @@
           "reason": "deprecated",
           "role": "coding",
           "detail": "qwen-2.5-72b is deprecated"
-        },
-        {
-          "reason": "missing-native-certification",
-          "role": "coding",
-          "detail": "qwen-2.5-72b lacks patch certification (reason=identity_reidentified; modelId=qwen-2.5-72b; nativeCapability=certified; requiredPhase=patch; foundPhase=workflow; requiredSuiteVersion=v3; foundSuiteVersion=v3; certifiedAt=2026-08-24T12:36:40.337Z; artifactPath=/Users/timothyogilvie/.wavemill/native-agent-certifications/qwen/qwen-2.5-72b-instruct/v3.json; artifactScope=global; subject=current-registry)"
         }
       ],
       "status": "zero-evidence"
@@ -1344,11 +1028,79 @@
   ],
   "excludedRecords": 0,
   "exclusionReasonCounts": {},
-  "zeroEvidence": [],
+  "zeroEvidence": [
+    "kimi-k2",
+    "llama-4-scout",
+    "ox-alpha"
+  ],
   "belowTarget": [
-    "claude-opus-4-7"
+    "claude-opus-4-7",
+    "llama-3.3-70b"
   ],
   "samplingPlan": [
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "planning",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for planning",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "coding",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "role": "review",
+      "tier": "zero-evidence-active",
+      "reason": "kimi-k2 has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "llama-4-scout",
+      "openrouterId": "meta-llama/llama-4-scout",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "llama-4-scout has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "role": "planning",
+      "tier": "zero-evidence-watchlist",
+      "reason": "ox-alpha has zero direct evidence for planning",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "role": "coding",
+      "tier": "zero-evidence-watchlist",
+      "reason": "ox-alpha has zero direct evidence for coding",
+      "gap": 3,
+      "cost": null
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "role": "review",
+      "tier": "zero-evidence-watchlist",
+      "reason": "ox-alpha has zero direct evidence for review",
+      "gap": 3,
+      "cost": null
+    },
     {
       "wavemillAlias": "claude-opus-4-7",
       "openrouterId": "anthropic/claude-opus-4.7",
@@ -1378,22 +1130,22 @@
     }
   ],
   "summary": {
-    "totalLaunchPriority": 33,
-    "blockedCount": 46,
-    "sampledCount": 3,
+    "totalLaunchPriority": 32,
+    "blockedCount": 7,
+    "sampledCount": 10,
     "byRole": {
       "planning": {
-        "zero": 3,
+        "zero": 2,
         "below": 1,
         "at": 14
       },
       "coding": {
-        "zero": 9,
+        "zero": 8,
         "below": 2,
         "at": 22
       },
       "review": {
-        "zero": 3,
+        "zero": 2,
         "below": 2,
         "at": 17
       }

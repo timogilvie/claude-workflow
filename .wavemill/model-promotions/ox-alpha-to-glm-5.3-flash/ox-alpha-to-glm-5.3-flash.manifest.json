@@ -5,7 +5,7 @@
   "mode": "apply",
   "status": "applied",
   "repoDir": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity",
-  "createdAt": "2026-08-27T23:07:46.711Z",
+  "createdAt": "2026-08-27T23:14:55.006Z",
   "provisional": {
     "alias": "ox-alpha",
     "providerNativeId": "stealth/ox-alpha",
@@ -315,13 +315,15 @@
       "path": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/audits/launch-priority-coverage.json",
       "relativePath": ".wavemill/audits/launch-priority-coverage.json",
       "kind": "json",
-      "beforeHash": "157ac16844d0a7be8fa5d18024a463c64c4a46f42d50a34fd0a8db68dd002224",
-      "afterHash": "157ac16844d0a7be8fa5d18024a463c64c4a46f42d50a34fd0a8db68dd002224",
+      "beforeHash": "3254061496e800dda30b81c0b0c08013d89d2889d5a1de20481a0d5015a341da",
+      "afterHash": "c06d1f705929822c36fb5467f20164fbc45c23822b4ab03d92bd05607630dd16",
       "recordCount": 1,
-      "fieldChanges": 0,
-      "oldReferencesBefore": 0,
+      "fieldChanges": 12,
+      "oldReferencesBefore": 12,
       "finalReferencesBefore": 0,
-      "finalReferencesAfter": 0
+      "finalReferencesAfter": 12,
+      "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/.wavemill/audits/launch-priority-coverage.json",
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/audits/.launch-priority-coverage.json.ox-alpha-to-glm-5.3-flash.79384.promotion-tmp"
     },
     {
       "path": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/claude-permissions.json",
@@ -676,14 +678,14 @@
       "relativePath": "shared/fixtures/model-registry.v1.json",
       "kind": "catalog",
       "beforeHash": "8aa92391516fae3d9ea0c4dc139528bd7f04850303fd1b9a747d52d221446b09",
-      "afterHash": "33ffbdef39197af80e977857032938fa6499acfcb4e43b4a5a98cf51f5178a7b",
+      "afterHash": "9ea2f83ad65e7e45f7b8bfa008c61b5c2c53964c97551fbf4e430c2cf66c88fe",
       "recordCount": 1,
       "fieldChanges": 1,
       "oldReferencesBefore": 0,
       "finalReferencesBefore": 0,
       "finalReferencesAfter": 5,
       "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/shared/fixtures/model-registry.v1.json",
-      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/.model-registry.v1.json.ox-alpha-to-glm-5.3-flash.6500.promotion-tmp"
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/.model-registry.v1.json.ox-alpha-to-glm-5.3-flash.79384.promotion-tmp"
     },
     {
       "path": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/model_30_launch_priority_models.v1.json",
@@ -697,7 +699,7 @@
       "finalReferencesBefore": 0,
       "finalReferencesAfter": 2,
       "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/shared/fixtures/model_30_launch_priority_models.v1.json",
-      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/.model_30_launch_priority_models.v1.json.ox-alpha-to-glm-5.3-flash.6500.promotion-tmp"
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/.model_30_launch_priority_models.v1.json.ox-alpha-to-glm-5.3-flash.79384.promotion-tmp"
     },
     {
       "path": "/Users/timothyogilvie/Dropbox/wavemill/worktrees/promote-ox-alpha-when-openrouter-discloses-its-final-identity/shared/fixtures/openrouter-responses/errors/auth-401.json",
@@ -1558,11 +1560,11 @@
     "evalIdsConserved": true,
     "totalRecordsBefore": 147,
     "totalRecordsAfter": 147,
-    "totalFieldChanges": 3,
-    "oldReferencesBefore": 2,
+    "totalFieldChanges": 15,
+    "oldReferencesBefore": 14,
     "oldReferencesAfter": 0,
     "finalReferencesBefore": 0,
-    "finalReferencesAfter": 7
+    "finalReferencesAfter": 19
   },
   "normalizedCost": {
     "complete": 0,
