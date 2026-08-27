@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -57,6 +57,8 @@ export interface MergeExecutionResult {
   prNumber: number;
   phase?: string;
   failureExcerpt?: string;
+  /** PRs still holding the wm:merging lane lock when phase is 'merge-lane-held'. */
+  heldBy?: number[];
   haltLoop: boolean;
 }
 
@@ -68,6 +70,7 @@ export interface MergeExecutionDeps {
   releaseToBlocked: (prNumber: number) => void;
   releaseMerged: (prNumber: number) => void;
   restoreReady: (prNumber: number) => void;
+  reclaimStaleMerging: (prNumber: number) => void;
   retrySleep: (ms: number) => Promise<void>;
   currentTimeMs: () => number;
   setMergeRetryWindow: (prNumber: number, untilIso: string | null, repoDir: string) => void;
@@ -461,7 +464,22 @@ export async function executeMerge(
     };
   }
   if (activeMerges.length > 0) {
-    return { status: 'skipped', prNumber: candidate.number, haltLoop: false };
+    const remaining = await reclaimStaleMergeLocks(
+      activeMerges,
+      integrationConfig.mergeLockTimeoutMinutes,
+      options.repoDir,
+      deps,
+    );
+    if (remaining.length > 0) {
+      return {
+        status: 'skipped',
+        prNumber: candidate.number,
+        phase: 'merge-lane-held',
+        heldBy: remaining,
+        haltLoop: false,
+      };
+    }
+    // Every holder's lock was stale and reclaimed — the lane is free, proceed.
   }
 
   try {
@@ -471,9 +489,18 @@ export async function executeMerge(
     });
   } catch (error) {
     try {
-      deps.restoreReady(candidate.number);
-    } catch {
-      // Preserve the acquisition failure; restore is best-effort.
+      await retryTransient(() => deps.restoreReady(candidate.number), {
+        label: 'restore ready label',
+        sleep: deps.retrySleep,
+      });
+    } catch (restoreError) {
+      // Preserve the acquisition failure in the result, but never silently: a
+      // failed restore can leave wm:merging applied, deadlocking the lane
+      // until the stale-lock timeout reclaims it.
+      console.warn(
+        `tend: failed to restore wm:ready on PR #${candidate.number} after merging-label acquisition failed; `
+        + `wm:merging may be leaked until the stale-lock timeout reclaims it: ${errorMessage(restoreError)}`,
+      );
     }
     return {
       status: 'skipped',
@@ -492,9 +519,17 @@ export async function executeMerge(
       // Comment posting failure is non-fatal; always release the PR from merging state.
     }
     try {
-      deps.releaseToBlocked(candidate.number);
-    } catch {
-      // Label update failure is non-fatal; PR will be manually reviewed or auto-retried on next cycle.
+      await retryTransient(() => deps.releaseToBlocked(candidate.number), {
+        label: 'set blocked label',
+        sleep: deps.retrySleep,
+      });
+    } catch (error) {
+      // Non-fatal, but never silent: a failed release leaves wm:merging applied,
+      // deadlocking the lane until the stale-lock timeout reclaims it.
+      console.warn(
+        `tend: failed to release PR #${candidate.number} from merging to blocked; `
+        + `wm:merging may be leaked until the stale-lock timeout reclaims it: ${errorMessage(error)}`,
+      );
     }
     return { status: 'blocked', prNumber: candidate.number, phase, failureExcerpt, haltLoop: false };
   };
@@ -642,7 +677,16 @@ async function withScratchWorktree<T>(
     cwd: repoDir,
     timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
-  const worktreePath = join(commonGitDir, 'wavemill-tend', String(prNumber));
+  const tendWorktreeDir = join(commonGitDir, 'wavemill-tend');
+  const worktreePath = join(tendWorktreeDir, String(prNumber));
+
+  // Safe because this runs only while holding the exclusive wm:merging lane
+  // lock: no other merge can be in flight, so every existing wavemill-tend
+  // entry is an orphan of an interrupted run whose scratch contents (a
+  // detached checkout that is re-fetched and re-rebased on every attempt) are
+  // worthless. Without this, a leftover directory makes `git worktree add`
+  // fail with "already exists" on every subsequent attempt for that PR.
+  reapStaleTendWorktrees(tendWorktreeDir, repoDir, shellRunner);
 
   // Fetch the latest remote tip for the PR branch so the detached worktree
   // operates on what GitHub considers the branch's current state, not a
@@ -675,6 +719,197 @@ async function withScratchWorktree<T>(
       // A cleanup failure should not change the PR's merge outcome.
     }
   }
+}
+
+/**
+ * Best-effort removal of leftover tend scratch worktrees from interrupted
+ * runs. `git worktree remove` handles registered worktrees; the follow-up
+ * rmSync covers directories whose registration was already pruned (worktree
+ * remove fails on those, but `git worktree add` would still refuse the
+ * non-empty directory). A final `git worktree prune` drops any registration
+ * whose directory is now gone.
+ */
+function reapStaleTendWorktrees(
+  tendWorktreeDir: string,
+  repoDir: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(tendWorktreeDir);
+  } catch {
+    return; // Missing directory means nothing to reap.
+  }
+  if (entries.length === 0) {
+    return;
+  }
+
+  for (const entry of entries) {
+    const stalePath = join(tendWorktreeDir, entry);
+    try {
+      shellRunner(
+        `git worktree remove --force ${escapeShellArg(stalePath)}`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
+      );
+    } catch {
+      // Registration may already be pruned; the directory removal below still applies.
+    }
+    try {
+      if (existsSync(stalePath)) {
+        rmSync(stalePath, { recursive: true, force: true });
+      }
+    } catch (error) {
+      console.warn(`tend: failed to delete stale tend worktree directory ${stalePath}: ${errorMessage(error)}`);
+      continue;
+    }
+    console.warn(`tend: reaped stale tend worktree ${stalePath}`);
+  }
+
+  try {
+    shellRunner(
+      'git worktree prune',
+      { encoding: 'utf-8', cwd: repoDir, timeout: GIT_MUTATION_TIMEOUT_MS },
+    );
+  } catch (error) {
+    console.warn(`tend: git worktree prune failed after reaping stale tend worktrees: ${errorMessage(error)}`);
+  }
+}
+
+/**
+ * Evaluate every current wm:merging holder against the stale-lock timeout and
+ * reclaim locks that are provably stale. Returns the holders still considered
+ * live (the lane stays closed while this list is non-empty).
+ *
+ * Fail-safe bias: any uncertainty — timeout disabled, events query failed, no
+ * labeled event found, reclaim label call failed — treats the holder as NOT
+ * stale. A wrongly-held skip self-resolves on a later poll once the lock ages
+ * past the threshold; a wrongly-reclaimed lock could double-run the merge lane.
+ */
+async function reclaimStaleMergeLocks(
+  activeMerges: number[],
+  mergeLockTimeoutMinutes: number,
+  repoDir: string,
+  deps: MergeExecutionDeps,
+): Promise<number[]> {
+  const timeoutMs = mergeLockTimeoutMinutes * 60_000;
+  const remaining: number[] = [];
+
+  for (const holder of activeMerges) {
+    const appliedAtMs = timeoutMs > 0 ? await readMergingLabelAppliedAt(holder, repoDir, deps) : null;
+    if (appliedAtMs === null || deps.currentTimeMs() - appliedAtMs <= timeoutMs) {
+      remaining.push(holder);
+      continue;
+    }
+
+    const heldMinutes = Math.round((deps.currentTimeMs() - appliedAtMs) / 60_000);
+    try {
+      await retryTransient(() => deps.reclaimStaleMerging(holder), {
+        label: 'reclaim stale merging label',
+        sleep: deps.retrySleep,
+      });
+    } catch (error) {
+      console.warn(
+        `tend: failed to reclaim stale wm:merging lock from PR #${holder} (held ~${heldMinutes}m): ${errorMessage(error)}`,
+      );
+      remaining.push(holder);
+      continue;
+    }
+
+    console.warn(
+      `tend: reclaimed stale wm:merging lock from PR #${holder} (held ~${heldMinutes}m > ${mergeLockTimeoutMinutes}m timeout)`,
+    );
+    try {
+      postFailureComment(
+        holder,
+        [
+          '### Wavemill merge-lane lock reclaimed',
+          '',
+          `This PR held \`${WM_LABELS.merging}\` for ~${heldMinutes} minutes without merging `
+          + `(timeout: ${mergeLockTimeoutMinutes} minutes), blocking the merge lane. `
+          + `The lock was reclaimed and the PR returned to \`${WM_LABELS.ready}\`; `
+          + 'it will be re-evaluated on a future tend poll.',
+        ].join('\n'),
+        repoDir,
+        deps.shellRunner,
+      );
+    } catch {
+      // The audit comment is best-effort; the reclaim itself already succeeded.
+    }
+  }
+
+  return remaining;
+}
+
+/**
+ * Read the epoch-ms timestamp of the most recent `labeled` event applying
+ * wm:merging to a PR, from the GitHub issue-events API. GitHub is the
+ * authoritative cross-process record of lock age — the label may have been
+ * applied by a process on another machine or one that has since died, so a
+ * local marker would be lost with it.
+ *
+ * Returns null (treated as "not provably stale") when the query fails, the
+ * repo cannot be resolved, or no matching event exists.
+ */
+async function readMergingLabelAppliedAt(
+  prNumber: number,
+  repoDir: string,
+  deps: MergeExecutionDeps,
+): Promise<number | null> {
+  let repo: string | null;
+  try {
+    const remoteUrl = String(deps.shellRunner('git remote get-url origin', {
+      encoding: 'utf-8',
+      cwd: repoDir,
+      timeout: GIT_COMMAND_TIMEOUT_MS,
+    })).trim();
+    repo = parseOwnerRepoFromRemoteUrl(remoteUrl);
+  } catch {
+    repo = null;
+  }
+  if (!repo) {
+    console.warn(`tend: cannot resolve origin repo for wm:merging staleness check on PR #${prNumber}`);
+    return null;
+  }
+
+  let output: string;
+  try {
+    // --jq runs per page under --paginate, emitting NDJSON lines — this
+    // sidesteps --paginate's concatenated-arrays JSON output.
+    output = await retryTransient(
+      () => String(deps.shellRunner(
+        `gh api ${escapeShellArg(`repos/${repo}/issues/${prNumber}/events`)} --paginate `
+        + `--jq ${escapeShellArg('.[] | select(.event == "labeled") | {name: .label.name, at: .created_at}')}`,
+        { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+      )),
+      { label: 'gh issue label events', sleep: deps.retrySleep },
+    );
+  } catch (error) {
+    console.warn(`tend: failed to read label events for PR #${prNumber}: ${errorMessage(error)}`);
+    return null;
+  }
+
+  let latestMs: number | null = null;
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    if (!isRecord(event) || event.name !== WM_LABELS.merging || typeof event.at !== 'string') {
+      continue;
+    }
+    const appliedAtMs = Date.parse(event.at);
+    if (Number.isFinite(appliedAtMs) && (latestMs === null || appliedAtMs > latestMs)) {
+      latestMs = appliedAtMs;
+    }
+  }
+
+  return latestMs;
 }
 
 async function listMergingPrs(repoDir: string, deps: MergeExecutionDeps): Promise<number[]> {
@@ -1106,6 +1341,12 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
       setWavemillMerged(prNumber);
     },
     restoreReady: (prNumber) => {
+      setWavemillReady(prNumber);
+    },
+    reclaimStaleMerging: (prNumber) => {
+      // setWavemillReady clears both wm:merging and wm:blocked — the holder held
+      // wm:ready before acquireMerging swapped it, and the in-lane ready gate
+      // re-validates before any reclaimed PR can actually merge.
       setWavemillReady(prNumber);
     },
     retrySleep: sleep,
@@ -1802,8 +2043,12 @@ function resolveOwnerRepoFromRemote(repoDir: string): string | null {
     cwd: repoDir,
     timeout: GIT_COMMAND_TIMEOUT_MS,
   })).trim();
-  const match = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
 
+  return parseOwnerRepoFromRemoteUrl(remoteUrl);
+}
+
+function parseOwnerRepoFromRemoteUrl(remoteUrl: string): string | null {
+  const match = remoteUrl.match(/github\.com[:/]([^/]+\/[^/.]+?)(?:\.git)?$/);
   return match?.[1] ?? null;
 }
 
