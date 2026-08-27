@@ -1,0 +1,61 @@
+{
+  "schemaVersion": "1",
+  "promotionId": "hok-2866-glm-5.3-flash",
+  "expected": {
+    "maximumOldReferences": 0
+  },
+  "provisional": {
+    "alias": "ox-alpha",
+    "providerNativeId": "stealth/ox-alpha",
+    "identityRevision": 1
+  },
+  "final": {
+    "alias": "glm-5.3-flash",
+    "provider": "openrouter",
+    "providerNativeId": "z-ai/glm-5.3-flash",
+    "identityRevision": 2,
+    "displayName": "GLM 5.3 Flash",
+    "family": "glm",
+    "pricingRevision": "openrouter-2026-08-27",
+    "pricing": {
+      "inputCostPerMTok": 0.075,
+      "outputCostPerMTok": 0.25,
+      "cacheWriteCostPerMTok": 0,
+      "cacheReadCostPerMTok": 0.015
+    },
+    "verification": {
+      "source": "https://openrouter.ai/api/v1/models",
+      "observedAt": "2026-08-27T23:03:50.000Z",
+      "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
+    },
+    "capabilities": {
+      "vendor": "z-ai",
+      "strengths": [
+        "verified catalog: long context",
+        "verified catalog: tools",
+        "verified catalog: multimodal",
+        "efficient coding and long-horizon agent tasks (provider description)"
+      ],
+      "weaknesses": [
+        "no wavemill eval history yet"
+      ],
+      "contextWindowTokens": 1310720,
+      "supportedModel": {
+        "routingEligible": false,
+        "launchEligible": false,
+        "canonicalArtifactIdentity": {
+          "provider": "z-ai",
+          "model": "glm-5.3-flash",
+          "suiteVersion": "v3"
+        }
+      },
+      "nativeCapability": {
+        "readOnlyNative": "partial"
+      }
+    }
+  },
+  "disclosure": {
+    "disclosedAt": "2026-08-26T13:59:01.000Z",
+    "source": "https://openrouter.ai/z-ai/glm-5.3-flash"
+  }
+}
