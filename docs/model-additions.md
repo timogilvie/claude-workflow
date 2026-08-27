@@ -125,8 +125,16 @@ For provisional entries:
 - Do not run launch-priority `--persist` for held provisional identities; those
   observations are operational only and must not feed performance consumers.
 
-Ox Alpha follows this path as alias `ox-alpha` with wire ID
-`stealth/ox-alpha`. Roll back a provisional native model by changing its
+Ox Alpha followed this path as alias `ox-alpha` with wire ID
+`stealth/ox-alpha` until OpenRouter disclosed it as Z.ai GLM 5.3 Flash. It was
+promoted to `glm-5.3-flash` (wire ID `z-ai/glm-5.3-flash`) via the standard
+promotion path: `transitions/ox-alpha-to-glm-5.3-flash.json` is the transition
+spec, and the generated manifest/backups live under
+`.wavemill/model-promotions/hok-2866-glm-5.3-flash/` with verification and
+certification audit artifacts under
+`.wavemill/audits/model-promotions/hok-2866-glm-5.3-flash/`. The deprecated
+`ox-alpha` entry remains historically resolvable with successor lineage but is
+not launchable. Roll back a provisional native model by changing its
 lifecycle to `blocked` and its launch-priority status to `deprecated`; keep the
 identity and certification history for audit.
 

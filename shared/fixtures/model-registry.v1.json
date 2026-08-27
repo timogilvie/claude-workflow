@@ -2838,10 +2838,10 @@
         "nativeCapability": {
           "nativeProvider": "openrouter",
           "piTransportKind": "openai-completions",
-          "readOnlyNative": "partial",
+          "readOnlyNative": "certified",
           "certification": {
             "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-08-24T22:22:00.000Z",
+            "certifiedAt": "2026-08-27T23:08:42.789Z",
             "certificationSuiteVersion": "v3"
           },
           "compatFlags": {
@@ -2874,8 +2874,8 @@
           "compatibilityFlags": {
             "thinkingFormat": "openrouter"
           },
-          "launchEligible": false,
-          "routingEligible": false
+          "launchEligible": true,
+          "routingEligible": true
         },
         "identity": {
           "status": "verified",
@@ -2883,7 +2883,7 @@
           "fingerprint": "e4d8c26ce53c570ad10a1165fba61332b429c49313f4f4c2635ec858ec8384b6",
           "displayName": "GLM 5.3 Flash",
           "family": "glm",
-          "evidencePolicy": "held",
+          "evidencePolicy": "eligible",
           "verification": {
             "source": "https://openrouter.ai/api/v1/models",
             "observedAt": "2026-08-27T23:03:50.000Z",
@@ -3299,7 +3299,7 @@
       "wavemillAlias": "ox-alpha",
       "openrouterId": "stealth/ox-alpha",
       "family": "unknown",
-      "status": "provisional",
+      "status": "deprecated",
       "priorityTier": 3,
       "roleEligibility": [
         "planning",

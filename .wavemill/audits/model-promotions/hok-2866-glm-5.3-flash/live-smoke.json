@@ -1,0 +1,26 @@
+{
+  "dryRun": [
+    {
+      "modelId": "glm-5.3-flash",
+      "family": "glm",
+      "status": "ok",
+      "requestedWireId": "z-ai/glm-5.3-flash",
+      "providerReturnedModel": "z-ai/glm-5.3-flash",
+      "catalogHash": "5414e7f944bd8b4a2ed9ef17f8d6c58cc2d889ebc58aed2319f3f04a8909a5c9",
+      "checkedAt": "2026-08-27T23:11:10.091Z",
+      "costUsd": 0.000136
+    }
+  ],
+  "live": [
+    {
+      "modelId": "glm-5.3-flash",
+      "family": "glm",
+      "status": "ok",
+      "requestedWireId": "z-ai/glm-5.3-flash",
+      "providerReturnedModel": "z-ai/glm-5.3-flash",
+      "catalogHash": "5414e7f944bd8b4a2ed9ef17f8d6c58cc2d889ebc58aed2319f3f04a8909a5c9",
+      "checkedAt": "2026-08-27T23:11:18.197Z",
+      "costUsd": 0.000038225
+    }
+  ]
+}
