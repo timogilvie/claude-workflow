@@ -360,6 +360,24 @@ function parsePromotionManifestRow(value: unknown): HokusaiPromotionManifestRow 
   };
 }
 
+/**
+ * A model-promotion manifest (shared/lib/model-promotion.ts) that promoted no
+ * evidence is a legitimate zero-row reconciliation input: the promotion held
+ * all evidence, so the report must show zero backfills and zero duplicates
+ * rather than refusing. The manifest proves this itself via its conservation
+ * block (eval IDs conserved). Hand-written row manifests keep the strict
+ * explicit-rows requirement.
+ */
+function isZeroEvidencePromotionManifest(record: Record<string, unknown>): boolean {
+  const conservation = record.conservation;
+  if (!conservation || typeof conservation !== 'object') {
+    return false;
+  }
+  return record.schemaVersion === '1'
+    && typeof record.promotionId === 'string'
+    && (conservation as Record<string, unknown>).evalIdsConserved === true;
+}
+
 export function readPromotionBackfillManifest(path: string): HokusaiPromotionBackfillManifest {
   const text = readFileSync(path, 'utf-8');
   const sourceHash = sha256Hex(text);
@@ -373,7 +391,7 @@ export function readPromotionBackfillManifest(path: string): HokusaiPromotionBac
   const record = parsed as Record<string, unknown>;
   const manifestId = stringField(record, ['manifestId', 'manifest_id', 'id']) ?? `sha256:${sourceHash}`;
   const rows = rowsFromManifest(parsed).map(parsePromotionManifestRow);
-  if (rows.length === 0) {
+  if (rows.length === 0 && !isZeroEvidencePromotionManifest(record)) {
     throw new Error('Promotion manifest must include explicit promoted eval rows');
   }
   const seen = new Set<string>();
