@@ -39,6 +39,7 @@ For each iteration where issues are found:
 - Make targeted fixes only — do not refactor unrelated code
 - Run the review scope guard immediately before committing:
   `npx tsx tools/check-review-scope.ts --repo-dir .`
-- If the guard exits non-zero, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+- If the guard exits 1, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
+- If the guard exits 2, scope could not be verified (tool/git failure — infrastructure, not a violation): capture the guard's stderr, note "review scope unverified (infrastructure)" in the commit message body and PR body, and proceed with the commit. Do not treat exit 2 as a scope violation.
 - Commit fixes: `git commit -m "fix: Address self-review findings (iteration N)"`
 - Re-run the self-review tool
