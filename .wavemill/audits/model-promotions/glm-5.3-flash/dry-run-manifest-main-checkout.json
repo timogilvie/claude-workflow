@@ -1,0 +1,206 @@
+{
+  "schemaVersion": "1",
+  "manifestId": "ox-alpha-to-glm-5.3-flash",
+  "promotionId": "ox-alpha-to-glm-5.3-flash",
+  "mode": "dry-run",
+  "status": "planned",
+  "repoDir": "/Users/timothyogilvie/Dropbox/wavemill",
+  "createdAt": "2026-08-27T23:01:12.145Z",
+  "provisional": {
+    "alias": "ox-alpha",
+    "providerNativeId": "stealth/ox-alpha",
+    "identityRevision": 1
+  },
+  "final": {
+    "alias": "glm-5.3-flash",
+    "provider": "openrouter",
+    "providerNativeId": "z-ai/glm-5.3-flash",
+    "identityRevision": 1,
+    "displayName": "GLM 5.3 Flash",
+    "family": "glm",
+    "pricingRevision": "openrouter-2026-08-27",
+    "pricing": {
+      "inputCostPerMTok": 0.075,
+      "outputCostPerMTok": 0.25,
+      "cacheReadCostPerMTok": 0.015,
+      "cacheWriteCostPerMTok": 0
+    },
+    "verification": {
+      "source": "https://openrouter.ai/api/v1/models",
+      "observedAt": "2026-08-27T22:55:48.000Z",
+      "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
+    },
+    "capabilities": {
+      "vendor": "z-ai",
+      "contextWindowTokens": 1310720,
+      "multimodal": {
+        "text": true,
+        "image": true,
+        "video": true
+      },
+      "strengths": [
+        "verified catalog: 1,310,720-token context",
+        "verified catalog: tools and structured outputs",
+        "verified catalog: text+image+video multimodal",
+        "verified catalog: low per-token cost"
+      ],
+      "weaknesses": [
+        "no local performance evidence yet",
+        "watchlist maturity"
+      ],
+      "defaultLadderEligible": false,
+      "supportedModel": {
+        "canonicalArtifactIdentity": {
+          "provider": "z-ai",
+          "model": "glm-5.3-flash",
+          "suiteVersion": "v2"
+        },
+        "launchEligible": false,
+        "routingEligible": false
+      },
+      "nativeCapability": {
+        "readOnlyNative": "partial"
+      },
+      "identity": {
+        "evidencePolicy": "held"
+      }
+    }
+  },
+  "disclosure": {
+    "disclosedAt": "2026-08-27T22:55:48.000Z",
+    "source": "https://openrouter.ai/z-ai/glm-5.3-flash"
+  },
+  "files": [
+    {
+      "path": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/workflow-state.json",
+      "relativePath": ".wavemill/workflow-state.json",
+      "kind": "json",
+      "beforeHash": "52e0b52e2170791ecd6d0ac7103aae2f60d0ee1ec203a98beb3b6ebc2dcbffc1",
+      "afterHash": "43fc4d6f9a51ce82ad7a8897650bde14268e8060e1c07bb14ced8971c4c5f253",
+      "recordCount": 1,
+      "fieldChanges": 4,
+      "oldReferencesBefore": 4,
+      "finalReferencesBefore": 0,
+      "finalReferencesAfter": 4,
+      "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/.wavemill/workflow-state.json",
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/.workflow-state.json.ox-alpha-to-glm-5.3-flash.76925.promotion-tmp"
+    },
+    {
+      "path": "/Users/timothyogilvie/Dropbox/wavemill/shared/fixtures/model-registry.v1.json",
+      "relativePath": "shared/fixtures/model-registry.v1.json",
+      "kind": "catalog",
+      "beforeHash": "8aa92391516fae3d9ea0c4dc139528bd7f04850303fd1b9a747d52d221446b09",
+      "afterHash": "e92cb2e7aac647f8254f7d49077c0c6369baba6ac778774794b91d1df2c87a65",
+      "recordCount": 1,
+      "fieldChanges": 1,
+      "oldReferencesBefore": 0,
+      "finalReferencesBefore": 0,
+      "finalReferencesAfter": 5,
+      "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/shared/fixtures/model-registry.v1.json",
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/shared/fixtures/.model-registry.v1.json.ox-alpha-to-glm-5.3-flash.76925.promotion-tmp"
+    },
+    {
+      "path": "/Users/timothyogilvie/Dropbox/wavemill/shared/fixtures/model_30_launch_priority_models.v1.json",
+      "relativePath": "shared/fixtures/model_30_launch_priority_models.v1.json",
+      "kind": "json",
+      "beforeHash": "1256cb445593d36934a4190c741f500b88f5509da81cbb947378e144ea008f7b",
+      "afterHash": "0f4129509af81ad4ba8cc50a2262058d85f6904be53172b1fed6de50cb5c2d8d",
+      "recordCount": 1,
+      "fieldChanges": 2,
+      "oldReferencesBefore": 2,
+      "finalReferencesBefore": 0,
+      "finalReferencesAfter": 2,
+      "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/shared/fixtures/model_30_launch_priority_models.v1.json",
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/shared/fixtures/.model_30_launch_priority_models.v1.json.ox-alpha-to-glm-5.3-flash.76925.promotion-tmp"
+    }
+  ],
+  "conservation": {
+    "evalIdsConserved": true,
+    "totalRecordsBefore": 93633,
+    "totalRecordsAfter": 93633,
+    "totalFieldChanges": 7,
+    "oldReferencesBefore": 6,
+    "oldReferencesAfter": 0,
+    "finalReferencesBefore": 0,
+    "finalReferencesAfter": 11,
+    "evalIdsBeforeCount": 2173,
+    "evalIdsAfterCount": 2173,
+    "evalIdsBeforeSha256": "9714425d53424a1f844c9b9a3146bac24f3e67a688f6f4f9fa283ed3226e4f92",
+    "evalIdsAfterSha256": "9714425d53424a1f844c9b9a3146bac24f3e67a688f6f4f9fa283ed3226e4f92"
+  },
+  "normalizedCost": {
+    "complete": 0,
+    "missingTokenUsage": 0,
+    "missingCacheUsage": 0,
+    "missingCachePricing": 0
+  },
+  "lineage": {
+    "catalogPath": "shared/fixtures/model-registry.v1.json",
+    "provisionalSuccessor": "glm-5.3-flash",
+    "finalPredecessor": "ox-alpha"
+  },
+  "derivedCorpora": [
+    {
+      "path": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/aggregated-evals.jsonl",
+      "relativePath": ".wavemill/evals/aggregated-evals.jsonl",
+      "sourcePath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/evals.jsonl",
+      "beforeHash": "65c69629e34d66db2e1f8dcfed8a0b35465ba0ab23eee3bd0a26a3d269122cf3",
+      "afterHash": "cec39388770a28863da26d51582b37180fd10af6ae4709b789bbb12c73b3c4dd",
+      "beforeRecordCount": 349,
+      "afterRecordCount": 1359,
+      "sourceRawRecordCount": 1359,
+      "duplicatesRemoved": 0,
+      "backupPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/backups/.wavemill/evals/aggregated-evals.jsonl",
+      "tempPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/.aggregated-evals.jsonl.ox-alpha-to-glm-5.3-flash.76925.promotion-tmp"
+    }
+  ],
+  "diagnostics": [
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1119/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1119/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1174/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1174/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1177__challenger/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1177__challenger/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1180/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1180/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1183/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1183/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1186/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1186/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1188/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1188/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1193/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1193/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1198__challenger/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1198__challenger/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1204/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1204/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1206/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1206/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1212/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1212/post-expansion-route.json: Unexpected token 'R', \"Router: Lo\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1212__challenger/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1212__challenger/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1221/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1221/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1223/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1223/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1224/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1224/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1225/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1225/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1234/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1234/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1235/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1235/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1237/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1237/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1237__challenger/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1237__challenger/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1239/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1239/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1244__challenger/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1244__challenger/post-expansion-route.json: Unexpected token 'R', \"Router: Lo\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1272/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1272/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1285/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1285/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1293/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1293/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1294/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1294/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1333/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1333/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1335/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1335/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1337/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1337/post-expansion-route.json: Unexpected token 'R', \"Router: Lo\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1342/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1342/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1346/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1346/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1359/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1359/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1378/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1378/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1439/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1439/post-expansion-route.json: Unexpected token 'R', \"Router: Lo\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1456_c/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1456_c/post-expansion-route.json: Unexpected token 'A', \"Auto-aggre\"... is not valid JSON",
+    "Skipped unparseable json file .wavemill/evals/artifacts/HOK-1482/post-expansion-route.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/.wavemill/evals/artifacts/HOK-1482/post-expansion-route.json: Unexpected non-whitespace character after JSON at position 19 (line 1 column 20)",
+    "Skipped unparseable json file tests/fixtures/wavemill-router-eval/artifacts/HOK-2003/routing-complete.json (mentions neither identity): Malformed JSON in /Users/timothyogilvie/Dropbox/wavemill/tests/fixtures/wavemill-router-eval/artifacts/HOK-2003/routing-complete.json: Expected ',' or '}' after property value in JSON at position 20 (line 2 column 1)",
+    "Derived corpus .wavemill/evals/aggregated-evals.jsonl will be rebuilt from re-keyed raw evals (source .wavemill/evals/evals.jsonl, 1359 raw \u2192 1359 deduped).",
+    "Audit copy note: evalIdsBefore/evalIdsAfter arrays condensed to counts + sha256 of the sorted id list for repository storage; evalIdsConserved was computed by the tool over the full lists.",
+    "Audit copy note: unchanged file entries (fieldChanges=0) condensed to a count + sha256 over the sorted relativePath:beforeHash listing for repository storage."
+  ],
+  "manifestPath": "/Users/timothyogilvie/Dropbox/wavemill/.wavemill/model-promotions/ox-alpha-to-glm-5.3-flash/ox-alpha-to-glm-5.3-flash.manifest.json",
+  "filesCondensed": {
+    "changedFileCount": 3,
+    "unchangedFileCount": 3360,
+    "unchangedFilesSha256": "2bd4e060b23b9f200c79f694b0425394fb1bbc1a9e613c5d9d42c6f7f51c950a"
+  }
+}

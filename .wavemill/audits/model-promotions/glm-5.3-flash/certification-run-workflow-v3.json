@@ -1,0 +1,126 @@
+{
+  "provider": "openrouter",
+  "model": "glm-5.3-flash",
+  "phase": "workflow",
+  "suiteVersion": "v3",
+  "dryRun": false,
+  "harnessPassed": true,
+  "liveCertifiable": true,
+  "artifactPath": "/Users/timothyogilvie/.wavemill/native-agent-certifications/z-ai/glm-5.3-flash/v3.json",
+  "artifactScope": "global",
+  "subject": {
+    "registryKey": "glm-5.3-flash",
+    "nativeProvider": "openrouter",
+    "providerId": "z-ai",
+    "providerModelId": "glm-5.3-flash",
+    "providerNativeId": "z-ai/glm-5.3-flash",
+    "identityRevision": 1,
+    "identityFingerprint": "3c802dd32ce613afa81237cadf556fb97fa815aa9c095f69145dd4a57e331ae3",
+    "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
+  },
+  "scenarios": [
+    {
+      "scenarioId": "tool.compat.git_status.openai-completions",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "usage.scripted.records-input-output-tokens",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "transcript.scripted.session_started_then_ended",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "phase.read-only.satisfies-read-only",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "phase.fixture.persistence-roundtrip",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "phase.workflow.artifact-unlocks-planner",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.runtime.native-patch-application",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.paths.boundaries-and-generated-artifacts",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.phase.dirty-tree-gate",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.usage.intended-file-tracking",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.tools.command-and-format-safety",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.cleanup.abort-restores-worktree",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.cleanup.timeout-restores-worktree",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.transcript.command-redaction",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "patch.phase.ready-remediation-fixtures",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "live.judge.tool-output-summary-quality",
+      "status": "not-run"
+    },
+    {
+      "scenarioId": "workflow.tools.contract-shape-stable",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.tools.mutation-policy-allows-in-phase",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.tools.mutation-policy-denies-out-of-phase",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.transcript.approval-lifecycle-jsonl-shape",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.provenance.untrusted-input-detects-phase-override",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.usage.multi-turn-token-accounting",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.cleanup.tracker-roundtrip-and-summary-event",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.phase.workflow-persistence-roundtrip",
+      "status": "pass"
+    },
+    {
+      "scenarioId": "workflow.phase.native-openrouter-launch-matrix",
+      "status": "pass"
+    }
+  ],
+  "knownLimitations": [
+    "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
+  ]
+}

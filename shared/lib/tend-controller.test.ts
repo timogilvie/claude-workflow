@@ -243,10 +243,12 @@ function writeFakeGh(
   const script = [
     '#!/bin/sh',
     'set -eu',
+    // allow-template-curly: shell positional-parameter expansion in a gh fixture.
     'if [ "${1:-}" != "api" ]; then',
     '  echo "unexpected gh command: $*" >&2',
     '  exit 1',
     'fi',
+    // allow-template-curly: shell positional-parameter expansion in a gh fixture.
     'path="${2:-}"',
     'sha=$(printf \'%s\' "$path" | sed -n \'s#repos/.*/commits/\\([^/]*\\)/check-runs#\\1#p\')',
     options.logPath ? `printf '%s\\n' "$path" >> ${JSON.stringify(options.logPath)}` : ':',

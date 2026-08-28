@@ -139,6 +139,7 @@ TESTS=(
   shared/lib/config.test.ts
   shared/lib/launch-plan-schema.test.ts
   shared/lib/launch-validation.test.ts
+  shared/lib/manual-edit-attribution-audit.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
   shared/lib/model-promotion.test.ts
@@ -176,6 +177,7 @@ TESTS=(
   shared/lib/harness-id-backfill.test.ts
   shared/lib/harness-diff.test.ts
   shared/lib/quota-state.test.ts
+  shared/lib/template-curly-checker.test.ts
   shared/lib/wavemill-incident-artifact-diagnostics.test.ts
   shared/lib/wavemill-incident-detector.test.ts
   shared/lib/wavemill-incident-store.test.ts

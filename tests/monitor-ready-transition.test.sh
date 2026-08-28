@@ -47,6 +47,17 @@ extract_function "$MILL_SCRIPT" "ready_conflict_recheck_due" >> "$MONITOR_FUNC_F
 extract_function "$MILL_SCRIPT" "ready_conflict_pr_is_clean" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "write_ready_conflict_recheck_at" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "clear_transient_mergeability_state" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_count" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "clear_failed_ready_recheck_state" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_reset_if_new_head" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "increment_failed_ready_recheck_count" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_backoff_seconds" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_due" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "ready_failure_reason" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "record_failed_ready_recheck_observation" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_identical_streak" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "mark_failed_ready_recheck_exhausted" >> "$MONITOR_FUNC_FILE"
+extract_function "$MILL_SCRIPT" "failed_ready_recheck_gate" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
 extract_function "$MILL_SCRIPT" "resolve_pair_on_primary_merge" >> "$MONITOR_FUNC_FILE"
@@ -176,6 +187,39 @@ JSON
 {"stage":"ready","status":"failed","artifacts":{"verdict":"fail"}}
 JSON
         ;;
+      ready_failed_recheck_backoff_holds)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","artifacts":{"verdict":"fail"}}
+JSON
+        printf "%s\n" "1" > "$READY_DIR/.failed-ready-recheck-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.failed-ready-recheck-head"
+        date +%s > "$READY_DIR/.failed-ready-recheck-last-at"
+        ;;
+      ready_failed_recheck_exhausted)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        INVOKE_COUNT=2
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","finishedAt":"2026-08-27T09:52:37Z","failureReason":"Cross-PR revert guard blocked ready phase","artifacts":{"verdict":"fail"}}
+JSON
+        printf "%s\n" "4" > "$READY_DIR/.failed-ready-recheck-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.failed-ready-recheck-head"
+        printf "%s\n" "0" > "$READY_DIR/.failed-ready-recheck-last-at"
+        ;;
+      ready_failed_recheck_new_head_resets)
+        CURRENT_PHASE="ready"
+        READY_STATUS="failed"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"failed","artifacts":{"verdict":"fail"}}
+JSON
+        printf "%s\n" "4" > "$READY_DIR/.failed-ready-recheck-count"
+        printf "%s\n" "old-head" > "$READY_DIR/.failed-ready-recheck-head"
+        printf "%s\n" "0" > "$READY_DIR/.failed-ready-recheck-last-at"
+        : > "$READY_DIR/.failed-ready-recheck-exhausted"
+        ;;
       ready_remediation_repolls_active)
         CURRENT_PHASE="ready"
         READY_STATUS="running"
@@ -294,6 +338,7 @@ JSON
 
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { LOG_OUTPUT+="WARN:$*\n"; }
+    log_error() { LOG_OUTPUT+="ERROR:$*\n"; }
     read_state_value() { printf "%s\n" "${1-}"; }
     set_window_attention_state() { ATTENTION_STATE="$2"; }
     handle_agent_error_recovery() { :; }
@@ -406,6 +451,12 @@ JSON
       "$transient_attention" \
       "$transient_count" \
       "$LOG_OUTPUT"
+    recheck_count="$(cat "$READY_DIR/.failed-ready-recheck-count" 2>/dev/null || echo "")"
+    recheck_sentinel="absent"
+    [[ -f "$READY_DIR/.failed-ready-recheck-exhausted" ]] && recheck_sentinel="present"
+    exhausted_log_count="$(printf "%s" "$LOG_OUTPUT" | grep -o "re-checks exhausted for PR" | grep -c . || true)"
+    printf "recheck_count=%s\nrecheck_sentinel=%s\nexhausted_log_count=%s\n" \
+      "$recheck_count" "$recheck_sentinel" "$exhausted_log_count"
   '
 }
 
@@ -449,8 +500,27 @@ check_contains "pending ready failure needs user" "$ready_pending_failure_needs_
 
 ready_failed_resume_repolls_output="$(run_monitor_case ready_failed_resume_repolls)"
 check_contains "failed ready resumes by re-running checks" "$ready_failed_resume_repolls_output" "ready_launches=1"
+check_contains "failed ready re-run logs bounded attempt" "$ready_failed_resume_repolls_output" "Re-running failed ready checks for PR #321 (attempt 1/4)"
 check_contains "failed ready pass clears attention" "$ready_failed_resume_repolls_output" "attention=clear"
 check_contains "failed ready pass holds slot active" "$ready_failed_resume_repolls_output" "active_count=1"
+
+ready_failed_recheck_backoff_output="$(run_monitor_case ready_failed_recheck_backoff_holds)"
+check_contains "recheck backoff skips relaunch" "$ready_failed_recheck_backoff_output" "ready_launches=0"
+check_contains "recheck backoff holds slot active" "$ready_failed_recheck_backoff_output" "active_count=1"
+check_contains "recheck backoff leaves attention untouched" "$ready_failed_recheck_backoff_output" $'attention=\nready_launches=0'
+
+ready_failed_recheck_exhausted_output="$(run_monitor_case ready_failed_recheck_exhausted)"
+check_contains "recheck exhaustion stops relaunching" "$ready_failed_recheck_exhausted_output" "ready_launches=0"
+check_contains "recheck exhaustion flags user" "$ready_failed_recheck_exhausted_output" "attention=needs-user"
+check_contains "recheck exhaustion logs terminal status once" "$ready_failed_recheck_exhausted_output" "exhausted_log_count=1"
+check_contains "recheck exhaustion writes sentinel" "$ready_failed_recheck_exhausted_output" "recheck_sentinel=present"
+check_contains "recheck exhaustion names failing gate" "$ready_failed_recheck_exhausted_output" "Cross-PR revert guard blocked ready phase"
+
+ready_failed_recheck_new_head_output="$(run_monitor_case ready_failed_recheck_new_head_resets)"
+check_contains "new commit re-enables failed-ready recheck" "$ready_failed_recheck_new_head_output" "ready_launches=1"
+check_contains "new commit resets attempt numbering" "$ready_failed_recheck_new_head_output" "(attempt 1/4)"
+check_contains "new commit clears exhausted sentinel" "$ready_failed_recheck_new_head_output" "recheck_sentinel=absent"
+check_contains "new head recheck pass clears attention" "$ready_failed_recheck_new_head_output" "attention=clear"
 
 ready_remediation_repolls_active_output="$(run_monitor_case ready_remediation_repolls_active)"
 check_contains "ready remediation rc 5 relaunches once" "$ready_remediation_repolls_active_output" "ready_launches=1"

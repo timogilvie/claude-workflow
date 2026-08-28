@@ -352,6 +352,7 @@ describe('ready-stage', () => {
     it('ignores Alembic support files outside the versions directory', async () => {
       await writeRepoFiles(repoDir, {
         'migrations/env.py': 'from alembic import context\n',
+        // allow-template-curly: Mako migration template syntax, not JavaScript interpolation.
         'migrations/script.py.mako': '${upgrades if upgrades else "pass"}\n',
         'migrations/versions/001_base.py': 'revision = "001"\ndown_revision = None\n',
         'migrations/versions/002_next.py': 'revision = "002"\ndown_revision = "001"\n',
