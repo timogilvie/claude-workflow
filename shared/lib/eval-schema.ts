@@ -97,6 +97,11 @@
  *   that executed a provisional-identity model are held out of training and
  *   budget evaluation. Additive; legacy rows without attribution still
  *   validate. (HOK-2858)
+ * - **1.44.0**: Added the `unknown_attribution` intervention type. Manual-edit
+ *   detection on wavemill-managed branches now classifies commits against
+ *   recorded agent activity windows instead of presuming every commit is
+ *   agent-authored; when no attribution evidence exists it records this type
+ *   rather than silently returning zero interventions. Additive. (HOK-2894)
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
  *   canonical reviewer/stage model IDs (HOK-2072); expanded
@@ -171,8 +176,12 @@ import type {
 import type { ChallengeRoutingMeta } from './challenge-comparison.ts';
 import type { ChallengeStage } from './challenge-mode.ts';
 
-/** Current eval schema version for newly emitted records. */
-export const SCHEMA_VERSION = '1.43.0';
+/**
+ * Current eval schema version for newly emitted records.
+ *
+ * @since 1.44.0 added unknown_attribution intervention type (HOK-2894)
+ */
+export const SCHEMA_VERSION = '1.44.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -548,6 +557,8 @@ export interface TokenUsage {
 
 /**
  * Intervention type enum — describes the reason for human intervention.
+ *
+ * @since 1.44.0 added unknown_attribution
  */
 export type InterventionType =
   | 'clarification'
@@ -557,7 +568,8 @@ export type InterventionType =
   | 'prompt_edit'
   | 'scope_change'
   | 'recovery'
-  | 'rollback';
+  | 'rollback'
+  | 'unknown_attribution';
 
 /**
  * Intervention severity enum — indicates impact level.

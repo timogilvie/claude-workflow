@@ -139,6 +139,7 @@ TESTS=(
   shared/lib/config.test.ts
   shared/lib/launch-plan-schema.test.ts
   shared/lib/launch-validation.test.ts
+  shared/lib/manual-edit-attribution-audit.test.ts
   shared/lib/merge-queue.test.ts
   shared/lib/model-registry.test.ts
   shared/lib/model-promotion.test.ts

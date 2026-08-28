@@ -3115,6 +3115,15 @@ coding_uncommitted_output_artifact_path() {
   printf '%s\n' "$feature_dir/.coding-uncommitted-output.json"
 }
 
+# Append-only log of resolved operator-handoff episodes (HOK-2894). Each line
+# preserves a .coding-uncommitted-output.json snapshot after the guard
+# clears, so eval-time manual-edit attribution can still see the interval
+# during which an operator committed the agent's uncommitted output.
+coding_uncommitted_output_resolved_log_path() {
+  local feature_dir="$1"
+  printf '%s\n' "$feature_dir/.coding-uncommitted-output.resolved.jsonl"
+}
+
 blocked_completion_default_summary() {
   printf 'coding done; verification blocked\n'
 }
