@@ -137,6 +137,7 @@ TESTS=(
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts
+  shared/lib/config-integrity.test.ts
   shared/lib/launch-plan-schema.test.ts
   shared/lib/launch-validation.test.ts
   shared/lib/manual-edit-attribution-audit.test.ts
