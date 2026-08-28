@@ -21,12 +21,43 @@ type ShellRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }) => 
 export const REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE =
   'No review commit may be created until every out-of-scope staged path is unstaged or reverted.';
 
+/**
+ * Remedy shown when every out-of-scope finding is already committed to the
+ * branch. The index is clean, so telling the operator to "unstage" is
+ * impossible to act on (HOK-2913); the applicable action is to revert or
+ * amend the offending review commits.
+ */
+export const REVIEW_SCOPE_GUARD_NO_COMMIT_COMMITTED_MESSAGE =
+  'No review commit may be added until every out-of-scope committed path is reverted or the offending review commit is amended to restore scope.';
+
+/**
+ * Remedy shown when both staged/working-tree and committed findings are
+ * present. Each finding still carries its own origin so the operator can
+ * tell which action applies where.
+ */
+export const REVIEW_SCOPE_GUARD_NO_COMMIT_MIXED_MESSAGE =
+  'No review commit may proceed: unstage or revert out-of-scope staged paths and revert or amend out-of-scope committed paths to restore scope.';
+
 export const REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE =
   'No review commit may be created because the review scope guard could not verify staged scope.';
+
+/**
+ * Message emitted when scope is clean but no pull request has been opened
+ * yet. This is a distinct, non-error outcome — the review workflow should
+ * proceed to PR creation (HOK-2913).
+ */
+export const REVIEW_SCOPE_GUARD_NO_PR_MESSAGE =
+  'Review scope guard passed; no pull request exists yet for this branch — open the PR to proceed.';
 
 export const REVIEW_SCOPE_GUARD_EXIT_OK = 0;
 export const REVIEW_SCOPE_GUARD_EXIT_POLICY = 1;
 export const REVIEW_SCOPE_GUARD_EXIT_TOOL = 2;
+/**
+ * Exit code emitted when the guard passes but the branch has no pull request
+ * yet. Callers use this to distinguish the pre-PR-creation state from a
+ * policy violation (exit 1) or infrastructure error (exit 2).
+ */
+export const REVIEW_SCOPE_GUARD_EXIT_NO_PR = 3;
 
 /**
  * Registration files that a task may touch as a companion to a legitimate
@@ -62,6 +93,13 @@ export interface ReviewScopeGuardFinding {
   category: 'review-scope' | 'deletion-budget' | 'cross-pr-revert';
   path?: string;
   status?: string;
+  /**
+   * Where this finding was observed. Determines the remedy the operator can
+   * act on (HOK-2913): 'staged' → unstage, 'working-tree' → clean, 'committed'
+   * → revert or amend. Absent for findings not tied to a specific working-tree
+   * location (e.g. cross-PR revert, tool errors).
+   */
+  origin?: 'committed' | 'staged' | 'working-tree';
   message: string;
   details?: Record<string, unknown>;
 }
@@ -81,7 +119,15 @@ export interface ReviewScopeGuardResult {
    * blocker finding), 'error' (the guard could not verify scope — a tool or
    * git failure, never to be treated as a pass OR as a policy violation).
    */
-  status: 'pass' | 'fail' | 'error';
+  status: 'pass' | 'fail' | 'error' | 'no-pr';
+  /**
+   * Whether a pull request was found for the current branch. Determined
+   * best-effort via the configured GitHub lookup; a lookup failure yields
+   * 'unknown' rather than an infrastructure error so a legitimate pass is
+   * not blocked when GitHub is unreachable (HOK-2913). Populated only when
+   * `checkPullRequest` is enabled.
+   */
+  pullRequestState?: 'present' | 'absent' | 'unknown';
   baselinePaths: string[];
   declaredScope: string[];
   baselineSource: string;
@@ -124,6 +170,13 @@ export interface ReviewScopeGuardOptions {
   acknowledgementText?: string;
   maxRecentMerges?: number;
   writeBaseline?: boolean;
+  /**
+   * When true, the guard consults `gh` to determine whether a pull request
+   * exists for the branch; the result is exposed in `pullRequestState` and
+   * — when scope otherwise passes — status becomes 'no-pr' (HOK-2913). A
+   * lookup failure is reported as 'unknown' and does not affect status.
+   */
+  checkPullRequest?: boolean;
   shellRunner?: ShellRunner;
 }
 
@@ -355,31 +408,39 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const allowedUncommitted = (path: string): boolean =>
       allowedCommitted(path) || taskPathSet.has(path) || baselineSet.has(path);
 
-    const outOfScope = new Map<string, NameStatusEntry>();
+    const outOfScope = new Map<string, { entry: NameStatusEntry; origin: 'committed' | 'staged' | 'working-tree' }>();
+    const stagedPathSet = new Set(stagedPaths);
     for (const entry of committedEntries) {
       if (!allowedCommitted(entry.path)) {
-        outOfScope.set(entry.path, entry);
+        outOfScope.set(entry.path, { entry, origin: 'committed' });
       }
     }
     for (const entry of uncommittedEntries) {
       if (!outOfScope.has(entry.path) && !allowedUncommitted(entry.path)) {
-        outOfScope.set(entry.path, entry);
+        outOfScope.set(entry.path, {
+          entry,
+          origin: stagedPathSet.has(entry.path) ? 'staged' : 'working-tree',
+        });
       }
     }
 
-    for (const entry of [...outOfScope.values()].sort((a, b) => a.path.localeCompare(b.path))) {
+    for (const { entry, origin } of [...outOfScope.values()].sort((a, b) =>
+      a.entry.path.localeCompare(b.entry.path))) {
       findings.push({
         severity: 'blocker',
         category: 'review-scope',
         path: entry.path,
         status: entry.status,
         kind: 'violation',
+        origin,
         message:
           `Unexpected review change outside task scope: ${entry.path} (${entry.status}). ` +
-          `Baseline source: ${baselineSource}.`,
+          `Baseline source: ${baselineSource}. ` +
+          `${remedyForOrigin(origin, entry.path)}`,
         details: {
           baselineSource,
           declaredScope,
+          origin,
         },
       });
     }
@@ -427,9 +488,27 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const outOfScopePaths = [...outOfScope.keys()].sort();
     const failed = findings.some((finding) => finding.severity === 'blocker');
 
+    const pullRequestState = options.checkPullRequest && !failed
+      ? detectPullRequestState(repoDir, headRef, shellRunner)
+      : undefined;
+
+    const noPrOutcome = !failed && pullRequestState === 'absent';
+    const finalStatus: 'pass' | 'fail' | 'no-pr' = failed
+      ? 'fail'
+      : noPrOutcome
+        ? 'no-pr'
+        : 'pass';
+
+    const message = failed
+      ? failureMessageForFindings(findings)
+      : noPrOutcome
+        ? REVIEW_SCOPE_GUARD_NO_PR_MESSAGE
+        : 'Review scope guard passed: every changed path is in task scope or an allowed companion.';
+
     return {
       ok: !failed,
-      status: failed ? 'fail' : 'pass',
+      status: finalStatus,
+      pullRequestState,
       baselinePaths,
       declaredScope,
       baselineSource,
@@ -443,9 +522,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       outOfScopePaths,
       findings,
       crossPrReverts,
-      message: failed
-        ? REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE
-        : 'Review scope guard passed: every changed path is in task scope or an allowed companion.',
+      message,
     };
   } catch (error) {
     const toolError = error instanceof ReviewScopeGuardToolFailure
@@ -1181,15 +1258,127 @@ function runGitChecked(
   }
 }
 
+function remedyForOrigin(origin: 'committed' | 'staged' | 'working-tree', path: string): string {
+  if (origin === 'staged') {
+    return `Unstage or revert ${path} to restore scope.`;
+  }
+  if (origin === 'working-tree') {
+    return `Discard or move ${path} in the working tree to restore scope.`;
+  }
+  return `Revert the review commit that touches ${path} or amend it to restore scope.`;
+}
+
+function failureMessageForFindings(findings: ReviewScopeGuardFinding[]): string {
+  const origins = new Set<'committed' | 'staged' | 'working-tree'>();
+  for (const finding of findings) {
+    if (finding.severity !== 'blocker') {
+      continue;
+    }
+    if (finding.origin) {
+      origins.add(finding.origin);
+    }
+  }
+  const hasStagedLike = origins.has('staged') || origins.has('working-tree');
+  const hasCommitted = origins.has('committed');
+  if (hasCommitted && !hasStagedLike) {
+    return REVIEW_SCOPE_GUARD_NO_COMMIT_COMMITTED_MESSAGE;
+  }
+  if (hasStagedLike && hasCommitted) {
+    return REVIEW_SCOPE_GUARD_NO_COMMIT_MIXED_MESSAGE;
+  }
+  return REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE;
+}
+
+/**
+ * Detect whether a pull request exists for the given branch, best-effort.
+ *
+ * Uses `gh pr view --json number` on the current HEAD ref; a definitive
+ * "no pull requests found" is reported as 'absent' so the caller can treat
+ * it as a distinct pre-PR-creation state (HOK-2913). Any other failure —
+ * `gh` missing, unauthenticated, network error — is reported as 'unknown'
+ * so a legitimate pass is not blocked by GitHub availability.
+ */
+function detectPullRequestState(
+  repoDir: string,
+  headRef: string,
+  shellRunner: ShellRunner,
+): 'present' | 'absent' | 'unknown' {
+  try {
+    const branch = headRef === 'HEAD'
+      ? runGit(shellRunner, repoDir, 'git rev-parse --abbrev-ref HEAD').trim()
+      : headRef;
+    if (!branch || branch === 'HEAD') {
+      return 'unknown';
+    }
+    const output = String(shellRunner(
+      `gh pr view ${escapeShellArg(branch)} --json number --jq '.number'`,
+      { cwd: repoDir, encoding: 'utf-8' },
+    )).trim();
+    return output ? 'present' : 'unknown';
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/no pull requests found/i.test(message)
+      || /no open pull requests/i.test(message)
+      || /Could not resolve to a PullRequest/i.test(message)) {
+      return 'absent';
+    }
+    return 'unknown';
+  }
+}
+
+/**
+ * Snapshot the coding deliverable and write `.review-scope-baseline.json`
+ * under the task feature directory. Callers use this to establish the
+ * baseline artifact at the coding→review handoff so the merge-base fallback
+ * remains the exception, not the norm (HOK-2913).
+ *
+ * @returns The persisted baseline, or null when the required scope
+ *   information (sinceCommit, featureDir) cannot be resolved.
+ */
+export function writeReviewScopeBaseline(input: {
+  repoDir: string;
+  featureDir: string;
+  sinceCommit: string;
+  headRef?: string;
+  shellRunner?: ShellRunner;
+}): ReviewScopeBaseline | null {
+  const repoDir = resolve(input.repoDir);
+  const featureDir = resolve(input.featureDir);
+  if (!input.sinceCommit) {
+    return null;
+  }
+  const shellRunner = input.shellRunner ?? reviewScopeGuardDeps.execShellCommand;
+  const headRef = input.headRef ?? 'HEAD';
+  const paths = collectNameOnly(repoDir, input.sinceCommit, headRef, shellRunner);
+  const baseline: ReviewScopeBaseline = {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    source: `git diff --name-only ${input.sinceCommit} ${headRef}`,
+    sinceCommit: input.sinceCommit,
+    headRef,
+    paths,
+  };
+  const baselinePath = join(featureDir, BASELINE_FILE);
+  mkdirSync(dirname(baselinePath), { recursive: true });
+  writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`, 'utf-8');
+  return baseline;
+}
+
 export function formatReviewScopeGuardResult(result: ReviewScopeGuardResult): string {
-  if (result.status === 'pass') {
-    return [
-      'Review scope guard passed.',
+  if (result.status === 'pass' || result.status === 'no-pr') {
+    const lines = [
+      result.status === 'no-pr'
+        ? 'Review scope guard passed; no pull request exists yet.'
+        : 'Review scope guard passed.',
       `Integration ref: ${result.integrationRef}`,
       result.mergeBase ? `Merge base: ${result.mergeBase}` : undefined,
       `Baseline source: ${result.baselineSource}`,
       `Staged paths checked: ${result.stagedPaths.length}`,
-    ].filter(Boolean).join('\n');
+    ];
+    if (result.status === 'no-pr') {
+      lines.push('', REVIEW_SCOPE_GUARD_NO_PR_MESSAGE);
+    }
+    return lines.filter((line) => line !== undefined).join('\n');
   }
 
   if (result.status === 'fail') {
@@ -1200,7 +1389,7 @@ export function formatReviewScopeGuardResult(result: ReviewScopeGuardResult): st
         return `- [${finding.category}]${location} ${finding.message}`;
       }),
       '',
-      REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE,
+      failureMessageForFindings(result.findings),
     ].join('\n');
   }
 

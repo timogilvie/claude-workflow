@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { execSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import {
+  REVIEW_SCOPE_GUARD_NO_COMMIT_COMMITTED_MESSAGE,
   REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE,
+  REVIEW_SCOPE_GUARD_NO_PR_MESSAGE,
   REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE,
   validateReviewScope,
+  writeReviewScopeBaseline,
 } from './review-scope-guard.ts';
 
 function shellQuote(value: string): string {
@@ -435,6 +438,183 @@ test('check-review-scope CLI exits 1 and lists paths on a policy violation', () 
     assert.equal(status, 1, `expected exit 1, got ${status}: ${stdout}`);
     assert.match(stdout, /tools\/unrelated\.ts/);
     assert.match(stdout, /No review commit may be created/);
+  } finally {
+    cleanup();
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// HOK-2913: baseline-absent handoff, committed-history remedy, no-PR
+// ────────────────────────────────────────────────────────────────
+
+test('validateReviewScope with missing baseline and clean index passes on committed task deliverable (HOK-2913 REQ-F1)', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/committed-only');
+    commitFile(repoDir, 'shared/lib/template-curly-checker.ts', 'export const check = 1;\n', 'Add curly checker');
+    commitFile(repoDir, 'tools/check-template-curly.ts', 'export const cli = 1;\n', 'Add CLI');
+
+    const result = validateReviewScope({ repoDir, includeWorkingTree: true });
+
+    assert.equal(result.status, 'pass', `expected pass, got ${result.status}: ${result.message}`);
+    assert.equal(result.ok, true);
+    assert.equal(result.baselineIsArtifact, false);
+    // The task's committed deliverable is recognized as allowed scope.
+    assert.ok(result.taskPaths.includes('shared/lib/template-curly-checker.ts'));
+    assert.ok(result.taskPaths.includes('tools/check-template-curly.ts'));
+    // No out-of-scope findings on a clean index.
+    assert.deepEqual(result.outOfScopePaths, []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope with missing baseline still blocks unrelated staged review edits (HOK-2913 REQ-F4)', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/mixed');
+    commitFile(repoDir, 'shared/lib/template-curly-checker.ts', 'export const check = 1;\n', 'task work');
+    stageFile(repoDir, 'shared/lib/unrelated.ts', 'export const off_scope = 1;\n');
+
+    const result = validateReviewScope({ repoDir, includeWorkingTree: true });
+
+    assert.equal(result.status, 'fail');
+    assert.deepEqual(result.outOfScopePaths, ['shared/lib/unrelated.ts']);
+    // Staged origin → the current staged-only remediation text.
+    assert.equal(result.message, REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE);
+    const staged = result.findings.find((f) => f.path === 'shared/lib/unrelated.ts');
+    assert.equal(staged?.origin, 'staged');
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope with persisted baseline + out-of-scope committed review edit reports committed remedy (HOK-2913 REQ-F3)', () => {
+  const { repoDir, featureDir, baseCommit, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'src/app.ts', 'export const value = 1;\n', 'coding');
+    validateReviewScope({ repoDir, featureDir, sinceCommit: baseCommit, writeBaseline: true });
+    // Simulate a bad review commit landing on an out-of-scope path.
+    commitFile(repoDir, 'shared/lib/unrelated.ts', 'stale\n', 'bad review fix');
+
+    const result = validateReviewScope({
+      repoDir,
+      featureDir,
+      sinceCommit: baseCommit,
+      writeBaseline: false,
+    });
+
+    assert.equal(result.status, 'fail');
+    // The finding is committed-history — remedy tells the operator to revert
+    // or amend, never to unstage a clean index (HOK-2913).
+    const finding = result.findings.find((f) => f.path === 'shared/lib/unrelated.ts');
+    assert.equal(finding?.origin, 'committed');
+    assert.match(finding?.message ?? '', /Revert the review commit|amend/);
+    assert.equal(result.message, REVIEW_SCOPE_GUARD_NO_COMMIT_COMMITTED_MESSAGE);
+    // The staged-only remediation string is deliberately not the top-level
+    // message when nothing is staged.
+    assert.notEqual(result.message, REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope surfaces no-PR outcome when scope passes and gh reports no PR (HOK-2913 REQ-F5)', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/no-pr-branch');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+
+    // Simulate gh saying "no pull requests found" for this branch.
+    const noPrRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }): string => {
+      if (cmd.startsWith('gh pr view')) {
+        const err = new Error('no pull requests found for branch "task/no-pr-branch"');
+        throw err;
+      }
+      return execSync(cmd, {
+        cwd: opts?.cwd ?? repoDir,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }) as unknown as string;
+    };
+
+    const result = validateReviewScope({
+      repoDir,
+      includeWorkingTree: true,
+      checkPullRequest: true,
+      shellRunner: noPrRunner,
+    });
+
+    assert.equal(result.status, 'no-pr');
+    assert.equal(result.pullRequestState, 'absent');
+    assert.equal(result.message, REVIEW_SCOPE_GUARD_NO_PR_MESSAGE);
+    assert.equal(result.ok, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope treats a gh lookup failure as unknown (never blocks the pass) (HOK-2913 REQ-F5)', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/gh-broken');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+
+    // Simulate gh being unavailable / unauthenticated for this branch.
+    const brokenGhRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }): string => {
+      if (cmd.startsWith('gh pr view')) {
+        throw new Error('gh: not authenticated. Run gh auth login');
+      }
+      return execSync(cmd, {
+        cwd: opts?.cwd ?? repoDir,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }) as unknown as string;
+    };
+
+    const result = validateReviewScope({
+      repoDir,
+      includeWorkingTree: true,
+      checkPullRequest: true,
+      shellRunner: brokenGhRunner,
+    });
+
+    assert.equal(result.pullRequestState, 'unknown');
+    // A lookup failure must not turn a passing scope check into an error or
+    // into a no-PR outcome — infrastructure error stays distinguishable
+    // (HOK-2913 REQ-F5).
+    assert.equal(result.status, 'pass');
+    assert.equal(result.ok, true);
+  } finally {
+    cleanup();
+  }
+});
+
+test('writeReviewScopeBaseline snapshots the coding deliverable at the handoff (HOK-2913 REQ-F2)', () => {
+  const { repoDir, featureDir, baseCommit, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'src/app.ts', 'export const value = 1;\n', 'coding');
+    // No baseline artifact yet — simulating the pre-handoff state.
+    const baselinePath = join(featureDir, '.review-scope-baseline.json');
+    assert.equal(existsSync(baselinePath), false);
+
+    const baseline = writeReviewScopeBaseline({
+      repoDir,
+      featureDir,
+      sinceCommit: baseCommit,
+    });
+
+    assert.ok(baseline);
+    assert.equal(existsSync(baselinePath), true);
+    const persisted = JSON.parse(readFileSync(baselinePath, 'utf-8'));
+    assert.equal(persisted.version, 1);
+    assert.equal(persisted.sinceCommit, baseCommit);
+    assert.deepEqual(persisted.paths, ['src/app.ts']);
+
+    // Now the guard runs against the persisted baseline (not the fallback).
+    const result = validateReviewScope({ repoDir, featureDir, writeBaseline: false });
+    assert.equal(result.status, 'pass');
+    assert.equal(result.baselineIsArtifact, true);
   } finally {
     cleanup();
   }

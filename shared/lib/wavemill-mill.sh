@@ -8806,6 +8806,26 @@ wavemill_run_tsx_tool() {
   fi
 }
 
+# Persist the review-scope baseline artifact at the coding→review handoff so
+# the guard evaluates against a captured snapshot rather than the merge-base
+# fallback (HOK-2913). Failures are logged as debug and the caller proceeds —
+# the merge-base fallback in the guard is still available for legacy worktrees.
+persist_review_scope_baseline() {
+  local issue="$1" feature_dir="$2" worktree="$3"
+  local tool
+  tool="${TOOLS_DIR:-}/write-review-scope-baseline.ts"
+  if [[ ! -f "$tool" ]]; then
+    log "debug" "$issue → review-scope baseline tool missing: $tool"
+    return 0
+  fi
+  if wavemill_run_tsx_tool "$tool" --repo-dir "$worktree" --feature-dir "$feature_dir" >/dev/null 2>&1; then
+    log "debug" "$issue → review-scope baseline persisted"
+  else
+    log "debug" "$issue → review-scope baseline not persisted (merge-base fallback remains)"
+  fi
+  return 0
+}
+
 ready_live_ci_json() {
   local wt_dir="$1" pr_number="$2" base_branch="$3"
   local output rc=0
@@ -15720,6 +15740,7 @@ monitor_issue_state() {
             fi
             validate_coding_phase_output "$BRANCH"
             clear_coding_uncommitted_output_attention "$FEATURE_DIR"
+            persist_review_scope_baseline "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
             # Mark coding as completed (HOK-1177)
             write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
             quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
@@ -15807,6 +15828,7 @@ monitor_issue_state() {
               validate_coding_phase_output "$BRANCH"
               log "status" "$ISSUE → .coding-complete detected, marking coding as completed"
               clear_coding_uncommitted_output_attention "$FEATURE_DIR"
+              persist_review_scope_baseline "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
               write_stage_result "$FEATURE_DIR" "coding" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "coding" "claude-opus-4-7")"
               quarantine_completed_coding_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}"
               # Next iteration will detect resolved_phase == "review" and launch review
