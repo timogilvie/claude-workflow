@@ -169,6 +169,7 @@ export interface InterventionPenaltiesConfig {
   selfReviewBlocker?: number;
   operatorRecovery?: number;
   priorFailedAttempt?: number;
+  unknownAttribution?: number;
 }
 
 export interface MintEligibilityConfig {

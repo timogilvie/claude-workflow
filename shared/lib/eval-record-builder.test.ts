@@ -42,6 +42,7 @@ import {
   enrichEvalRecord,
   enrichTrainingMetadata,
 } from './eval-record-builder.ts';
+import { getEffectiveRegistry } from './model-registry.ts';
 import type { RubricEval } from './eval-schema.ts';
 import type { ChallengeExecutionIntent } from './challenge-execution-contract.ts';
 import { closeManifest, getHarnessId, openManifest, recordUse } from './resource-manifest.ts';
@@ -678,7 +679,18 @@ describe('eval-record-builder', () => {
       const record = makeEligibleRecord();
       record.taskDescriptor!.stages!.coder = { model: 'ox-alpha' };
 
-      attachModelIdentityAttribution(record, undefined, '2026-08-22T16:00:00.000Z');
+      // The live catalog no longer carries a provisional identity (ox-alpha
+      // was disclosed as glm-5.3-flash), so pin the pre-disclosure shape in a
+      // registry override to keep exercising the provisional-hold path.
+      const registry = structuredClone(getEffectiveRegistry());
+      const provisionalOx = registry.models['ox-alpha'];
+      provisionalOx.identity = {
+        ...provisionalOx.identity!,
+        status: 'provisional',
+        family: 'unknown',
+        lineage: undefined,
+      };
+      attachModelIdentityAttribution(record, registry, '2026-08-22T16:00:00.000Z');
       attachEligibility(record);
 
       assert.equal(record.modelIdentityAttribution?.roles.coder?.alias, 'ox-alpha');

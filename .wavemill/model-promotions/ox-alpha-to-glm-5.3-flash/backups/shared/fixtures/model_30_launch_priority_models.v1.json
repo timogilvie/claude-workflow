@@ -1,0 +1,262 @@
+{
+  "schemaVersion": "1",
+  "description": "Launch-priority model list (HOK-2211) for OpenRouter catalog sync. Each entry maps a Wavemill alias to its OpenRouter API id with family/status/priority/role metadata.",
+  "models": [
+    {
+      "wavemillAlias": "claude-opus-4-8",
+      "openrouterId": "anthropic/claude-opus-4.8",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "claude-opus-4-7",
+      "openrouterId": "anthropic/claude-opus-4.7",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "claude-sonnet-5",
+      "openrouterId": "anthropic/claude-sonnet-5",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "claude-sonnet-4-6",
+      "openrouterId": "anthropic/claude-sonnet-4.6",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "claude-haiku-4-5",
+      "openrouterId": "anthropic/claude-haiku-4.5",
+      "family": "claude",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["coding", "review"]
+    },
+    {
+      "wavemillAlias": "gpt-5.5",
+      "openrouterId": "openai/gpt-5.5",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "gpt-5",
+      "openrouterId": "openai/gpt-5",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "gpt-5-mini",
+      "openrouterId": "openai/gpt-5-mini",
+      "family": "gpt",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["coding", "review"]
+    },
+    {
+      "wavemillAlias": "o3-mini",
+      "openrouterId": "openai/o3-mini",
+      "family": "gpt",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "deepseek-r1",
+      "openrouterId": "deepseek/deepseek-r1",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "deepseek-v3",
+      "openrouterId": "deepseek/deepseek-v3.2",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["coding", "review"]
+    },
+    {
+      "wavemillAlias": "deepseek-coder-v2",
+      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
+      "family": "deepseek",
+      "status": "deprecated",
+      "priorityTier": 2,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "qwen-2.5-coder-32b",
+      "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
+      "family": "qwen",
+      "status": "deprecated",
+      "priorityTier": 1,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "qwen-3-coder",
+      "openrouterId": "qwen/qwen3-coder",
+      "family": "qwen",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "qwen-3-235b",
+      "openrouterId": "qwen/qwen3-235b-a22b-2507",
+      "family": "qwen",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "qwen-2.5-72b",
+      "openrouterId": "qwen/qwen-2.5-72b-instruct",
+      "family": "qwen",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "kimi-k2",
+      "openrouterId": "moonshotai/kimi-k2",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "kimi-k2.7-code",
+      "openrouterId": "moonshotai/kimi-k2.7-code",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "kimi-k2-thinking",
+      "openrouterId": "moonshotai/kimi-k2-thinking",
+      "family": "kimi",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "glm-5.2",
+      "openrouterId": "z-ai/glm-5.2",
+      "family": "glm",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "gemini-2.5-pro",
+      "openrouterId": "google/gemini-2.5-pro",
+      "family": "gemini",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "gemini-2.5-flash",
+      "openrouterId": "google/gemini-2.5-flash",
+      "family": "gemini",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["coding", "review"]
+    },
+    {
+      "wavemillAlias": "gemini-2.0-flash",
+      "openrouterId": "google/gemini-2.0-flash-001",
+      "family": "gemini",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "llama-3.3-70b",
+      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
+      "family": "llama",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["coding", "review"]
+    },
+    {
+      "wavemillAlias": "llama-4-maverick",
+      "openrouterId": "meta-llama/llama-4-maverick",
+      "family": "llama",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["planning", "coding"]
+    },
+    {
+      "wavemillAlias": "llama-4-scout",
+      "openrouterId": "meta-llama/llama-4-scout",
+      "family": "llama",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "mistral-large-2",
+      "openrouterId": "mistralai/mistral-large-2407",
+      "family": "mistral",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "mistral-medium-3",
+      "openrouterId": "mistralai/mistral-medium-3-5",
+      "family": "mistral",
+      "status": "watchlist",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "devstral-small",
+      "openrouterId": "mistralai/mistral-small-2603",
+      "family": "mistral",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "devstral-medium",
+      "openrouterId": "mistralai/mistral-medium-3-5",
+      "family": "mistral",
+      "status": "watchlist",
+      "priorityTier": 2,
+      "roleEligibility": ["coding"]
+    },
+    {
+      "wavemillAlias": "ox-alpha",
+      "openrouterId": "stealth/ox-alpha",
+      "family": "unknown",
+      "status": "provisional",
+      "priorityTier": 3,
+      "roleEligibility": ["planning", "coding", "review"]
+    },
+    {
+      "wavemillAlias": "grok-code-fast",
+      "openrouterId": "x-ai/grok-code-fast-1",
+      "family": "grok",
+      "status": "deprecated",
+      "priorityTier": 3,
+      "roleEligibility": ["coding"]
+    }
+  ]
+}
