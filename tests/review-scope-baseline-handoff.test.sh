@@ -52,6 +52,7 @@ fi
 # ── Behavior: extract and run ensure_review_scope_baseline for real ──
 eval "$(extract_function "$MILL_SCRIPT" "ensure_review_scope_baseline")"
 
+# shellcheck disable=SC2034  # read by the eval'd ensure_review_scope_baseline
 TOOLS_DIR="$REPO_DIR/tools"
 WARNINGS=""
 log_warn() { WARNINGS+="$*"$'\n'; }
