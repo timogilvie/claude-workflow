@@ -9284,6 +9284,13 @@ ready_stage_pending_verdict() {
 
 READY_TRANSIENT_MAX_ATTEMPTS=6
 
+# Failed-ready re-check budget (HOK-2893). Operator env overrides survive the
+# `:=` defaults; all knobs are validated at point of use with these fallbacks.
+: "${READY_FAILED_RECHECK_MAX_ATTEMPTS:=4}"
+: "${READY_FAILED_RECHECK_BACKOFF_SECONDS:=120}"
+: "${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:=1800}"
+: "${READY_FAILED_RECHECK_IDENTICAL_LIMIT:=3}"
+
 write_ready_attention_file() {
   local state_dir="$1" message="$2"
   mkdir -p "$state_dir"
@@ -9524,6 +9531,271 @@ write_transient_ready_attention_file() {
   write_ready_attention_file "$state_dir" "$message"
   : > "$state_dir/.needs-attention-transient"
 }
+
+# --- Failed-ready re-check budget (HOK-2893) ---------------------------------
+# The monitor re-launches ready checks whenever the stored status is `failed`.
+# These helpers bound that loop: a per-head attempt counter with exponential
+# backoff, an identical-failure-reason short-circuit, and a one-shot terminal
+# state. A new head SHA (fresh commit) or a ready pass wipes the budget.
+# All state lives in plain files in the ready state dir, mirroring the
+# .transient-mergeability-count idiom. Every helper that is invoked bare or
+# via command substitution returns 0 on all paths (the mill runs under set -e);
+# only mark_failed_ready_recheck_exhausted and failed_ready_recheck_due use
+# their exit status as a signal, and both are always called behind `if`.
+
+failed_ready_recheck_count() {
+  local state_dir="$1"
+  local count_file="$state_dir/.failed-ready-recheck-count"
+
+  if [[ ! -f "$count_file" ]]; then
+    echo "0"
+    return 0
+  fi
+
+  local count
+  count=$(cat "$count_file" 2>/dev/null || echo "0")
+  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+    echo "0"
+    return 0
+  fi
+
+  echo "$count"
+}
+
+clear_failed_ready_recheck_state() {
+  local state_dir="$1"
+  rm -f \
+    "$state_dir/.failed-ready-recheck-count" \
+    "$state_dir/.failed-ready-recheck-head" \
+    "$state_dir/.failed-ready-recheck-last-at" \
+    "$state_dir/.failed-ready-recheck-reason.json" \
+    "$state_dir/.failed-ready-recheck-exhausted"
+}
+
+# A new commit is genuine new information: wipe the budget (and any exhausted
+# terminal state) so the fresh head gets a full set of attempts. An empty
+# current head means git failed — never reset on that.
+failed_ready_recheck_reset_if_new_head() {
+  local state_dir="$1" current_head="$2"
+  local head_file="$state_dir/.failed-ready-recheck-head"
+  local stored_head
+
+  [[ -n "$current_head" ]] || return 0
+  [[ -f "$head_file" ]] || return 0
+  stored_head=$(cat "$head_file" 2>/dev/null || echo "")
+  [[ -n "$stored_head" ]] || return 0
+  if [[ "$stored_head" != "$current_head" ]]; then
+    clear_failed_ready_recheck_state "$state_dir"
+  fi
+  return 0
+}
+
+increment_failed_ready_recheck_count() {
+  local state_dir="$1" current_head="$2"
+  local count
+  count=$(failed_ready_recheck_count "$state_dir")
+  count=$((count + 1))
+  mkdir -p "$state_dir"
+  printf '%s\n' "$count" > "$state_dir/.failed-ready-recheck-count"
+  # An empty head means git failed; keep any previously recorded head so a
+  # later real commit still triggers the budget reset.
+  if [[ -n "$current_head" ]]; then
+    printf '%s\n' "$current_head" > "$state_dir/.failed-ready-recheck-head"
+  fi
+  printf '%s\n' "$(date +%s)" > "$state_dir/.failed-ready-recheck-last-at"
+  echo "$count"
+}
+
+# Delay before attempt (count+1): min(base * 2^(count-1), cap).
+# Non-numeric env overrides fall back to the shipped defaults.
+failed_ready_recheck_backoff_seconds() {
+  local count="$1"
+  local base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
+  local cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
+  [[ "$base" =~ ^[0-9]+$ ]] || base=120
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
+  [[ "$count" =~ ^[0-9]+$ ]] || count=1
+  (( count >= 1 )) || count=1
+
+  local delay="$base" i
+  for (( i = 1; i < count; i++ )); do
+    delay=$((delay * 2))
+    if (( delay >= cap )); then
+      delay="$cap"
+      break
+    fi
+  done
+  (( delay > cap )) && delay="$cap"
+  echo "$delay"
+}
+
+failed_ready_recheck_due() {
+  local state_dir="$1"
+  local last_at_file="$state_dir/.failed-ready-recheck-last-at"
+  local last_at now delay
+
+  if [[ ! -f "$last_at_file" ]]; then
+    return 0
+  fi
+  last_at=$(cat "$last_at_file" 2>/dev/null || echo "")
+  if [[ ! "$last_at" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+
+  delay=$(failed_ready_recheck_backoff_seconds "$(failed_ready_recheck_count "$state_dir")")
+  now=$(date +%s)
+  (( now - last_at >= delay ))
+}
+
+ready_failure_reason() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+
+  [[ -f "$result_file" ]] || { echo ""; return 0; }
+  jq -r '.failureReason // .notes // empty' "$result_file" 2>/dev/null || echo ""
+}
+
+# Record what the last failed launch actually observed. Only a fresh verdict
+# (a new finishedAt in .ready-result.json) counts as evidence — a launch that
+# died before writing a result (review-gate refusal, unparseable output) must
+# not feed the identical-reason streak, or infra flakes would be classified
+# as deterministic. Byte-identical consecutive reasons grow the streak; a
+# different (or empty) reason resets it to 1.
+record_failed_ready_recheck_observation() {
+  local state_dir="$1"
+  local result_file="$state_dir/.ready-result.json"
+  local reason_file="$state_dir/.failed-ready-recheck-reason.json"
+  local finished_at reason prev_finished_at prev_reason streak tmp
+
+  [[ -f "$result_file" ]] || return 0
+  finished_at=$(jq -r '.finishedAt // empty' "$result_file" 2>/dev/null || echo "")
+  [[ -n "$finished_at" ]] || return 0
+
+  prev_finished_at=""
+  prev_reason=""
+  streak=0
+  if [[ -f "$reason_file" ]]; then
+    prev_finished_at=$(jq -r '.finishedAt // empty' "$reason_file" 2>/dev/null || echo "")
+    prev_reason=$(jq -r '.reason // empty' "$reason_file" 2>/dev/null || echo "")
+    streak=$(jq -r '.streak // 0' "$reason_file" 2>/dev/null || echo "0")
+    [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
+  fi
+
+  [[ "$finished_at" != "$prev_finished_at" ]] || return 0
+
+  reason=$(ready_failure_reason "$state_dir")
+  if [[ -n "$reason" && "$reason" == "$prev_reason" ]]; then
+    streak=$((streak + 1))
+  else
+    streak=1
+  fi
+
+  mkdir -p "$state_dir"
+  tmp=$(mktemp "$state_dir/.failed-ready-recheck-reason.XXXXXX") || return 0
+  if jq -cn \
+      --arg finishedAt "$finished_at" \
+      --arg reason "$reason" \
+      --argjson streak "$streak" \
+      '{finishedAt: $finishedAt, reason: $reason, streak: $streak}' > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$reason_file"
+  fi
+  rm -f "$tmp"
+  return 0
+}
+
+failed_ready_recheck_identical_streak() {
+  local state_dir="$1"
+  local reason_file="$state_dir/.failed-ready-recheck-reason.json"
+  local streak
+
+  [[ -f "$reason_file" ]] || { echo "0"; return 0; }
+  streak=$(jq -r '.streak // 0' "$reason_file" 2>/dev/null || echo "0")
+  [[ "$streak" =~ ^[0-9]+$ ]] || streak=0
+  echo "$streak"
+}
+
+# One-shot terminalization. Returns 0 on the first-time transition (caller
+# emits the status line) and 1 when the sentinel already exists. Annotates
+# .ready-result.json so the stall names its own gate for the observer,
+# watchdog, and eval consumers; a missing result file skips annotation.
+mark_failed_ready_recheck_exhausted() {
+  local issue="$1" pr_number="$2" state_dir="$3"
+  local sentinel="$state_dir/.failed-ready-recheck-exhausted"
+  local result_file="$state_dir/.ready-result.json"
+  local attempts reason tmp
+
+  if [[ -f "$sentinel" ]]; then
+    return 1
+  fi
+
+  attempts=$(failed_ready_recheck_count "$state_dir")
+  reason=$(ready_failure_reason "$state_dir")
+  [[ -n "$reason" ]] || reason="ready checks failed"
+
+  if [[ -f "$result_file" ]]; then
+    tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || tmp=""
+    if [[ -n "$tmp" ]]; then
+      if jq -c \
+          --argjson attempts "$attempts" \
+          --arg reason "$reason" \
+          '.artifacts.failedReadyRecheck = {attempts: $attempts, exhausted: true, lastReason: $reason}
+           | .failureReason //= $reason' \
+          "$result_file" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$result_file"
+      fi
+      rm -f "$tmp"
+    fi
+  fi
+
+  write_ready_attention_file "$state_dir" \
+    "Failed-ready re-checks exhausted after ${attempts} attempt(s) for PR #$pr_number: $reason"
+  log_error "  Failed-ready re-checks exhausted for $issue after ${attempts} attempt(s) (PR #$pr_number): $reason"
+  mkdir -p "$state_dir"
+  : > "$sentinel"
+  return 0
+}
+
+# The composed decision for the failed-status poll site. Echoes exactly one of:
+#   proceed         — launch a re-check now (caller increments the counter)
+#   backoff         — a retry is scheduled but its delay has not elapsed
+#   exhausted       — budget spent (or reason provably deterministic); caller
+#                     terminalizes via mark_failed_ready_recheck_exhausted
+#   exhausted-quiet — already terminalized; hold silently until a new commit
+failed_ready_recheck_gate() {
+  local state_dir="$1" current_head="$2"
+  local count limit streak identical_limit
+
+  failed_ready_recheck_reset_if_new_head "$state_dir" "$current_head"
+
+  if [[ -f "$state_dir/.failed-ready-recheck-exhausted" ]]; then
+    echo "exhausted-quiet"
+    return 0
+  fi
+
+  limit="${READY_FAILED_RECHECK_MAX_ATTEMPTS:-4}"
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=4
+  count=$(failed_ready_recheck_count "$state_dir")
+  if (( count >= limit )); then
+    echo "exhausted"
+    return 0
+  fi
+
+  identical_limit="${READY_FAILED_RECHECK_IDENTICAL_LIMIT:-3}"
+  [[ "$identical_limit" =~ ^[0-9]+$ ]] || identical_limit=3
+  streak=$(failed_ready_recheck_identical_streak "$state_dir")
+  if (( identical_limit > 0 && streak >= identical_limit )); then
+    echo "exhausted"
+    return 0
+  fi
+
+  if ! failed_ready_recheck_due "$state_dir"; then
+    echo "backoff"
+    return 0
+  fi
+
+  echo "proceed"
+}
+# --- end failed-ready re-check budget ----------------------------------------
 
 log_ready_failure_result() {
   local issue="$1"
@@ -10201,6 +10473,7 @@ launch_ready_phase() {
     write_stage_result "$state_dir" "ready" "completed" "$current_agent" "$current_model" \
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
+    clear_failed_ready_recheck_state "$state_dir"
     log "debug" "  $issue: Canonicalized ready labels for PR #$pr_number"
     log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
@@ -16131,6 +16404,7 @@ monitor_issue_state() {
   elif [[ "$current_phase" == "ready" ]]; then
     local resolved_phase ready_state_dir_path ready_status ready_verdict
     local launch_head current_head title launch_rc _conflict_cleared
+    local recheck_disposition recheck_attempt recheck_limit
     _conflict_cleared=false
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
@@ -16326,7 +16600,31 @@ monitor_issue_state() {
 
     ready_verdict=$(ready_stage_pending_verdict "$ready_state_dir_path")
     if [[ "$ready_status" == "failed" ]]; then
-      log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR"
+      # Bound the re-check loop (HOK-2893): attempt ceiling + backoff + terminal
+      # hold, reset by a new commit or a ready pass.
+      recheck_disposition=$(failed_ready_recheck_gate "$ready_state_dir_path" "$current_head")
+      recheck_limit="${READY_FAILED_RECHECK_MAX_ATTEMPTS:-4}"
+      case "$recheck_disposition" in
+        exhausted)
+          if mark_failed_ready_recheck_exhausted "$ISSUE" "$PR" "$ready_state_dir_path"; then
+            log "status" "⛔ $ISSUE → Failed-ready re-checks exhausted for PR #$PR; waiting for a new commit or operator"
+          fi
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        exhausted-quiet)
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        backoff)
+          log "debug" "  $ISSUE: holding failed-ready re-check for PR #$PR (backoff)"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+      esac
+
+      recheck_attempt=$(increment_failed_ready_recheck_count "$ready_state_dir_path" "$current_head")
+      log "status" "↻ $ISSUE → Re-running failed ready checks for PR #$PR (attempt ${recheck_attempt}/${recheck_limit})"
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
@@ -16350,6 +16648,7 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
+        record_failed_ready_recheck_observation "$ready_state_dir_path"
         log "status" "⚠ $ISSUE → Ready re-check still failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
