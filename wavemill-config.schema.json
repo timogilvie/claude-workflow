@@ -699,6 +699,13 @@
                             "minimum": 0,
                             "maximum": 1,
                             "description": "Penalty per failed or aborted prior stage attempt."
+                        },
+                        "unknownAttribution": {
+                            "type": "number",
+                            "default": 0.05,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Penalty per commit that could not be attributed to the agent or the operator (no recorded stage-result data)."
                         }
                     },
                     "additionalProperties": false
