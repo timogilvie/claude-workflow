@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
 import { getIncidentConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
+import { checkConfigIntegrity, type ConfigIntegrityIssue } from '../shared/lib/config-integrity.ts';
 import { detectIncidentsForRepo, detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
@@ -21,6 +22,21 @@ type Confidence = 'high' | 'medium' | 'low';
 const DEFAULT_OBSERVER_PANE_TITLE = 'Wavemill Observer';
 const READY_RECHECK_LOOP_THRESHOLD = 3;
 const READY_RECHECK_LOOP_URGENT_THRESHOLD = 6;
+const MODEL_DOWNGRADE_THRESHOLD = 3;
+
+/**
+ * Signatures matched inside generic mill-log findings while a config-integrity
+ * finding is present for the same repo. Matching findings are absorbed into
+ * the config-integrity finding's evidence rather than emitted independently.
+ * Every entry corresponds to a symptom class from the 2026-08-27 incident.
+ */
+const CONFIG_INTEGRITY_DOWNSTREAM_PATTERNS: RegExp[] = [
+  /Unexpected non-whitespace character|Unexpected token|Failed to parse .*wavemill-config|Config validation failed/i,
+  /failed validation \(model selector is not valid for this repo\)|challenge aborted because selected/i,
+  /Invalid \w+ model '[^']*'; using/i,
+  /ready watchdog tick failed/i,
+  /Post-completion eval: failed/i,
+];
 
 interface ObserverOptions {
   loop: boolean;
@@ -684,6 +700,19 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
   for (const repo of snapshot.repos) {
+    // Config integrity runs first: a malformed schema or config file kills
+    // every TS entrypoint fleet-wide and surfaces as N unrelated per-tool
+    // symptoms. Detecting it here lets the observer correlate the downstream
+    // noise into a single, actionable finding.
+    const configIntegrityIssues = checkConfigIntegrity({ repoDir: repo.repoDir });
+    const configIntegrityFindingsForRepo: Finding[] = [];
+    const configIntegrityDownstream: string[] = [];
+    for (const issue of configIntegrityIssues) {
+      const finding = buildConfigIntegrityFinding(repo, issue);
+      configIntegrityFindingsForRepo.push(finding);
+      findings.push(finding);
+    }
+
     const rejectedEvalCount = countRejectedEvalRecords(repo.repoDir);
     if (rejectedEvalCount > 0) {
       const [newestRejectedEval] = listRejectedEvalRecords(repo.repoDir, { limit: 1 });
@@ -930,6 +959,54 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    // Silent model-downgrade detector (REQ-F4): grouped by stage/model/fallback.
+    // These `[warn]` lines are a correctness regression — every match means a
+    // launch ran on a fallback model without the operator being told the
+    // selection had failed. Repeated occurrences point to config or registry
+    // breakage that generic-scrape severity ('low') would bury.
+    const modelDowngradeLines = new Set<string>();
+    const modelDowngradeGroups = new Map<string, ModelDowngradeGroup>();
+    for (const line of logLines) {
+      const entry = parseModelDowngradeLine(line);
+      if (!entry) continue;
+      const key = `${entry.stage}\0${entry.model}\0${entry.fallback}`;
+      const group = modelDowngradeGroups.get(key) ?? {
+        stage: entry.stage,
+        model: entry.model,
+        fallback: entry.fallback,
+        lines: [],
+      };
+      group.lines.push(line);
+      modelDowngradeGroups.set(key, group);
+    }
+    for (const group of modelDowngradeGroups.values()) {
+      if (group.lines.length < MODEL_DOWNGRADE_THRESHOLD) continue;
+      for (const line of group.lines) modelDowngradeLines.add(line);
+      const evidence: string[] = [
+        `stage=${group.stage}`,
+        `requestedModel=${group.model}`,
+        `fallbackModel=${group.fallback}`,
+        `occurrences=${group.lines.length}`,
+        ...group.lines.slice(-4),
+      ];
+      if (configIntegrityFindingsForRepo.length > 0) {
+        const rootCauseFile = summarizeConfigIntegritySource(configIntegrityIssues);
+        evidence.push(`probableRootCause=config-integrity (${rootCauseFile})`);
+      }
+      findings.push({
+        id: `model-downgrade-${repo.session}-${hashText(`${group.stage}:${group.model}:${group.fallback}`)}`,
+        severity: 'high',
+        category: 'operational',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `Model selection is silently downgrading ${group.stage} '${group.model}' to '${group.fallback}' (${group.lines.length} launches)`,
+        evidence,
+        recommendation: 'This is a correctness regression, not noise — launches are running on a fallback model without operator awareness. Check config/schema integrity first (a broken wavemill-config.schema.json or .wavemill-config.json will make every model selector look invalid), then the model registry and exclusions.',
+        occurrenceCount: group.lines.length,
+      });
+    }
+
     const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
       const parsed = parseMillLogLine(line);
@@ -939,6 +1016,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       if (parsed.level === 'warn') {
         if (repeatedReadyWatchdogLines.has(line)) continue;
         if (readyRecheckLines.has(line)) continue;
+        if (modelDowngradeLines.has(line)) continue;
         if (queueHealthDegraded && /queue analysis unavailable/i.test(parsed.message)) continue;
       }
 
@@ -954,6 +1032,21 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
 
     for (const grouped of genericLogFindings.values()) {
+      // Correlation (REQ-F3): when a config-integrity finding exists for this
+      // repo, downstream messages it explains are absorbed into that finding's
+      // evidence rather than emitted as independent findings. This kept the
+      // 2026-08-27 incident from being reported as three unrelated failures
+      // ('ready watchdog tick failed', 'model selector invalid', 'eval failed').
+      if (
+        configIntegrityFindingsForRepo.length > 0 &&
+        matchesConfigIntegrityDownstream(grouped)
+      ) {
+        configIntegrityDownstream.push(
+          `downstream=${grouped.lines.length}x ${grouped.normalizedMessage}`,
+        );
+        continue;
+      }
+
       const latestLine = grouped.lines[grouped.lines.length - 1];
       const evidence = [
         `occurrences=${grouped.lines.length}`,
@@ -990,6 +1083,21 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           recommendation: 'Watch for repeated occurrences. File an issue if the warning repeats or blocks progression.',
           occurrenceCount: grouped.lines.length,
         });
+      }
+    }
+
+    if (configIntegrityDownstream.length > 0) {
+      // Attach a bounded excerpt of the absorbed downstream messages to each
+      // config-integrity finding so an operator sees the blast radius without
+      // scrolling through the log.
+      const capped = configIntegrityDownstream.slice(0, 8);
+      for (const finding of configIntegrityFindingsForRepo) {
+        finding.evidence.push(...capped);
+        if (configIntegrityDownstream.length > capped.length) {
+          finding.evidence.push(
+            `downstreamAdditional=${configIntegrityDownstream.length - capped.length} more downstream signatures suppressed`,
+          );
+        }
       }
     }
 
@@ -1124,6 +1232,90 @@ function isAgentBoxOutputMessage(message: string): boolean {
   return /^\s*│/.test(message);
 }
 
+/**
+ * A `[warn] Invalid <stage> model 'X'; using 'Y'` line parsed into its
+ * three grouping keys. The related `looks like a depth tag` variant is a
+ * legitimate distinct condition and deliberately does not match.
+ */
+interface ModelDowngradeEntry {
+  stage: string;
+  model: string;
+  fallback: string;
+}
+
+interface ModelDowngradeGroup {
+  stage: string;
+  model: string;
+  fallback: string;
+  lines: string[];
+}
+
+function parseModelDowngradeLine(line: string): ModelDowngradeEntry | null {
+  const parsed = parseMillLogLine(line);
+  if (!parsed || parsed.level !== 'warn') return null;
+  const match = /Invalid\s+(\w+)\s+model\s+'([^']+)';\s+using\s+'([^']+)'/.exec(parsed.message);
+  if (!match) return null;
+  return { stage: match[1], model: match[2], fallback: match[3] };
+}
+
+function matchesConfigIntegrityDownstream(finding: AggregatedMillLogFinding): boolean {
+  for (const pattern of CONFIG_INTEGRITY_DOWNSTREAM_PATTERNS) {
+    if (pattern.test(finding.normalizedMessage)) return true;
+    if (finding.lines.some((line) => pattern.test(line))) return true;
+  }
+  return false;
+}
+
+function summarizeConfigIntegritySource(issues: ConfigIntegrityIssue[]): string {
+  if (issues.length === 0) return 'unknown';
+  const files = new Set(issues.map((issue) => issue.file));
+  const [first] = files;
+  return files.size === 1 ? first : `${files.size} files including ${first}`;
+}
+
+function buildConfigIntegrityFinding(repo: RepoSnapshot, issue: ConfigIntegrityIssue): Finding {
+  const fileBase = basename(issue.file);
+  const kindLabel = configIntegrityKindLabel(issue.kind);
+  const evidence: string[] = [
+    `file=${issue.file}`,
+    `kind=${issue.kind}`,
+  ];
+  if (issue.position !== undefined) evidence.push(`position=${issue.position}`);
+  if (issue.line !== undefined) evidence.push(`line=${issue.line}`);
+  if (issue.column !== undefined) evidence.push(`column=${issue.column}`);
+  if (issue.excerpt) evidence.push(`excerpt=${issue.excerpt}`);
+  evidence.push(`error=${issue.message}`);
+
+  const location = issue.line !== undefined && issue.column !== undefined
+    ? ` at ${issue.line}:${issue.column}`
+    : '';
+  const recommendation =
+    `Repair ${fileBase}${location} and re-run \`observer --once\` to confirm. ` +
+    'Every wavemill TS entrypoint exits 1 until this file parses — model validation, ' +
+    'ready watchdog, eval, and challenge launches all fail as apparent per-tool errors.';
+  return {
+    id: `config-integrity-${repo.session}-${hashText(`${issue.file}\0${issue.kind}`)}`,
+    severity: 'urgent',
+    category: 'operational',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    title: `Config integrity failure in ${fileBase}: ${kindLabel}`,
+    evidence,
+    recommendation,
+  };
+}
+
+function configIntegrityKindLabel(kind: ConfigIntegrityIssue['kind']): string {
+  switch (kind) {
+    case 'schema-parse': return 'schema-parse';
+    case 'schema-compile': return 'schema-compile';
+    case 'config-parse': return 'config-parse';
+    case 'config-validate': return 'config-validate';
+    default: return kind;
+  }
+}
+
 function normalizeMillLogFingerprintMessage(message: string): string {
   return message
     .replace(/\b(pid|ppid|processPid|plannerPid|monitorPid|childPid)=\d+\b/gi, '$1=<pid>')
@@ -1219,7 +1411,16 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
   }
 
   for (const repo of snapshot.repos) {
-    const incidentConfig = getIncidentConfig(repo.repoDir);
+    // Degraded-mode startup (REQ-F2): a broken schema or config file must not
+    // stop the observer from producing findings. The config-integrity detector
+    // has already surfaced *why* config loading failed, so we skip this repo's
+    // incident reconciliation instead of propagating.
+    let incidentConfig: ReturnType<typeof getIncidentConfig>;
+    try {
+      incidentConfig = getIncidentConfig(repo.repoDir);
+    } catch {
+      continue;
+    }
     if (incidentConfig.enabled === false) continue;
     const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
     const store = new IncidentStore(
@@ -1443,7 +1644,14 @@ function collectSyncResult(summary: IncidentSyncSnapshot, result: SyncResult): v
 }
 
 function incidentStoreForRepo(repo: RepoSnapshot, options: ObserverOptions): IncidentStore | null {
-  const incidentConfig = getIncidentConfig(repo.repoDir);
+  // Degraded-mode startup (REQ-F2): null return already means "no store for
+  // this repo" to callers, so a broken config short-circuits here.
+  let incidentConfig: ReturnType<typeof getIncidentConfig>;
+  try {
+    incidentConfig = getIncidentConfig(repo.repoDir);
+  } catch {
+    return null;
+  }
   if (incidentConfig.enabled === false) return null;
   const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
   return new IncidentStore(
@@ -1461,7 +1669,20 @@ export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options:
   for (const repo of snapshot.repos) {
     const store = incidentStoreForRepo(repo, options);
     if (!store) continue;
-    const config = mergeObserverLinearConfig(getObserverLinearConfig(repo.repoDir), options);
+    // Degraded-mode startup (REQ-F2): a broken config surfaces as one
+    // skipped-repo entry in the sync summary instead of aborting the pass.
+    let observerLinearConfig: ObserverLinearConfig;
+    try {
+      observerLinearConfig = getObserverLinearConfig(repo.repoDir);
+    } catch (err) {
+      summary.errors.push({
+        fingerprint: 'config',
+        action: 'skipped',
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
+    const config = mergeObserverLinearConfig(observerLinearConfig, options);
     try {
       if (!config.detectionOnly) {
         const retry = await drainIncidentQueue({
