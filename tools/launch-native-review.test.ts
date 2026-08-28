@@ -4,12 +4,41 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildNativeCodingHandoff, firstNonEmpty } from './launch-native-review.ts';
+import { buildNativeCodingHandoff, firstNonEmpty, resolveBaseBranch } from './launch-native-review.ts';
 
 describe('launch-native-review helpers', () => {
   it('ignores blank launcher context so required defaults remain available', () => {
     assert.equal(firstNonEmpty('', '   ', undefined, 'main'), 'main');
     assert.equal(firstNonEmpty('', undefined), undefined);
+  });
+
+  it('resolves the review base branch from mill config before falling back to main', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'native-review-base-'));
+    try {
+      writeFileSync(
+        join(repoDir, '.wavemill-config.json'),
+        JSON.stringify({ mill: { baseBranch: 'auto/integration' } }, null, 2),
+      );
+
+      // Configured base wins when the launcher passed nothing.
+      assert.equal(resolveBaseBranch(undefined, undefined, repoDir), 'auto/integration');
+      // Blank env must not mask the configured value.
+      assert.equal(resolveBaseBranch('', '   ', repoDir), 'auto/integration');
+      // Explicit inputs still take precedence, in order.
+      assert.equal(resolveBaseBranch('release/1.x', 'env-branch', repoDir), 'release/1.x');
+      assert.equal(resolveBaseBranch(undefined, 'env-branch', repoDir), 'env-branch');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to main when no base branch is configured anywhere', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'native-review-base-empty-'));
+    try {
+      assert.equal(resolveBaseBranch(undefined, undefined, repoDir), 'main');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
   });
 
   it('builds a compact native coding handoff from completion artifacts', () => {

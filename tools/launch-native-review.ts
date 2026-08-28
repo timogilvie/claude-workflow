@@ -12,6 +12,7 @@ import type {
 } from '../shared/lib/native-agent/workflow-tools/linear-tools.ts';
 import { DEFAULT_NETWORK_POLICY, type NetworkPolicy } from '../shared/lib/native-agent/network-policy.ts';
 import { resolveOwnerRepo } from '../shared/lib/github.ts';
+import { getMillConfig } from '../shared/lib/config.ts';
 import { createComment, getIssue, updateComment } from '../shared/lib/linear.ts';
 
 function readOption(name: string): string | undefined {
@@ -156,6 +157,31 @@ function buildPrBody(input: {
   ].join('\n');
 }
 
+/**
+ * Resolve the base branch a native review PR should target.
+ *
+ * Precedence: explicit --base-branch, then WAVEMILL_BASE_BRANCH, then the
+ * repository's configured mill baseBranch. Only when none of those yield a
+ * value do we fall back to 'main'. Reading mill config matters because mill
+ * repos commonly target an integration branch; defaulting straight to 'main'
+ * opened PRs against the wrong base (hundreds of unrelated commits) whenever
+ * the launcher env was not populated.
+ */
+export function resolveBaseBranch(
+  optionValue: string | undefined,
+  envValue: string | undefined,
+  repoDir: string,
+): string {
+  const configured = (() => {
+    try {
+      return getMillConfig(repoDir).baseBranch;
+    } catch {
+      return undefined;
+    }
+  })();
+  return firstNonEmpty(optionValue, envValue, configured) ?? 'main';
+}
+
 async function main(): Promise<void> {
   const session = firstNonEmpty(readOption('session'), process.env.WAVEMILL_SESSION) ?? '';
   const issue = firstNonEmpty(readOption('issue'), process.env.WAVEMILL_ISSUE) ?? '';
@@ -164,7 +190,7 @@ async function main(): Promise<void> {
   const repoDir = resolve(firstNonEmpty(readOption('repo-dir'), process.env.WAVEMILL_REPO_DIR) ?? process.cwd());
   const featureDir = resolve(firstNonEmpty(readOption('feature-dir')) ?? join(wtDir, 'features', slug));
   const title = firstNonEmpty(readOption('title'), process.env.WAVEMILL_TITLE) ?? issue;
-  const baseBranch = firstNonEmpty(readOption('base-branch'), process.env.WAVEMILL_BASE_BRANCH) ?? 'main';
+  const baseBranch = resolveBaseBranch(readOption('base-branch'), process.env.WAVEMILL_BASE_BRANCH, repoDir);
   const reviewerModel = firstNonEmpty(process.env.WAVEMILL_RESOLVED_MODEL) ?? '';
 
   if (!session || !issue || !slug) {
