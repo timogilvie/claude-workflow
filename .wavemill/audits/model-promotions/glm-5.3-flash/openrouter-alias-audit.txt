@@ -1,0 +1,46 @@
+Audited 22 native-openrouter aliases. Findings: 44. Selectable findings: 24.
+Alias drift findings:
+  deepseek-coder-v2	unresolved-openrouter-id	unresolved (retired - expected)
+  gemini-2.0-flash	not-found-in-openrouter	google/gemini-2.0-flash-001 (retired - expected)
+  grok-code-fast	not-found-in-openrouter	x-ai/grok-code-fast-1 (retired - expected)
+  kimi-k2	pricing-drift	moonshotai/kimi-k2 (retired - expected)
+  kimi-k2	pricing-drift	moonshotai/kimi-k2 (retired - expected)
+  kimi-k2.7-code	pricing-drift	moonshotai/kimi-k2.7-code
+  kimi-k2.7-code	pricing-drift	moonshotai/kimi-k2.7-code
+  kimi-k2.7-code	pricing-drift	moonshotai/kimi-k2.7-code
+  kimi-k2.7-code	pricing-drift	moonshotai/kimi-k2.7-code
+  kimi-k2.7-code	pricing-drift	moonshotai/kimi-k2.7-code
+  llama-3.3-70b	pricing-drift	meta-llama/llama-3.3-70b-instruct (retired - expected)
+  llama-3.3-70b	pricing-drift	meta-llama/llama-3.3-70b-instruct (retired - expected)
+  llama-3.3-70b	pricing-drift	meta-llama/llama-3.3-70b-instruct (retired - expected)
+  llama-3.3-70b	pricing-drift	meta-llama/llama-3.3-70b-instruct (retired - expected)
+  llama-3.3-70b	pricing-drift	meta-llama/llama-3.3-70b-instruct (retired - expected)
+  llama-4-maverick	pricing-drift	meta-llama/llama-4-maverick
+  llama-4-maverick	pricing-drift	meta-llama/llama-4-maverick
+  llama-4-maverick	pricing-drift	meta-llama/llama-4-maverick
+  llama-4-maverick	pricing-drift	meta-llama/llama-4-maverick
+  llama-4-scout	pricing-drift	meta-llama/llama-4-scout
+  llama-4-scout	pricing-drift	meta-llama/llama-4-scout
+  llama-4-scout	pricing-drift	meta-llama/llama-4-scout
+  llama-4-scout	pricing-drift	meta-llama/llama-4-scout
+  llama-4-scout	pricing-drift	meta-llama/llama-4-scout
+  mistral-large-2	pricing-drift	mistralai/mistral-large-2407 (retired - expected)
+  ox-alpha	not-found-in-openrouter	stealth/ox-alpha (retired - expected)
+  qwen-2.5-72b	pricing-drift	qwen/qwen-2.5-72b-instruct (retired - expected)
+  qwen-2.5-72b	pricing-drift	qwen/qwen-2.5-72b-instruct (retired - expected)
+  qwen-2.5-72b	pricing-drift	qwen/qwen-2.5-72b-instruct (retired - expected)
+  qwen-2.5-72b	pricing-drift	qwen/qwen-2.5-72b-instruct (retired - expected)
+  qwen-2.5-coder-32b	pricing-drift	qwen/qwen-2.5-coder-32b-instruct (retired - expected)
+  qwen-2.5-coder-32b	pricing-drift	qwen/qwen-2.5-coder-32b-instruct (retired - expected)
+  qwen-2.5-coder-32b	pricing-drift	qwen/qwen-2.5-coder-32b-instruct (retired - expected)
+  qwen-2.5-coder-32b	pricing-drift	qwen/qwen-2.5-coder-32b-instruct (retired - expected)
+  qwen-3-235b	pricing-drift	qwen/qwen3-235b-a22b-2507
+  qwen-3-235b	pricing-drift	qwen/qwen3-235b-a22b-2507
+  qwen-3-235b	pricing-drift	qwen/qwen3-235b-a22b-2507
+  qwen-3-235b	pricing-drift	qwen/qwen3-235b-a22b-2507
+  qwen-3-235b	pricing-drift	qwen/qwen3-235b-a22b-2507
+  qwen-3-coder	pricing-drift	qwen/qwen3-coder
+  qwen-3-coder	pricing-drift	qwen/qwen3-coder
+  qwen-3-coder	pricing-drift	qwen/qwen3-coder
+  qwen-3-coder	pricing-drift	qwen/qwen3-coder
+  qwen-3-coder	pricing-drift	qwen/qwen3-coder

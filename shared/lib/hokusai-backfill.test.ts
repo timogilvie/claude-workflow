@@ -240,6 +240,39 @@ describe('hokusai backfill safety', () => {
     assert.equal(pendingLines(repoDir).length, 1);
   });
 
+  it('reconciles a zero-evidence promotion manifest as zero rows instead of refusing', async () => {
+    const repoDir = makeRepo([], { submissionEnabled: true });
+    const configDir = makeConfigDir();
+    // Shape produced by shared/lib/model-promotion.ts for a promotion whose
+    // evidence stayed held: no row arrays, conservation proves eval IDs intact.
+    const manifestPath = join(repoDir, 'zero-evidence-manifest.json');
+    writeFileSync(manifestPath, `${JSON.stringify({
+      schemaVersion: '1',
+      manifestId: 'zero-evidence-1',
+      promotionId: 'zero-evidence-1',
+      status: 'applied',
+      conservation: { evalIdsConserved: true, oldReferencesBefore: 0, oldReferencesAfter: 0 },
+    }, null, 2)}\n`);
+
+    const summary = await backfillHokusaiSubmissions({ repoDir, configDir, promotionManifestPath: manifestPath });
+    assert.equal(summary.selected, 0);
+    assert.equal(summary.results.length, 0);
+    assert.ok(summary.reconciliationReportHash);
+
+    // A hand-written rows manifest with no rows still refuses.
+    const emptyRowsPath = join(repoDir, 'empty-rows-manifest.json');
+    writeFileSync(emptyRowsPath, `${JSON.stringify({
+      schemaVersion: 'model-promotion.v1',
+      manifestId: 'manifest-empty',
+      reviewed: true,
+      rows: [],
+    }, null, 2)}\n`);
+    await assert.rejects(
+      backfillHokusaiSubmissions({ repoDir, configDir, promotionManifestPath: emptyRowsPath }),
+      /explicit promoted eval rows/,
+    );
+  });
+
   it('refuses accepted provisional evidence without correction/tombstone support', async () => {
     const record = promotedRecord();
     const repoDir = makeRepo([record], { submissionEnabled: true });

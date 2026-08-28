@@ -9,7 +9,8 @@ import {
   rollbackModelPromotion,
   type ModelTransitionSpec,
 } from './model-promotion.ts';
-import { computeIdentityFingerprint } from './model-registry.ts';
+import { assertRegistryConsistency, computeIdentityFingerprint } from './model-registry.ts';
+import { projectModelRegistryCatalog } from './model-registry-loader.ts';
 
 function makeRepo(): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'model-promotion-test-'));
@@ -160,6 +161,16 @@ function makeCatalog() {
       review: ['other-model'],
       classify: ['other-model'],
     },
+    openrouterMappings: [
+      {
+        wavemillAlias: 'ox-alpha',
+        openrouterId: 'stealth/ox-alpha',
+        family: 'unknown',
+        status: 'provisional',
+        priorityTier: 3,
+        roleEligibility: ['planning', 'coding', 'review'],
+      },
+    ],
   };
 }
 
@@ -248,8 +259,212 @@ describe('model promotion', () => {
       assert.equal(evalRecord.trainingEligible, false);
       assert.equal(evalRecord.modelIdentityAttribution.finalization.finalAlias, 'gpt-9-test');
 
+      const catalog = JSON.parse(readFileSync(join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json'), 'utf-8'));
+      const mappingByAlias = Object.fromEntries(
+        catalog.openrouterMappings.map((row: { wavemillAlias: string }) => [row.wavemillAlias, row]),
+      );
+      // The historical row stays resolvable but terminal; the final row is active.
+      assert.equal(mappingByAlias['ox-alpha'].status, 'deprecated');
+      assert.equal(mappingByAlias['ox-alpha'].openrouterId, 'stealth/ox-alpha');
+      assert.equal(mappingByAlias['gpt-9-test'].status, 'active');
+      assert.equal(mappingByAlias['gpt-9-test'].openrouterId, 'openai/gpt-9-test');
+
+      // The historical entry is disclosed: verified member of the final
+      // family with successor lineage, evidence still held, and the whole
+      // catalog passes the effective-registry consistency gate.
+      const oxEntry = catalog.models.find((entry: { id: string }) => entry.id === 'ox-alpha');
+      assert.equal(oxEntry.capabilities.identity.status, 'verified');
+      assert.equal(oxEntry.capabilities.identity.family, 'gpt');
+      assert.equal(oxEntry.capabilities.identity.evidencePolicy, 'held');
+      assert.equal(oxEntry.capabilities.identity.lineage.successor, 'gpt-9-test');
+      assert.equal(oxEntry.capabilities.supportedModel.lifecycle, 'deprecated');
+      assert.doesNotThrow(() => assertRegistryConsistency(projectModelRegistryCatalog(catalog)));
+
       const second = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
       assert.equal(second.status, 'already_applied');
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('rewrites provider ids in launch-priority-style mapping rows (openrouterId)', () => {
+    const repoDir = makeRepo();
+    try {
+      const mappingPath = join(repoDir, 'shared', 'fixtures', 'launch-priority.json');
+      writeFileSync(mappingPath, `${JSON.stringify({
+        schemaVersion: '1',
+        models: [
+          {
+            wavemillAlias: 'ox-alpha',
+            openrouterId: 'stealth/ox-alpha',
+            family: 'unknown',
+            status: 'provisional',
+            priorityTier: 3,
+          },
+          {
+            wavemillAlias: 'other-model',
+            openrouterId: 'other/model',
+            family: 'gpt',
+            status: 'active',
+            priorityTier: 1,
+          },
+        ],
+      }, null, 2)}\n`);
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      const mappingManifest = plan.files.find((file) => file.relativePath.endsWith('launch-priority.json'));
+      assert.ok(mappingManifest);
+      // Both the alias and the provider id count as old references and both are rewritten.
+      assert.equal(mappingManifest.oldReferencesBefore, 2);
+      assert.ok(mappingManifest.fieldChanges >= 2);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      const rewritten = JSON.parse(readFileSync(mappingPath, 'utf-8'));
+      assert.deepEqual(
+        rewritten.models.map((row: { wavemillAlias: string; openrouterId: string }) => [row.wavemillAlias, row.openrouterId]),
+        [
+          ['gpt-9-test', 'openai/gpt-9-test'],
+          ['other-model', 'other/model'],
+        ],
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('skips checked-in transition spec files instead of treating them as corpora', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'transitions'), { recursive: true });
+      const specPath = join(repoDir, 'transitions', 'ox-to-gpt-9-test.json');
+      const specContent = `${JSON.stringify(spec(), null, 2)}\n`;
+      writeFileSync(specPath, specContent);
+
+      // Without the skip this refuses: the spec holds the provisional identity in
+      // `alias`/`providerNativeId` keys and the final identity in the same keys.
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      assert.equal(plan.files.some((file) => file.relativePath.endsWith('ox-to-gpt-9-test.json')), false);
+      assert.ok(plan.diagnostics.some((line) => line.includes('transition spec')));
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(specPath, 'utf-8'), specContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('skips unparseable files that mention neither identity, refuses ones that do', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, 'tests', 'fixtures'), { recursive: true });
+      const brokenUnrelated = join(repoDir, 'tests', 'fixtures', 'broken-unrelated.json');
+      writeFileSync(brokenUnrelated, '{"planner":"broken"\n');
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      assert.ok(plan.diagnostics.some((line) => line.includes('broken-unrelated.json')));
+
+      writeFileSync(join(repoDir, 'tests', 'fixtures', 'broken-related.json'), '{"planner":"ox-alpha"\n');
+      assert.throws(
+        () => planModelPromotion({ spec: spec(), repoDir }),
+        /Malformed JSON/,
+      );
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('parses pretty-printed JSON stream .jsonl trace files without refusing', () => {
+    const repoDir = makeRepo();
+    try {
+      mkdirSync(join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1'), { recursive: true });
+      const tracePath = join(repoDir, '.wavemill', 'evals', 'artifacts', 'HOK-1', 'trace.jsonl');
+      // Two pretty-printed documents back to back; free-text mention only.
+      writeFileSync(tracePath, [
+        '{',
+        '  "schemaVersion": "1.0",',
+        '  "slug": "onboard-ox-alpha-for-routing",',
+        '  "event": "task_launched"',
+        '}',
+        '{',
+        '  "schemaVersion": "1.0",',
+        '  "planner": "ox-alpha",',
+        '  "event": "routing_complete"',
+        '}',
+        '',
+      ].join('\n'));
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.status, 'planned');
+      const traceManifest = plan.files.find((file) => file.relativePath.endsWith('trace.jsonl'));
+      assert.ok(traceManifest);
+      assert.equal(traceManifest.recordCount, 2);
+      // The structured planner reference counts and is rewritten; the slug stays free text.
+      assert.equal(traceManifest.oldReferencesBefore, 1);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      const rewritten = readFileSync(tracePath, 'utf-8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(rewritten[0].slug, 'onboard-ox-alpha-for-routing');
+      assert.equal(rewritten[1].planner, 'gpt-9-test');
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('does not cross into nested repositories (worktrees under the repo dir)', () => {
+    const repoDir = makeRepo();
+    try {
+      const nested = join(repoDir, 'worktrees', 'some-branch');
+      mkdirSync(join(nested, '.git'), { recursive: true });
+      const nestedFixture = join(nested, 'routing.json');
+      const nestedContent = `${JSON.stringify({ planner: 'ox-alpha' }, null, 2)}\n`;
+      writeFileSync(nestedFixture, nestedContent);
+
+      const plan = planModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(plan.files.some((file) => file.relativePath.includes('worktrees')), false);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(nestedFixture, 'utf-8'), nestedContent);
+    } finally {
+      cleanup(repoDir);
+    }
+  });
+
+  it('never treats certification artifacts as corpora (no re-keying, no refusal)', () => {
+    const repoDir = makeRepo();
+    try {
+      const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'stealth', 'ox-alpha');
+      mkdirSync(certDir, { recursive: true });
+      const oldCertPath = join(certDir, 'v3.json');
+      const oldCert = `${JSON.stringify({
+        schemaVersion: 3,
+        suiteVersion: 'v3',
+        phase: 'workflow',
+        subject: { registryKey: 'ox-alpha', providerNativeId: 'stealth/ox-alpha' },
+      }, null, 2)}\n`;
+      writeFileSync(oldCertPath, oldCert);
+      // A final-subject artifact can legitimately pre-exist an apply (e.g. a
+      // re-apply after rollback); it must not count as a final reference.
+      const finalCertDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'gpt-9-test');
+      mkdirSync(finalCertDir, { recursive: true });
+      const finalCertPath = join(finalCertDir, 'v3.json');
+      const finalCert = `${JSON.stringify({
+        schemaVersion: 3,
+        suiteVersion: 'v3',
+        phase: 'workflow',
+        subject: { registryKey: 'gpt-9-test', providerNativeId: 'openai/gpt-9-test' },
+      }, null, 2)}\n`;
+      writeFileSync(finalCertPath, finalCert);
+
+      const applied = applyModelPromotion({ spec: spec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      assert.equal(applied.status, 'applied');
+      assert.equal(readFileSync(oldCertPath, 'utf-8'), oldCert);
+      assert.equal(readFileSync(finalCertPath, 'utf-8'), finalCert);
     } finally {
       cleanup(repoDir);
     }

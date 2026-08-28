@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "1",
+  "promotionId": "ox-alpha-to-glm-5.3-flash",
+  "provisional": {
+    "alias": "ox-alpha",
+    "providerNativeId": "stealth/ox-alpha",
+    "identityRevision": 1
+  },
+  "final": {
+    "alias": "glm-5.3-flash",
+    "provider": "openrouter",
+    "providerNativeId": "z-ai/glm-5.3-flash",
+    "identityRevision": 1,
+    "displayName": "GLM 5.3 Flash",
+    "family": "glm",
+    "pricingRevision": "openrouter-2026-08-27",
+    "pricing": {
+      "inputCostPerMTok": 0.075,
+      "outputCostPerMTok": 0.25,
+      "cacheReadCostPerMTok": 0.015,
+      "cacheWriteCostPerMTok": 0
+    },
+    "verification": {
+      "source": "https://openrouter.ai/api/v1/models",
+      "observedAt": "2026-08-27T22:55:48.000Z",
+      "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
+    },
+    "capabilities": {
+      "vendor": "z-ai",
+      "contextWindowTokens": 1310720,
+      "multimodal": {
+        "text": true,
+        "image": true,
+        "video": true
+      },
+      "strengths": [
+        "verified catalog: 1,310,720-token context",
+        "verified catalog: tools and structured outputs",
+        "verified catalog: text+image+video multimodal",
+        "verified catalog: low per-token cost"
+      ],
+      "weaknesses": [
+        "no local performance evidence yet",
+        "watchlist maturity"
+      ],
+      "defaultLadderEligible": false,
+      "supportedModel": {
+        "canonicalArtifactIdentity": {
+          "provider": "z-ai",
+          "model": "glm-5.3-flash",
+          "suiteVersion": "v2"
+        },
+        "launchEligible": false,
+        "routingEligible": false
+      },
+      "nativeCapability": {
+        "readOnlyNative": "partial"
+      },
+      "identity": {
+        "evidencePolicy": "held"
+      }
+    }
+  },
+  "disclosure": {
+    "disclosedAt": "2026-08-27T22:55:48.000Z",
+    "source": "https://openrouter.ai/z-ai/glm-5.3-flash"
+  }
+}

@@ -67,11 +67,11 @@ describe('effective-models', () => {
 });
 
 describe('challenger eligibility', () => {
-  it('lists provisional models as challenger-eligible but never primary-eligible', () => {
-    // A challenge pair is how an unproven model earns evidence: the primary is
-    // always proven, the challenger is the experiment. ox-alpha is provisional
-    // (stealth identity, zero quality priors) so it must appear in the
-    // challenger pool while staying out of every routing/primary pool.
+  it('keeps the deprecated ox-alpha out of both pools and admits promoted glm-5.3-flash', () => {
+    // Disclosure day: ox-alpha is deprecated historical lineage (routing
+    // ineligible), so it leaves the challenger pool too; its verified
+    // successor glm-5.3-flash is certified and routing-eligible, so it enters
+    // the primary pool (and therefore the challenger superset).
     for (const stage of ['planning', 'coding', 'review'] as const) {
       const primary = listEffectiveModelsForStage(stage, {}).models;
       const challenger = listChallengerEligibleModelsForStage(stage, {}).models;
@@ -79,12 +79,22 @@ describe('challenger eligibility', () => {
       assert.equal(
         primary.includes('ox-alpha'),
         false,
-        `provisional model must never be primary-eligible for ${stage}`,
+        `deprecated model must never be primary-eligible for ${stage}`,
       );
       assert.equal(
         challenger.includes('ox-alpha'),
+        false,
+        `deprecated model must not stay challenger-eligible for ${stage}`,
+      );
+      assert.equal(
+        primary.includes('glm-5.3-flash'),
         true,
-        `provisional model should be challenger-eligible for ${stage}`,
+        `promoted model should be primary-eligible for ${stage}`,
+      );
+      assert.equal(
+        challenger.includes('glm-5.3-flash'),
+        true,
+        `promoted model should be challenger-eligible for ${stage}`,
       );
     }
   });

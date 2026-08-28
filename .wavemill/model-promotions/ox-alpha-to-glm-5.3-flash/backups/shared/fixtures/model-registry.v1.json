@@ -2692,29 +2692,24 @@
             "model": "ox-alpha",
             "suiteVersion": "v2"
           },
-          "lifecycle": "deprecated",
+          "lifecycle": "supported",
           "compatibilityFlags": {
             "thinkingFormat": "openrouter"
           },
-          "launchEligible": false,
+          "launchEligible": true,
           "routingEligible": false
         },
         "identity": {
-          "status": "verified",
+          "status": "provisional",
           "revision": 1,
           "fingerprint": "4f6f8ce73fbcb352304542daa51b5d459a02061a90e630b48d7944f46e120a82",
           "displayName": "Ox Alpha",
-          "family": "glm",
+          "family": "unknown",
           "evidencePolicy": "held",
           "verification": {
             "source": "https://openrouter.ai/api/v1/models",
-            "observedAt": "2026-08-27T22:55:48.000Z",
-            "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
-          },
-          "lineage": {
-            "successor": "glm-5.3-flash",
-            "disclosedAt": "2026-08-27T22:55:48.000Z",
-            "disclosureSource": "https://openrouter.ai/z-ai/glm-5.3-flash"
+            "observedAt": "2026-08-24T22:16:05.000Z",
+            "catalogHash": "45721528172e6489ce50462c3c5d6ff750c5cbc0dba8f315d23f81b84298579f"
           }
         }
       }
@@ -2792,114 +2787,6 @@
           },
           "launchEligible": true,
           "routingEligible": true
-        }
-      }
-    },
-    {
-      "id": "glm-5.3-flash",
-      "capabilities": {
-        "vendor": "z-ai",
-        "class": "strong_generalist",
-        "strengths": [
-          "verified catalog: 1,310,720-token context",
-          "verified catalog: tools and structured outputs",
-          "verified catalog: text+image+video multimodal",
-          "verified catalog: low per-token cost"
-        ],
-        "weaknesses": [
-          "no local performance evidence yet",
-          "watchlist maturity"
-        ],
-        "qualityScores": {
-          "routing": 0,
-          "planning": 0,
-          "coding": 0,
-          "review": 0,
-          "classify": 0
-        },
-        "pricing": {
-          "inputCostPerMTok": 0.075,
-          "outputCostPerMTok": 0.25,
-          "cacheReadCostPerMTok": 0.015,
-          "cacheWriteCostPerMTok": 0
-        },
-        "defaultLadderEligible": false,
-        "contextWindowTokens": 1310720,
-        "toolSupport": "basic",
-        "multimodal": {
-          "text": true,
-          "image": true,
-          "video": true
-        },
-        "latencyTier": "standard",
-        "reasoningTier": "advanced",
-        "costPerMillionInputTokensUsd": 0.075,
-        "costPerMillionOutputTokensUsd": 0.25,
-        "agent": "native-openrouter",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-08-27T23:03:41.432Z",
-            "certificationSuiteVersion": "v3"
-          },
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          }
-        },
-        "supportedModel": {
-          "wavemillAlias": "glm-5.3-flash",
-          "providerNativeId": "z-ai/glm-5.3-flash",
-          "provider": "openrouter",
-          "transport": "openai-completions",
-          "stages": [
-            "planning",
-            "coding",
-            "review"
-          ],
-          "requiredCertificationPhaseByStage": {
-            "planning": "workflow",
-            "coding": "workflow",
-            "review": "workflow"
-          },
-          "certificationSuiteVersion": "v3",
-          "certificationFreshnessDays": 60,
-          "canonicalArtifactIdentity": {
-            "provider": "z-ai",
-            "model": "glm-5.3-flash",
-            "suiteVersion": "v2"
-          },
-          "lifecycle": "supported",
-          "compatibilityFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "launchEligible": true,
-          "routingEligible": true
-        },
-        "identity": {
-          "status": "verified",
-          "revision": 1,
-          "fingerprint": "3c802dd32ce613afa81237cadf556fb97fa815aa9c095f69145dd4a57e331ae3",
-          "displayName": "GLM 5.3 Flash",
-          "family": "glm",
-          "evidencePolicy": "eligible",
-          "verification": {
-            "source": "https://openrouter.ai/api/v1/models",
-            "observedAt": "2026-08-27T22:55:48.000Z",
-            "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec"
-          },
-          "lineage": {
-            "predecessors": [
-              "ox-alpha"
-            ],
-            "formerIds": [
-              "stealth/ox-alpha"
-            ],
-            "disclosedAt": "2026-08-27T22:55:48.000Z",
-            "disclosureSource": "https://openrouter.ai/z-ai/glm-5.3-flash"
-          }
         }
       }
     }
@@ -3300,7 +3187,7 @@
       "wavemillAlias": "ox-alpha",
       "openrouterId": "stealth/ox-alpha",
       "family": "unknown",
-      "status": "deprecated",
+      "status": "provisional",
       "priorityTier": 3,
       "roleEligibility": [
         "planning",
@@ -3316,18 +3203,6 @@
       "priorityTier": 3,
       "roleEligibility": [
         "coding"
-      ]
-    },
-    {
-      "wavemillAlias": "glm-5.3-flash",
-      "openrouterId": "z-ai/glm-5.3-flash",
-      "family": "glm",
-      "status": "active",
-      "priorityTier": 3,
-      "roleEligibility": [
-        "planning",
-        "coding",
-        "review"
       ]
     }
   ]

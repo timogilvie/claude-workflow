@@ -1,0 +1,191 @@
+{
+  "certifiedAt": "2026-08-27T23:03:41.432Z",
+  "knownLimitations": [
+    "Live-judged scenarios require a paid provider call and are not run by the deterministic harness."
+  ],
+  "model": "glm-5.3-flash",
+  "phase": "workflow",
+  "provider": "z-ai",
+  "scenarios": [
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "tool.compat.git_status.openai-completions"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "usage.scripted.records-input-output-tokens"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "transcript.scripted.session_started_then_ended"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.read-only.satisfies-read-only"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.fixture.persistence-roundtrip"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "phase.workflow.artifact-unlocks-planner"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.runtime.native-patch-application"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.paths.boundaries-and-generated-artifacts"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.phase.dirty-tree-gate"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.usage.intended-file-tracking"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.tools.command-and-format-safety"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.cleanup.abort-restores-worktree"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.cleanup.timeout-restores-worktree"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.transcript.command-redaction"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "patch.phase.ready-remediation-fixtures"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.tools.contract-shape-stable"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.tools.mutation-policy-allows-in-phase"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.tools.mutation-policy-denies-out-of-phase"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.transcript.approval-lifecycle-jsonl-shape"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.provenance.untrusted-input-detects-phase-override"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.usage.multi-turn-token-accounting"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.cleanup.tracker-roundtrip-and-summary-event"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.phase.workflow-persistence-roundtrip"
+    },
+    {
+      "attempts": 1,
+      "finalAttemptStatus": "pass",
+      "passed": true,
+      "retryCount": 0,
+      "scenarioId": "workflow.phase.native-openrouter-launch-matrix"
+    }
+  ],
+  "schemaVersion": 3,
+  "subject": {
+    "catalogHash": "43d7c16065ef1016deaea32990c9653a393b9aaba00a14a7674c9784215363ec",
+    "identityFingerprint": "3c802dd32ce613afa81237cadf556fb97fa815aa9c095f69145dd4a57e331ae3",
+    "identityRevision": 1,
+    "nativeProvider": "openrouter",
+    "providerId": "z-ai",
+    "providerModelId": "glm-5.3-flash",
+    "providerNativeId": "z-ai/glm-5.3-flash",
+    "registryKey": "glm-5.3-flash"
+  },
+  "suiteVersion": "v3"
+}

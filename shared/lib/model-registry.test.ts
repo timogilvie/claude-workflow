@@ -294,6 +294,7 @@ describe('model-registry', () => {
       'mistral-large-2',
       'mistral-medium-3',
       'ox-alpha',
+      'glm-5.3-flash',
       'qwen-2.5-coder-32b',
       'qwen-2.5-72b',
       'qwen-3-235b',
@@ -2516,16 +2517,21 @@ describe('canonical supported-model helpers', () => {
     assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].toolSupport, 'none');
   });
 
-  it('keeps provisional Ox Alpha pinnable metadata out of automatic stage lists', () => {
+  it('keeps deprecated historical Ox Alpha resolvable but out of automatic stage lists', () => {
     const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'ox-alpha');
     const rawIdentity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'stealth/ox-alpha');
     const model = DEFAULT_MODEL_REGISTRY.models['ox-alpha'];
 
-    assert.equal(identity.status, 'provisional');
+    // Disclosure verified the stealth identity as a glm-family model; the
+    // historical entry keeps its alias, wire ID, revision, held evidence and
+    // observed zero pricing, and gains successor lineage.
+    assert.equal(identity.status, 'verified');
     assert.equal(identity.revision, 1);
     assert.equal(identity.evidencePolicy, 'held');
-    assert.equal(identity.family, 'unknown');
+    assert.equal(identity.family, 'glm');
     assert.equal(identity.displayName, 'Ox Alpha');
+    assert.equal(identity.lineage?.successor, 'glm-5.3-flash');
+    assert.equal(identity.lineage?.disclosureSource, 'https://openrouter.ai/z-ai/glm-5.3-flash');
     assert.deepEqual(rawIdentity, identity);
     assert.equal(model.vendor, 'unknown');
     assert.deepEqual(model.qualityScores, makeScores(0));
@@ -2539,17 +2545,66 @@ describe('canonical supported-model helpers', () => {
     assert.equal(model.multimodal.video, true);
     assert.equal(model.toolSupport, 'basic');
     assert.equal(model.supportedModel?.providerNativeId, 'stealth/ox-alpha');
+    assert.equal(model.supportedModel?.lifecycle, 'deprecated');
+    assert.equal(model.supportedModel?.launchEligible, false);
+    assert.equal(model.supportedModel?.routingEligible, false);
     assert.equal(resolveProviderNativeModelId('ox-alpha')?.providerNativeId, 'stealth/ox-alpha');
     assert.equal(resolveProviderNativeModelId('stealth/ox-alpha')?.wavemillAlias, 'ox-alpha');
     assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'planner'), 'workflow');
     assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'coder'), 'workflow');
     assert.equal(getRequiredCertificationPhaseForStage('ox-alpha', 'reviewer'), 'workflow');
-    assert.ok(!JSON.stringify(model).toLowerCase().includes('glm'));
-    assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'provisional-identity');
-    assert.equal(explainModelSupportExclusion('stealth/ox-alpha', 'coding'), 'provisional-identity');
+    assert.equal(explainModelSupportExclusion('ox-alpha', 'coding'), 'routing-ineligible');
+    assert.equal(explainModelSupportExclusion('stealth/ox-alpha', 'coding'), 'routing-ineligible');
     assert.equal(listSupportedModelsForStage('planning').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('coding').includes('ox-alpha'), false);
     assert.equal(listSupportedModelsForStage('review').includes('ox-alpha'), false);
+  });
+
+  it('registers promoted GLM 5.3 Flash as verified, certified, and stage-eligible', () => {
+    const identity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'glm-5.3-flash');
+    const rawIdentity = resolveModelIdentity(DEFAULT_MODEL_REGISTRY, 'z-ai/glm-5.3-flash');
+    const model = DEFAULT_MODEL_REGISTRY.models['glm-5.3-flash'];
+
+    assert.equal(identity.status, 'verified');
+    assert.equal(identity.revision, 1);
+    assert.equal(identity.evidencePolicy, 'eligible');
+    assert.equal(identity.family, 'glm');
+    assert.equal(identity.displayName, 'GLM 5.3 Flash');
+    assert.deepEqual(identity.lineage?.predecessors, ['ox-alpha']);
+    assert.deepEqual(identity.lineage?.formerIds, ['stealth/ox-alpha']);
+    assert.equal(identity.fingerprint, computeIdentityFingerprint({
+      alias: 'glm-5.3-flash',
+      providerNativeId: 'z-ai/glm-5.3-flash',
+      provider: 'openrouter',
+      revision: 1,
+    }));
+    assert.deepEqual(rawIdentity, identity);
+    assert.equal(model.vendor, 'z-ai');
+    // No transferred priors: routing eligibility opens data collection with
+    // zero quality scores until canonical local evidence accumulates.
+    assert.deepEqual(model.qualityScores, makeScores(0));
+    assert.equal(model.defaultLadderEligible, false);
+    assert.equal(model.contextWindowTokens, 1_310_720);
+    assert.equal(model.pricing?.inputCostPerMTok, 0.075);
+    assert.equal(model.pricing?.outputCostPerMTok, 0.25);
+    assert.equal(model.pricing?.cacheReadCostPerMTok, 0.015);
+    assert.equal(model.pricing?.cacheWriteCostPerMTok, 0);
+    assert.equal(model.multimodal.text, true);
+    assert.equal(model.multimodal.image, true);
+    assert.equal(model.multimodal.video, true);
+    assert.equal(model.supportedModel?.providerNativeId, 'z-ai/glm-5.3-flash');
+    assert.equal(model.supportedModel?.lifecycle, 'supported');
+    assert.equal(model.supportedModel?.launchEligible, true);
+    assert.equal(model.supportedModel?.routingEligible, true);
+    assert.equal(model.nativeCapability?.readOnlyNative, 'certified');
+    assert.equal(model.nativeCapability?.certification?.maxCertifiedPhase, 'workflow');
+    assert.equal(model.nativeCapability?.certification?.certificationSuiteVersion, 'v3');
+    assert.equal(resolveProviderNativeModelId('glm-5.3-flash')?.providerNativeId, 'z-ai/glm-5.3-flash');
+    assert.equal(resolveProviderNativeModelId('z-ai/glm-5.3-flash')?.wavemillAlias, 'glm-5.3-flash');
+    assert.equal(explainModelSupportExclusion('glm-5.3-flash', 'coding'), undefined);
+    assert.equal(listSupportedModelsForStage('planning').includes('glm-5.3-flash'), true);
+    assert.equal(listSupportedModelsForStage('coding').includes('glm-5.3-flash'), true);
+    assert.equal(listSupportedModelsForStage('review').includes('glm-5.3-flash'), true);
   });
 
   it('requires tool support for every supported Wavemill stage', () => {
