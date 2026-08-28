@@ -2217,6 +2217,44 @@ test_coding_complete_uncommitted_output_reannounces_on_ahead_count_change() {
   check_eq "ahead change: ahead count changed" "1" "$(jq -r '.aheadCount' "$artifact")"
 }
 
+test_coding_complete_uncommitted_output_resolves_to_jsonl_log() {
+  local slug="coding-complete-uncommitted-output-resolved"
+  local issue="HOK-2894-RESOLVED"
+  local repo tick1 tick2 feature_dir artifact resolved_log first_detected line_count
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_runtime_artifacts "$repo"
+  harness_setup_coding_state "$repo" "$slug" "running"
+  feature_dir="$repo/features/$slug"
+  artifact="$feature_dir/.coding-uncommitted-output.json"
+  resolved_log="$feature_dir/.coding-uncommitted-output.resolved.jsonl"
+
+  printf '{"stage":"coding","confidence":"high"}\n' > "$feature_dir/.coding-complete"
+  printf 'pending implementation\n' > "$repo/src-uncommitted.ts"
+
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+  check_eq "resolved log: first tick keeps needs-user" "needs-user" "$(kv_value "$tick1" attention)"
+  check_file_exists "resolved log: artifact written before resolution" "$artifact"
+  check_file_absent "resolved log: no log entry before resolution" "$resolved_log"
+  first_detected="$(jq -r '.detectedAt' "$artifact")"
+
+  # Operator completes the handoff by committing the agent's uncommitted output.
+  git -C "$repo" add src-uncommitted.ts
+  git -C "$repo" commit -q -m "chore: commit agent output (operator handoff)"
+
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" 'CURRENT_PHASE="coding"')"
+
+  check_eq "resolved log: second tick clears attention" "" "$(kv_value "$tick2" attention)"
+  check_eq "resolved log: coding stage becomes completed" "completed" "$(harness_read_stage_status "$repo" "$slug" coding)"
+  check_file_absent "resolved log: live artifact removed" "$artifact"
+  check_file_exists "resolved log: resolved jsonl written" "$resolved_log"
+
+  line_count="$(wc -l < "$resolved_log" | tr -d ' ')"
+  check_eq "resolved log: exactly one resolved episode" "1" "$line_count"
+  check_eq "resolved log: detectedAt preserved" "$first_detected" "$(jq -r '.detectedAt' "$resolved_log")"
+  check_ne "resolved log: resolvedAt is recorded" "" "$(jq -r '.resolvedAt' "$resolved_log")"
+  check_contains "resolved log: dirtyPaths preserved" "$(jq -r '.dirtyPaths[]?' "$resolved_log")" "src-uncommitted.ts"
+}
+
 test_write_coding_uncommitted_output_artifact_idempotent() {
   local slug="coding-uncommitted-output-direct"
   local feature_dir artifact first_mtime second_mtime third_mtime healed_mtime
@@ -3527,6 +3565,7 @@ test_coding_complete_dirty_worktree_without_commits_needs_attention
 test_coding_complete_uncommitted_output_dedupes_stable_condition
 test_coding_complete_uncommitted_output_reannounces_on_dirty_path_change
 test_coding_complete_uncommitted_output_reannounces_on_ahead_count_change
+test_coding_complete_uncommitted_output_resolves_to_jsonl_log
 test_write_coding_uncommitted_output_artifact_idempotent
 test_coding_complete_dirty_worktree_with_commits_needs_attention
 test_coding_complete_trace_only_dirty_worktree_advances

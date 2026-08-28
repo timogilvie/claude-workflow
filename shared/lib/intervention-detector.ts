@@ -53,7 +53,7 @@ export interface PrCommit {
 }
 
 export interface InterventionEvent {
-  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect' | 'self_review_blocker' | 'self_review_warning' | 'operator_recovery' | 'prior_failed_attempt';
+  type: 'review_comment' | 'post_pr_commit' | 'manual_edit' | 'test_fix' | 'session_redirect' | 'self_review_blocker' | 'self_review_warning' | 'operator_recovery' | 'prior_failed_attempt' | 'unknown_attribution';
   count: number;
   details: string[];
   timestamps?: string[]; // ISO 8601 timestamps parallel to details array
@@ -75,6 +75,7 @@ export interface InterventionPenalties {
   self_review_warning: number;
   operator_recovery: number;
   prior_failed_attempt: number;
+  unknown_attribution: number;
 }
 
 /** Format expected by evaluateTask() in eval.js */
@@ -97,6 +98,7 @@ export const DEFAULT_PENALTIES: InterventionPenalties = {
   self_review_blocker: 0.20,   // Critical issue that blocks PR
   operator_recovery: 0.15,     // Operator-recorded diagnosis/recovery outside agent output
   prior_failed_attempt: 0.10,  // Earlier failed/aborted attempt before the scored run
+  unknown_attribution: 0.05,   // Commit could not be attributed to agent or operator (fail loud, not silent)
 };
 
 // ────────────────────────────────────────────────────────────────
@@ -120,6 +122,7 @@ export function loadPenalties(repoDir?: string): InterventionPenalties {
     self_review_warning: configured.selfReviewWarning ?? DEFAULT_PENALTIES.self_review_warning,
     operator_recovery: configured.operatorRecovery ?? DEFAULT_PENALTIES.operator_recovery,
     prior_failed_attempt: configured.priorFailedAttempt ?? DEFAULT_PENALTIES.prior_failed_attempt,
+    unknown_attribution: configured.unknownAttribution ?? DEFAULT_PENALTIES.unknown_attribution,
   };
 }
 
@@ -262,7 +265,7 @@ export function detectPostPrCommits(prNumber: string, repoDir?: string, prCommit
  * Check whether a commit looks like it was made by an AI agent
  * based on co-author tags, author name, or subject markers.
  */
-function isAgentCommit(subject: string, author: string, body: string): boolean {
+export function isAgentCommit(subject: string, author: string, body: string): boolean {
   const lowerBody = body.toLowerCase();
   const lowerAuthor = author.toLowerCase();
   return (
@@ -281,10 +284,13 @@ function isAgentCommit(subject: string, author: string, body: string): boolean {
  * task metadata files (selected-task.json or .coding-complete) in the
  * corresponding features/ or bugs/ directory.
  *
- * When a branch is wavemill-managed, all commits are presumed to be
- * agent-authored unless they contain explicit human markers (e.g., "manual",
- * "human", "by hand"). This prevents false positives when agents commit
- * under the user's git identity without co-author tags.
+ * A wavemill-managed branch does NOT mean every commit on it is
+ * agent-authored (see HOK-2894) — every mill task branch satisfies this
+ * check by construction, so treating it as a blanket exemption would disable
+ * manual-edit detection for the entire fleet. Instead this flag *enables*
+ * window-based attribution in `detectManualEdits`: it tells the detector to
+ * classify each commit against the agent's recorded activity windows and
+ * operator-handoff intervals rather than relying solely on commit markers.
  */
 /**
  * Whether an agent commits under the user's own git identity, leaving nothing
@@ -335,77 +341,6 @@ export function isWavemillManagedBranch(branchName: string, repoDir?: string): b
     }
   }
   return false;
-}
-
-/**
- * Detect manual file edits — commits not attributed to the agent.
- *
- * When a prNumber is provided, uses GitHub API to get the exact set of PR
- * commits (avoids false positives from `git log main..branch` which can
- * include commits from other merged PRs post-squash-merge).
- *
- * For wavemill-managed branches (detected via task metadata files), all
- * commits are presumed agent-authored. This handles the case where agents
- * commit under the user's git identity without co-author tags.
- *
- * Falls back to `git log` when no PR number is available.
- */
-export function detectManualEdits(
-  branchName: string,
-  baseBranch: string,
-  repoDir?: string,
-  prNumber?: string,
-  prCommits?: PrCommit[],
-): InterventionEvent {
-  const cwd = repoDir || process.cwd();
-  const event: InterventionEvent = { type: 'manual_edit', count: 0, details: [], timestamps: [] };
-
-  // If this is a wavemill-managed branch, all commits are presumed agent-authored.
-  // Agents may commit under the user's git identity without co-author tags.
-  if (isWavemillManagedBranch(branchName, repoDir)) {
-    return event;
-  }
-
-  try {
-    if (prNumber) {
-      // Preferred path: use GitHub API PR commits (exact set, no leakage)
-      const commits = prCommits ?? fetchPrCommits(prNumber, repoDir);
-      for (const c of commits) {
-        const subject = c.message.split('\n')[0];
-        const body = c.message.includes('\n') ? c.message.slice(c.message.indexOf('\n') + 1) : '';
-        if (!isAgentCommit(subject, c.author, body)) {
-          event.details.push(`${c.sha.slice(0, 7)}: ${subject} (by ${c.author})`);
-          event.timestamps!.push(c.date);
-        }
-      }
-    } else {
-      // Fallback: git log (less reliable post-merge, but works without a PR)
-      const commitsRaw = execShellCommand(
-        `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branchName)} --format='%H|%s|%an|%ad|%b%x00' --date=iso-strict 2>/dev/null || echo ''`,
-        { encoding: 'utf-8', cwd, timeout: 10_000 }
-      ).trim();
-
-      if (!commitsRaw) return event;
-
-      const records = commitsRaw.split('\0').filter((r) => r.trim());
-      for (const record of records) {
-        const trimmed = record.trim();
-        const [sha, subject, author, date, ...bodyParts] = trimmed.split('|');
-        const body = bodyParts.join('|');
-
-        if (!isAgentCommit(subject, author, body) && sha) {
-          event.details.push(`${sha.slice(0, 7)}: ${subject} (by ${author})`);
-          event.timestamps!.push(date || new Date().toISOString());
-        }
-      }
-    }
-    event.count = event.details.length;
-  } catch (err: unknown) {
-    const message = errorMessage(err);
-    console.warn(`[intervention-detector] Failed to detect manual edits: ${message}`);
-  }
-
-  return event;
 }
 
 /**
@@ -791,6 +726,343 @@ export function detectPriorFailedAttempts(dirs: ResolvedTaskArtifactDirs): Inter
 }
 
 // ────────────────────────────────────────────────────────────────
+// Manual-Edit Attribution (HOK-2894)
+// ────────────────────────────────────────────────────────────────
+//
+// Positive agent-attribution for commits on wavemill-managed branches (and
+// for agents that commit under the user's identity — see agentCommitsAsUser).
+// Rather than presuming every commit is agent-authored (the HOK-2769
+// over-correction this replaces), each commit is classified against the
+// agent's recorded stage-result activity windows and any resolved
+// operator-handoff intervals. Author dates (not committer dates) are used
+// throughout because they survive the mill's auto-rebases onto the base
+// branch, while recorded SHAs would not.
+
+/** A span of time during which a stage's agent process was live. */
+export interface AgentActivityWindow {
+  /** Epoch ms — stage `startedAt`. */
+  start: number;
+  /** Epoch ms — stage `finishedAt`, or "now" for a still-running stage. */
+  end: number;
+  stage: StageName;
+}
+
+/** A resolved (or still-open) operator-handoff episode. */
+export interface OperatorHandoffInterval {
+  /** Epoch ms — when the mill detected uncommitted coding output. */
+  detectedAt: number;
+  /** Epoch ms — when the guard cleared (or "now" for a live, unresolved episode). */
+  resolvedAt: number;
+  dirtyPaths: string[];
+  /** Epoch ms — mtime of `.coding-complete` when the episode was recorded, if known. */
+  codingCompleteAt?: number;
+}
+
+const CODING_UNCOMMITTED_OUTPUT_RESOLVED_LOG_FILENAME = '.coding-uncommitted-output.resolved.jsonl';
+const CODING_UNCOMMITTED_OUTPUT_RESOLVED_ARCHIVE_FILENAME = 'coding-uncommitted-output.resolved.jsonl';
+const CODING_UNCOMMITTED_OUTPUT_LIVE_FILENAME = '.coding-uncommitted-output.json';
+
+/** Grace margin absorbing stamp/launch ordering and sub-second clock skew. */
+export const AGENT_WINDOW_GRACE_MS = 120_000;
+
+function parseTimestampMs(value: string | null | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Derive every recorded agent activity window (current stage results, their
+ * `history[]` entries, and `attempt-N-failed` sidecars) across feature dirs
+ * and the archived route-artifact dir. Windows are read-only evidence — a
+ * commit landing inside one is presumed agent-authored under the user's
+ * identity; a commit outside all of them is not.
+ */
+export function deriveAgentActivityWindows(dirs: ResolvedTaskArtifactDirs): AgentActivityWindow[] {
+  const windows: AgentActivityWindow[] = [];
+  const seen = new Set<string>();
+  const nowMs = Date.now();
+
+  const addWindow = (stage: StageName, startedAt: string | undefined, finishedAt: string | null | undefined) => {
+    const start = parseTimestampMs(startedAt);
+    if (start === undefined) return;
+    const key = `${stage}|${startedAt}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const end = parseTimestampMs(finishedAt ?? undefined) ?? nowMs;
+    windows.push({ stage, start, end });
+  };
+
+  const resultDirs = dirs.featureDirs.length > 0 ? [...dirs.featureDirs] : [];
+  if (dirs.archiveDir) resultDirs.push(dirs.archiveDir);
+
+  for (const dir of existingUnique(resultDirs)) {
+    const archiveStyle = Boolean(dirs.archiveDir && resolve(dir) === resolve(dirs.archiveDir));
+    for (const stage of FAILED_ATTEMPT_STAGES) {
+      const resultPath = join(dir, archiveStyle ? `${stage}-result.json` : `.${stage}-result.json`);
+      const result = readStageResultSync(resultPath);
+      if (result) {
+        addWindow(stage, result.startedAt, result.finishedAt);
+        for (const entry of result.history ?? []) {
+          addWindow(stage, entry.startedAt, entry.finishedAt);
+        }
+      }
+
+      try {
+        if (!existsSync(dir)) continue;
+        const prefix = archiveStyle ? `${stage}-result.attempt-` : `.${stage}-result.attempt-`;
+        const suffix = '-failed.json';
+        for (const file of readdirSync(dir)) {
+          if (!file.startsWith(prefix) || !file.endsWith(suffix)) continue;
+          const sidecar = readStageResultSync(join(dir, file));
+          if (!sidecar) continue;
+          addWindow(stage, sidecar.startedAt, sidecar.finishedAt);
+        }
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to scan activity windows in ${dir}: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  return windows;
+}
+
+interface RawOperatorHandoffRecord {
+  detectedAt?: string;
+  resolvedAt?: string;
+  dirtyPaths?: unknown;
+  codingCompleteAt?: string | null;
+}
+
+function toDirtyPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * Read every recorded operator-handoff episode: resolved episodes from
+ * `.coding-uncommitted-output.resolved.jsonl` (feature dirs) / the archived
+ * dotless copy, plus a still-live `.coding-uncommitted-output.json` as an
+ * open interval (`resolvedAt = now`) for evals that run mid-handoff.
+ */
+export function readOperatorHandoffIntervals(dirs: ResolvedTaskArtifactDirs): OperatorHandoffInterval[] {
+  const intervals: OperatorHandoffInterval[] = [];
+  const seen = new Set<string>();
+  const nowMs = Date.now();
+
+  const addInterval = (record: RawOperatorHandoffRecord, resolvedFallbackMs?: number) => {
+    const detectedAt = parseTimestampMs(record.detectedAt);
+    if (detectedAt === undefined) return;
+    const resolvedAt = parseTimestampMs(record.resolvedAt) ?? resolvedFallbackMs;
+    if (resolvedAt === undefined) return;
+    const key = `${detectedAt}|${resolvedAt}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    intervals.push({
+      detectedAt,
+      resolvedAt,
+      dirtyPaths: toDirtyPaths(record.dirtyPaths),
+      codingCompleteAt: parseTimestampMs(record.codingCompleteAt ?? undefined),
+    });
+  };
+
+  for (const dir of dirs.featureDirs) {
+    const resolvedLogPath = join(dir, CODING_UNCOMMITTED_OUTPUT_RESOLVED_LOG_FILENAME);
+    if (existsSync(resolvedLogPath)) {
+      try {
+        for (const record of readJsonlFile<RawOperatorHandoffRecord>(resolvedLogPath)) {
+          addInterval(record);
+        }
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to read resolved handoff log ${resolvedLogPath}: ${errorMessage(err)}`);
+      }
+    }
+
+    const livePath = join(dir, CODING_UNCOMMITTED_OUTPUT_LIVE_FILENAME);
+    if (existsSync(livePath)) {
+      try {
+        const raw = JSON.parse(readFileSync(livePath, 'utf-8')) as RawOperatorHandoffRecord;
+        addInterval(raw, nowMs);
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to read live handoff artifact ${livePath}: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  if (dirs.archiveDir) {
+    const archivedLogPath = join(dirs.archiveDir, CODING_UNCOMMITTED_OUTPUT_RESOLVED_ARCHIVE_FILENAME);
+    if (existsSync(archivedLogPath)) {
+      try {
+        for (const record of readJsonlFile<RawOperatorHandoffRecord>(archivedLogPath)) {
+          addInterval(record);
+        }
+      } catch (err) {
+        console.warn(`[intervention-detector] Failed to read archived handoff log ${archivedLogPath}: ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  return intervals;
+}
+
+export type CommitAttribution = 'agent' | 'operator_handoff' | 'operator_out_of_window' | 'unknown';
+
+/**
+ * Classify one commit's author-date against recorded evidence, in priority
+ * order: an operator-handoff interval always wins over an overlapping agent
+ * window (a stalled coding window deliberately overlaps the handoff commit
+ * it should catch — HOK-2888_c), then agent windows (with grace margin),
+ * then "outside everything we know about" (operator), then "we don't know"
+ * (unknown — fail loud, never a silent zero).
+ */
+export function classifyCommitAttribution(
+  commitDateMs: number,
+  windows: AgentActivityWindow[],
+  intervals: OperatorHandoffInterval[],
+  hasAttributionData: boolean,
+): CommitAttribution {
+  for (const interval of intervals) {
+    if (commitDateMs >= interval.detectedAt && commitDateMs <= interval.resolvedAt) {
+      return 'operator_handoff';
+    }
+  }
+
+  for (const window of windows) {
+    if (commitDateMs >= window.start - AGENT_WINDOW_GRACE_MS && commitDateMs <= window.end + AGENT_WINDOW_GRACE_MS) {
+      return 'agent';
+    }
+  }
+
+  return hasAttributionData ? 'operator_out_of_window' : 'unknown';
+}
+
+interface ParsedCommit {
+  sha: string;
+  subject: string;
+  author: string;
+  body: string;
+  date: string;
+}
+
+function parsePrCommits(commits: PrCommit[]): ParsedCommit[] {
+  return commits.map((c) => {
+    const subject = c.message.split('\n')[0];
+    const body = c.message.includes('\n') ? c.message.slice(c.message.indexOf('\n') + 1) : '';
+    return { sha: c.sha, subject, author: c.author, body, date: c.date };
+  });
+}
+
+function parseGitLogCommits(branchName: string, baseBranch: string, cwd: string): ParsedCommit[] {
+  const commitsRaw = execShellCommand(
+    `git log ${escapeShellArg(baseBranch)}..${escapeShellArg(branchName)} --format='%H|%s|%an|%ad|%b%x00' --date=iso-strict 2>/dev/null || echo ''`,
+    { encoding: 'utf-8', cwd, timeout: 10_000 }
+  ).trim();
+  if (!commitsRaw) return [];
+
+  const commits: ParsedCommit[] = [];
+  for (const record of commitsRaw.split('\0').filter((r) => r.trim())) {
+    const trimmed = record.trim();
+    const [sha, subject, author, date, ...bodyParts] = trimmed.split('|');
+    if (!sha) continue;
+    commits.push({ sha, subject, author, body: bodyParts.join('|'), date: date || new Date().toISOString() });
+  }
+  return commits;
+}
+
+export interface ManualEditsResult {
+  manualEdit: InterventionEvent;
+  unknownAttribution: InterventionEvent;
+}
+
+/**
+ * Detect manual file edits — commits not attributed to the agent — and
+ * emit an `unknown_attribution` event for commits that cannot be classified
+ * at all (HOK-2894: fail loud rather than a silent zero).
+ *
+ * When a prNumber is provided, uses GitHub API to get the exact set of PR
+ * commits (avoids false positives from `git log main..branch` which can
+ * include commits from other merged PRs post-squash-merge). Falls back to
+ * `git log` when no PR number is available.
+ *
+ * On wavemill-managed branches (`isWavemillManagedBranch`) and for agents
+ * that commit under the user's own git identity (`agentCommitsAsUser`),
+ * commits without an agent marker are classified against recorded agent
+ * activity windows and operator-handoff intervals instead of being flagged
+ * outright — this is the HOK-2769 protection. All other branches keep the
+ * original marker-only behavior unchanged.
+ */
+export function detectManualEdits(opts: DetectOptions): ManualEditsResult {
+  const branchName = opts.branchName || '';
+  const baseBranch = opts.baseBranch || 'main';
+  const cwd = opts.repoDir || process.cwd();
+  const manualEdit: InterventionEvent = { type: 'manual_edit', count: 0, details: [], timestamps: [], severities: [] };
+  const unknownAttribution: InterventionEvent = { type: 'unknown_attribution', count: 0, details: [], timestamps: [], severities: [] };
+
+  const managed = isWavemillManagedBranch(branchName, opts.repoDir);
+  const useAttribution = managed || agentCommitsAsUser(opts.agentType);
+
+  let windows: AgentActivityWindow[] = [];
+  let intervals: OperatorHandoffInterval[] = [];
+  let hasAttributionData = false;
+  if (useAttribution) {
+    const dirs = resolveTaskArtifactDirs({ ...opts, branchName, baseBranch });
+    windows = deriveAgentActivityWindows(dirs);
+    intervals = readOperatorHandoffIntervals(dirs);
+    hasAttributionData = windows.length > 0 || intervals.length > 0;
+  }
+
+  try {
+    const commits = opts.prNumber
+      ? parsePrCommits(opts.prCommits ?? fetchPrCommits(opts.prNumber, opts.repoDir))
+      : parseGitLogCommits(branchName, baseBranch, cwd);
+
+    for (const c of commits) {
+      if (isAgentCommit(c.subject, c.author, c.body)) continue;
+
+      if (!useAttribution) {
+        manualEdit.details.push(`${c.sha.slice(0, 7)}: ${c.subject} (by ${c.author})`);
+        manualEdit.timestamps!.push(c.date);
+        manualEdit.severities!.push('med');
+        continue;
+      }
+
+      const commitMs = parseTimestampMs(c.date) ?? Date.now();
+      const attribution = classifyCommitAttribution(commitMs, windows, intervals, hasAttributionData);
+
+      if (attribution === 'agent') continue;
+
+      if (attribution === 'operator_handoff') {
+        manualEdit.details.push(
+          `${c.sha.slice(0, 7)}: ${c.subject} (by ${c.author}) — operator handoff commit completing uncommitted agent output`
+        );
+        manualEdit.timestamps!.push(c.date);
+        manualEdit.severities!.push('high');
+      } else if (attribution === 'operator_out_of_window') {
+        manualEdit.details.push(
+          `${c.sha.slice(0, 7)}: ${c.subject} (by ${c.author}) — commit outside all recorded agent activity windows`
+        );
+        manualEdit.timestamps!.push(c.date);
+        manualEdit.severities!.push('med');
+      } else {
+        unknownAttribution.details.push(
+          `${c.sha.slice(0, 7)}: ${c.subject} (by ${c.author}) — no stage-result attribution data available`
+        );
+        unknownAttribution.timestamps!.push(c.date);
+        unknownAttribution.severities!.push('low');
+      }
+    }
+
+    manualEdit.count = manualEdit.details.length;
+    unknownAttribution.count = unknownAttribution.details.length;
+  } catch (err: unknown) {
+    const message = errorMessage(err);
+    console.warn(`[intervention-detector] Failed to detect manual edits: ${message}`);
+  }
+
+  return { manualEdit, unknownAttribution };
+}
+
+// ────────────────────────────────────────────────────────────────
 // Aggregation
 // ────────────────────────────────────────────────────────────────
 
@@ -802,6 +1074,8 @@ export interface DetectOptions {
   worktreePath?: string;
   agentType?: string;
   issueId?: string;
+  /** Pre-fetched PR commits, to avoid a duplicate API call (used by detectManualEdits). */
+  prCommits?: PrCommit[];
 }
 
 /**
@@ -835,14 +1109,20 @@ export function detectAllInterventions(
   const base = opts.baseBranch || 'main';
   let manualEditEvent: InterventionEvent = { type: 'manual_edit', count: 0, details: [] };
 
-  // Manual edit detection: skip for agents that commit under the user's git
-  // identity with no agent markers (Codex, and every native/provider-backed
-  // harness). isAgentCommit can only recognise Claude- and Codex-tagged
-  // commits, so for these agents their own work reads as a human edit. Human
-  // interventions on such tasks are caught by detectPostPrCommits and
-  // detectReviewComments instead.
-  if ((branch || opts.prNumber) && !agentCommitsAsUser(opts.agentType)) {
-    manualEditEvent = detectManualEdits(branch, base, opts.repoDir, opts.prNumber, prCommits);
+  // Manual edit detection now runs for every agent type, including ones that
+  // commit under the user's git identity with no agent markers (Codex, and
+  // every native/provider-backed harness). isAgentCommit alone can only
+  // recognise Claude- and Codex-tagged commits, so those agents used to be
+  // skipped entirely here (HOK-2894: that skip, stacked with the managed-
+  // branch short-circuit inside detectManualEdits, meant no operator commit
+  // on any mill branch could ever be detected). detectManualEdits now
+  // classifies each commit against recorded agent activity windows instead.
+  if (branch || opts.prNumber) {
+    const manualEditsResult = detectManualEdits({ ...opts, branchName: branch, baseBranch: base, prCommits });
+    manualEditEvent = manualEditsResult.manualEdit;
+    if (manualEditsResult.unknownAttribution.count > 0) {
+      interventions.push(manualEditsResult.unknownAttribution);
+    }
   }
 
   if (branch || opts.prNumber) {
@@ -964,6 +1244,8 @@ function mapToInterventionType(detectionType: string, detail: string): Intervent
       return 'recovery';
     case 'prior_failed_attempt':
       return 'rollback';
+    case 'unknown_attribution':
+      return 'unknown_attribution';
     default:
       return 'clarification';
   }

@@ -162,7 +162,8 @@
               "prompt_edit",
               "scope_change",
               "recovery",
-              "rollback"
+              "rollback",
+              "unknown_attribution"
             ],
             "description": "Type of intervention (reason for human involvement)."
           },

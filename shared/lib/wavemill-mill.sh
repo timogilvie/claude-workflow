@@ -5992,7 +5992,28 @@ mark_coding_uncommitted_output_announced() {
 
 clear_coding_uncommitted_output_attention() {
   local feature_dir="$1"
-  rm -f "$(coding_uncommitted_output_artifact_path "$feature_dir")" "$(coding_uncommitted_output_announce_marker "$feature_dir")"
+  local artifact resolved_log coding_complete_epoch coding_complete_iso_arg
+
+  artifact="$(coding_uncommitted_output_artifact_path "$feature_dir")"
+
+  # Preserve the handoff episode before deleting the live artifact: eval-time
+  # manual-edit attribution (HOK-2894) needs the [detectedAt, resolvedAt]
+  # interval to recognise an operator commit that completes an agent's
+  # uncommitted output as an intentional handoff rather than a silent zero.
+  # Best-effort — must never block the advance path.
+  if [[ -f "$artifact" ]] && command -v jq >/dev/null 2>&1 && jq -e . "$artifact" >/dev/null 2>&1; then
+    resolved_log="$(coding_uncommitted_output_resolved_log_path "$feature_dir")"
+    coding_complete_iso_arg="null"
+    coding_complete_epoch="$(portable_file_mtime_epoch "$feature_dir/.coding-complete" 2>/dev/null || echo "")"
+    if [[ "$coding_complete_epoch" =~ ^[0-9]+$ ]]; then
+      coding_complete_iso_arg="$(jq -n --argjson e "$coding_complete_epoch" '$e | todate' 2>/dev/null || echo "null")"
+    fi
+    jq -c --arg resolvedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" --argjson codingCompleteAt "$coding_complete_iso_arg" \
+      '. + {resolvedAt: $resolvedAt, codingCompleteAt: $codingCompleteAt}' \
+      "$artifact" >> "$resolved_log" 2>/dev/null || true
+  fi
+
+  rm -f "$artifact" "$(coding_uncommitted_output_announce_marker "$feature_dir")"
 }
 
 coding_compare_commit_counts() {
@@ -11591,6 +11612,13 @@ archive_stage_artifacts() {
 
     if [[ -f "$feature_dir/routing.jsonl" ]]; then
       cp "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" 2>/dev/null || true
+    fi
+
+    # Resolved operator-handoff episodes (HOK-2894) — needed for manual-edit
+    # attribution after the worktree is reaped.
+    if [[ -f "$feature_dir/.coding-uncommitted-output.resolved.jsonl" ]]; then
+      cp "$feature_dir/.coding-uncommitted-output.resolved.jsonl" \
+        "$archive_dir/coding-uncommitted-output.resolved.jsonl" 2>/dev/null || true
     fi
 
     # Operator intervention artifact
