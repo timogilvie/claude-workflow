@@ -94,6 +94,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/wavemill-guards.test.sh \
+  "$REPO_DIR"/tests/review-scope-baseline-handoff.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-advance.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \

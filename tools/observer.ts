@@ -14,6 +14,11 @@ import { drainIncidentQueue, enqueueIncidentSync } from '../shared/lib/incident-
 import { acquireObserverLock } from '../shared/lib/tend-singleton.ts';
 import { countRejectedEvalRecords, listRejectedEvalRecords } from '../shared/lib/eval-rejected-store.ts';
 import { renderObserverStatus } from '../shared/lib/observer-status-renderer.ts';
+import {
+  detectGlobalConfigIntegrity,
+  detectRepoConfigIntegrity,
+  type ConfigIntegrityIssue,
+} from '../shared/lib/config-integrity.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -21,6 +26,7 @@ type Confidence = 'high' | 'medium' | 'low';
 const DEFAULT_OBSERVER_PANE_TITLE = 'Wavemill Observer';
 const READY_RECHECK_LOOP_THRESHOLD = 3;
 const READY_RECHECK_LOOP_URGENT_THRESHOLD = 6;
+const MODEL_DOWNGRADE_THRESHOLD = 3;
 
 interface ObserverOptions {
   loop: boolean;
@@ -92,6 +98,7 @@ interface Finding {
   recommendation: string;
   linearIssueUrl?: string;
   occurrenceCount?: number;
+  groupedUnder?: string;
 }
 
 interface ReadyWatchdogLogEntry {
@@ -121,6 +128,13 @@ interface AggregatedMillLogFinding {
   level: 'error' | 'warn';
   normalizedMessage: string;
   lines: string[];
+}
+
+interface ModelDowngradeLogEntry {
+  line: string;
+  stage: string;
+  model: string;
+  fallback: string;
 }
 
 interface RepoSnapshot {
@@ -683,7 +697,15 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
   }
   const observerPaneTitle = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE ?? DEFAULT_OBSERVER_PANE_TITLE;
 
+  for (const issue of detectGlobalConfigIntegrity()) {
+    findings.push(configIntegrityFinding(issue, snapshot.sessions[0] ?? 'global'));
+  }
+
   for (const repo of snapshot.repos) {
+    for (const issue of detectRepoConfigIntegrity(repo.repoDir)) {
+      findings.push(configIntegrityFinding(issue, repo.session, repo.repoDir));
+    }
+
     const rejectedEvalCount = countRejectedEvalRecords(repo.repoDir);
     if (rejectedEvalCount > 0) {
       const [newestRejectedEval] = listRejectedEvalRecords(repo.repoDir, { limit: 1 });
@@ -864,6 +886,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     const logLines = repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : [];
     const queueHealthDegraded = repo.queueHealth?.status === 'degraded';
     const repeatedReadyWatchdogLines = new Set<string>();
+    const modelDowngradeLines = new Set<string>();
     const readyWatchdogEntries = logLines.map(parseReadyWatchdogLine).filter((entry): entry is ReadyWatchdogLogEntry => entry !== null);
     const readyWatchdogGroups = new Map<string, ReadyWatchdogLogEntry[]>();
     for (const entry of readyWatchdogEntries) {
@@ -930,6 +953,39 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    const modelDowngradeGroups = new Map<string, ModelDowngradeLogEntry[]>();
+    for (const line of logLines) {
+      const entry = parseModelDowngradeLine(line);
+      if (!entry) continue;
+      const key = `${entry.stage}\0${entry.model}\0${entry.fallback}`;
+      const group = modelDowngradeGroups.get(key) ?? [];
+      group.push(entry);
+      modelDowngradeGroups.set(key, group);
+    }
+    for (const group of modelDowngradeGroups.values()) {
+      if (group.length < MODEL_DOWNGRADE_THRESHOLD) continue;
+      for (const entry of group) modelDowngradeLines.add(entry.line);
+      const latest = group[group.length - 1];
+      findings.push({
+        id: `model-downgrade-${repo.session}-${hashText(`${latest.stage}:${latest.model}:${latest.fallback}`)}`,
+        severity: 'high',
+        category: 'warning',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        title: `Invalid ${latest.stage} model '${latest.model}' repeatedly fell back to '${latest.fallback}'`,
+        evidence: [
+          `occurrences=${group.length}`,
+          `stage=${latest.stage}`,
+          `model=${latest.model}`,
+          `fallback=${latest.fallback}`,
+          ...group.slice(-4).map((entry) => entry.line),
+        ],
+        recommendation: 'Treat this as a silent correctness regression: the selected model failed validation and each launch used the fallback. Check config integrity first, then repair the selector.',
+        occurrenceCount: group.length,
+      });
+    }
+
     const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
       const parsed = parseMillLogLine(line);
@@ -939,6 +995,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       if (parsed.level === 'warn') {
         if (repeatedReadyWatchdogLines.has(line)) continue;
         if (readyRecheckLines.has(line)) continue;
+        if (modelDowngradeLines.has(line)) continue;
         if (queueHealthDegraded && /queue analysis unavailable/i.test(parsed.message)) continue;
       }
 
@@ -1070,7 +1127,43 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
   }
 
-  return dedupeFindings(findings);
+  return correlateConfigIntegrityFindings(dedupeFindings(findings));
+}
+
+function configIntegrityFinding(issue: ConfigIntegrityIssue, session: string, repoDir?: string): Finding {
+  const location = issue.line && issue.column ? ` at line ${issue.line} column ${issue.column}` : '';
+  const filename = basename(issue.file);
+  const schemaImpact = filename === 'wavemill-config.schema.json'
+    ? ' - every TS entrypoint will exit 1'
+    : '';
+  return {
+    id: `config-integrity-${session}-${hashText(`${repoDir ?? 'global'}:${issue.file}:${issue.kind}`)}`,
+    severity: 'urgent',
+    category: 'crash',
+    confidence: 'high',
+    session,
+    repoDir,
+    title: `${filename} ${configIntegrityTitleVerb(issue.kind)}${location}${schemaImpact}`,
+    evidence: [
+      `file=${issue.file}`,
+      `kind=${issue.kind}`,
+      ...(issue.position !== undefined ? [`position=${issue.position}`] : []),
+      ...(issue.line !== undefined ? [`line=${issue.line}`] : []),
+      ...(issue.column !== undefined ? [`column=${issue.column}`] : []),
+      ...(issue.excerpt ? [`excerpt=${issue.excerpt}`] : []),
+      `error=${issue.message}`,
+    ],
+    recommendation: filename === 'config.json'
+      ? 'Repair the user-level wavemill config JSON. Runtime currently tolerates this file, but the corruption should be fixed before it hides other config symptoms.'
+      : 'Repair the named config/schema file at the reported location. Treat model-validation, ready-watchdog, and eval failures in this tick as probable downstream effects until this is fixed.',
+  };
+}
+
+function configIntegrityTitleVerb(kind: ConfigIntegrityIssue['kind']): string {
+  if (kind === 'parse-error') return 'is malformed';
+  if (kind === 'schema-compile-error') return 'does not compile as a JSON schema';
+  if (kind === 'schema-missing') return 'is missing';
+  return 'fails schema validation';
 }
 
 function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
@@ -1092,6 +1185,19 @@ function parseReadyRecheckLine(line: string): ReadyRecheckLogEntry | null {
     line,
     issue: match[1],
     pr: match[2],
+  };
+}
+
+function parseModelDowngradeLine(line: string): ModelDowngradeLogEntry | null {
+  const parsed = parseMillLogLine(line);
+  if (!parsed) return null;
+  const match = parsed.message.match(/Invalid\s+(\S+)\s+model\s+'([^']+)'(?:\s+looks like a depth tag)?;\s+using\s+'([^']+)'/i);
+  if (!match) return null;
+  return {
+    line,
+    stage: match[1],
+    model: match[2],
+    fallback: match[3],
   };
 }
 
@@ -1194,6 +1300,50 @@ function dedupeFindings(findings: Finding[]): Finding[] {
   });
 }
 
+function correlateConfigIntegrityFindings(findings: Finding[]): Finding[] {
+  const next = findings.map((finding) => ({ ...finding, evidence: [...finding.evidence] }));
+  const configByRepo = new Map<string, Finding>();
+  for (const finding of next) {
+    if (finding.id.startsWith('config-integrity-') && finding.repoDir && !configByRepo.has(finding.repoDir)) {
+      configByRepo.set(finding.repoDir, finding);
+    }
+  }
+
+  const downstreamByParent = new Map<string, Finding[]>();
+  for (const finding of next) {
+    if (finding.id.startsWith('config-integrity-') || !finding.repoDir) continue;
+    const parent = configByRepo.get(finding.repoDir);
+    if (!parent || !isConfigIntegrityDownstreamFinding(finding)) continue;
+    finding.groupedUnder = parent.id;
+    finding.evidence.push(`probableRootCause=config-integrity (${parent.evidence.find((line) => line.startsWith('file='))?.slice(5) ?? parent.id})`);
+    const list = downstreamByParent.get(parent.id) ?? [];
+    list.push(finding);
+    downstreamByParent.set(parent.id, list);
+  }
+
+  for (const [parentId, children] of downstreamByParent) {
+    const parent = next.find((finding) => finding.id === parentId);
+    if (!parent) continue;
+    const downstreamCount = children.reduce((sum, child) => sum + (child.occurrenceCount ?? 1), 0);
+    parent.evidence.push(`downstreamCount=${downstreamCount}`);
+    for (const child of children.slice(0, 8)) {
+      parent.evidence.push(`downstream=${child.id} (x${child.occurrenceCount ?? 1})`);
+    }
+  }
+
+  return next;
+}
+
+function isConfigIntegrityDownstreamFinding(finding: Finding): boolean {
+  if (finding.id.startsWith('model-downgrade-')) return true;
+  if (finding.id.startsWith('repeated-ready-watchdog-')) {
+    return finding.evidence.some((line) => /Unexpected (non-whitespace|token|end of JSON)|Failed to parse .*wavemill-config|Config validation failed/i.test(line));
+  }
+  if (!/^log-(error|warning)-/.test(finding.id)) return false;
+  const text = `${finding.title}\n${finding.evidence.join('\n')}`;
+  return /Unexpected (non-whitespace|token|end of JSON)|Failed to parse .*wavemill-config|Config validation failed|failed validation \(model selector is not valid|Invalid \S+ model '[^']+'(?: looks like a depth tag)?; using '[^']+'|ready watchdog tick failed|Post-completion eval: failed/i.test(text);
+}
+
 function observe(options: ObserverOptions): ObserverSnapshot {
   const sessions = listSessions().filter((session) => !options.session || session === options.session);
   const panes = listPanes().filter((pane) => !options.session || pane.session === options.session);
@@ -1219,7 +1369,13 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
   }
 
   for (const repo of snapshot.repos) {
-    const incidentConfig = getIncidentConfig(repo.repoDir);
+    let incidentConfig: ReturnType<typeof getIncidentConfig>;
+    try {
+      incidentConfig = getIncidentConfig(repo.repoDir);
+    } catch (error) {
+      addConfigDegradedFindingIfMissing(snapshot.findings, repo, error, 'incident reconciliation');
+      continue;
+    }
     if (incidentConfig.enabled === false) continue;
     const storeDir = incidentConfig.store?.directory ?? '.wavemill/incidents';
     const store = new IncidentStore(
@@ -1459,9 +1615,21 @@ export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options:
   if (!options.fileIncidents && !options.incidentsReplay) return snapshot;
   const summary = emptyIncidentSyncSnapshot();
   for (const repo of snapshot.repos) {
-    const store = incidentStoreForRepo(repo, options);
-    if (!store) continue;
-    const config = mergeObserverLinearConfig(getObserverLinearConfig(repo.repoDir), options);
+    let store: IncidentStore | null;
+    let config: ObserverLinearConfig;
+    try {
+      store = incidentStoreForRepo(repo, options);
+      if (!store) continue;
+      config = mergeObserverLinearConfig(getObserverLinearConfig(repo.repoDir), options);
+    } catch (error) {
+      summary.errors.push({
+        fingerprint: `config-${hashText(repo.repoDir)}`,
+        action: 'skipped',
+        reason: error instanceof Error ? error.message : String(error),
+      });
+      addConfigDegradedFindingIfMissing(snapshot.findings, repo, error, 'incident Linear sync');
+      continue;
+    }
     try {
       if (!config.detectionOnly) {
         const retry = await drainIncidentQueue({
@@ -1518,6 +1686,23 @@ export async function syncIncidentsToLinear(snapshot: ObserverSnapshot, options:
     }
   }
   return { ...snapshot, incidentSync: summary };
+}
+
+function addConfigDegradedFindingIfMissing(findings: Finding[], repo: RepoSnapshot, error: unknown, operation: string): void {
+  if (findings.some((finding) => finding.repoDir === repo.repoDir && finding.id.startsWith('config-integrity-'))) {
+    return;
+  }
+  findings.push({
+    id: `config-integrity-degraded-${repo.session}-${hashText(`${repo.repoDir}:${operation}`)}`,
+    severity: 'medium',
+    category: 'operational',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    title: `Observer skipped ${operation} because wavemill config failed to load`,
+    evidence: [`repo=${repo.repoDir}`, `error=${error instanceof Error ? error.message : String(error)}`],
+    recommendation: 'Repair wavemill config/schema integrity. Observer degraded mode kept config-independent detectors running.',
+  });
 }
 
 interface BackstageHealthFile {
@@ -1585,6 +1770,18 @@ export async function writeServiceHeartbeat(snapshot: ObserverSnapshot, options:
   );
 }
 
+export function compactSnapshotForRender(snapshot: ObserverSnapshot): ObserverSnapshot {
+  const downstreamCounts = countGroupedFindings(snapshot.findings);
+  const findings = snapshot.findings
+    .filter((finding) => !finding.groupedUnder)
+    .map((finding) => {
+      const downstreamCount = downstreamCounts.get(finding.id) ?? 0;
+      if (downstreamCount === 0) return finding;
+      return { ...finding, title: `${finding.title} (+${downstreamCount} downstream)` };
+    });
+  return { ...snapshot, findings };
+}
+
 function renderSummary(snapshot: ObserverSnapshot): string {
   const activeTasks = snapshot.repos.flatMap((repo) => repo.tasks.filter((task) => !terminalStatus(task.status)));
   const counts: Record<Severity, number> = { urgent: 0, high: 0, medium: 0, low: 0 };
@@ -1598,7 +1795,9 @@ function renderSummary(snapshot: ObserverSnapshot): string {
     `Active tasks: ${activeTasks.length}`,
     `Findings: urgent=${counts.urgent} high=${counts.high} medium=${counts.medium} low=${counts.low}`,
   ];
-  for (const finding of snapshot.findings.slice(0, 20)) {
+  const downstreamCounts = countGroupedFindings(snapshot.findings);
+  const visibleFindings = snapshot.findings.filter((finding) => !finding.groupedUnder);
+  for (const finding of visibleFindings.slice(0, 20)) {
     lines.push('');
     lines.push(`[${finding.severity}/${finding.category}/${finding.confidence}] ${finding.title}`);
     if (finding.session) lines.push(`  session: ${finding.session}`);
@@ -1607,12 +1806,16 @@ function renderSummary(snapshot: ObserverSnapshot): string {
     for (const item of finding.evidence.slice(0, 4)) {
       lines.push(`  evidence: ${item}`);
     }
+    const downstreamCount = downstreamCounts.get(finding.id) ?? 0;
+    if (downstreamCount > 0) {
+      lines.push(`  downstream: ${downstreamCount} finding(s) grouped under this root cause`);
+    }
     lines.push(`  recommendation: ${finding.recommendation}`);
     if (finding.linearIssueUrl) lines.push(`  linear: ${finding.linearIssueUrl}`);
   }
-  if (snapshot.findings.length > 20) {
+  if (visibleFindings.length > 20) {
     lines.push('');
-    lines.push(`... ${snapshot.findings.length - 20} additional finding(s) omitted from text summary`);
+    lines.push(`... ${visibleFindings.length - 20} additional finding(s) omitted from text summary`);
   }
   if (snapshot.incidents && snapshot.incidents.length > 0) {
     lines.push('');
@@ -1634,6 +1837,15 @@ function renderSummary(snapshot: ObserverSnapshot): string {
     }
   }
   return `${lines.join('\n')}\n`;
+}
+
+function countGroupedFindings(findings: Finding[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const finding of findings) {
+    if (!finding.groupedUnder) continue;
+    counts.set(finding.groupedUnder, (counts.get(finding.groupedUnder) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function readEnvFile(cwd = process.cwd()): Record<string, string> {
@@ -1820,7 +2032,7 @@ async function main(): Promise<void> {
       if (options.json) {
         process.stdout.write(`${JSON.stringify(snapshot, null, 2)}\n`);
       } else if (options.compact) {
-        process.stdout.write(renderObserverStatus(snapshot, { width: process.stdout.columns ?? 100 }));
+        process.stdout.write(renderObserverStatus(compactSnapshotForRender(snapshot), { width: process.stdout.columns ?? 100 }));
       } else {
         process.stdout.write(renderSummary(snapshot));
       }
