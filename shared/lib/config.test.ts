@@ -63,6 +63,7 @@ import {
   getEffectiveModelExclusions,
   getPrePrVerificationConfig,
   getObserverLinearConfig,
+  getChallengeEvalHardFailureRetryMaxAttempts,
 } from './config.ts';
 
 // ────────────────────────────────────────────────────────────────
@@ -907,6 +908,161 @@ test('challenge.allowDeepseek rejects non-boolean values', () => {
       });
     }
   } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('challenge hard-failure retry max defaults to 2', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({}));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 2);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
+    cleanUp(tmp);
+  }
+});
+
+test('challenge hard-failure retry max uses explicit config', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { hardFailureRetryMaxAttempts: 5 } },
+    }));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 5);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
+    cleanUp(tmp);
+  }
+});
+
+test('challenge hard-failure env override wins over config', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = '3';
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { hardFailureRetryMaxAttempts: 5 } },
+    }));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 3);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
+    cleanUp(tmp);
+  }
+});
+
+test('challenge soft retry max does not affect hard-failure retry max', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { retryMaxAttempts: 7 } },
+    }));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 2);
+    assert.equal(loadWavemillConfig(tmp).challenge?.eval?.retryMaxAttempts, 7);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
+    cleanUp(tmp);
+  }
+});
+
+test('invalid challenge hard-failure config fails schema validation', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { hardFailureRetryMaxAttempts: -1 } },
+    }));
+
+    if (hasAjv) {
+      assert.throws(() => {
+        loadWavemillConfig(tmp);
+      }, /validation failed/);
+    } else {
+      assert.doesNotThrow(() => {
+        loadWavemillConfig(tmp);
+      });
+    }
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('hard-failure accessor ignores invalid config when validation is disabled', () => {
+  const tmp = makeTempRepo();
+  const previousValidation = process.env.WAVEMILL_DISABLE_AJV_VALIDATION;
+  const previousRetry = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    process.env.WAVEMILL_DISABLE_AJV_VALIDATION = '1';
+    delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { retryMaxAttempts: 9, hardFailureRetryMaxAttempts: -1 } },
+    }));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 2);
+  } finally {
+    if (previousValidation === undefined) {
+      delete process.env.WAVEMILL_DISABLE_AJV_VALIDATION;
+    } else {
+      process.env.WAVEMILL_DISABLE_AJV_VALIDATION = previousValidation;
+    }
+    if (previousRetry === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previousRetry;
+    }
+    clearConfigCache();
+    cleanUp(tmp);
+  }
+});
+
+test('invalid hard-failure env falls through to hard-failure config only', () => {
+  const tmp = makeTempRepo();
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = 'bad';
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      challenge: { eval: { retryMaxAttempts: 9, hardFailureRetryMaxAttempts: 4 } },
+    }));
+
+    assert.equal(getChallengeEvalHardFailureRetryMaxAttempts(tmp), 4);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
     cleanUp(tmp);
   }
 });

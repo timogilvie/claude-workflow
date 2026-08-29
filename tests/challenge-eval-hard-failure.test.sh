@@ -119,7 +119,13 @@ mkdir -p "$REPO_DIR" "$WORKTREE_ROOT" "$TOOLS_DIR" "$REPO_DIR/.wavemill/evals"
 log() { printf -v LOG_OUTPUT "%s%s\n" "$LOG_OUTPUT" "$2"; }
 log_warn() { printf -v LOG_OUTPUT "%sWARN: %s\n" "$LOG_OUTPUT" "$1"; }
 get_linear_issue_id() { printf '%s\n' "$1"; }
-wavemill_load_config() { printf '%s\n' '{"eval":{"postMergeTimeoutSeconds":600}}'; }
+wavemill_load_config() {
+  if [[ -n "${CONFIG_JSON:-}" ]]; then
+    printf '%s\n' "$CONFIG_JSON"
+  else
+    printf '%s\n' '{"eval":{"postMergeTimeoutSeconds":600}}'
+  fi
+}
 
 read_state_value() {
   local default="${1:-}"
@@ -373,6 +379,66 @@ JSON
   printf 'orphan_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
 }
 
+run_config_retry_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    },
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "pr": "102",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  },
+  "jobs": {
+    "eval-HOK-2462-primary-101": {
+      "id": "eval-HOK-2462-primary-101",
+      "status": "failed"
+    }
+  }
+}
+JSON
+
+  maybe_run_challenge_eval "HOK-2462" "101" "task/hok-2462" "hok-2462"
+  wait || true
+  printf 'config_retry_counter=%s\n' "$(jq -r '.tasks["HOK-2462"].evalHardFailureRetryCount // empty' "$STATE_FILE")"
+  printf 'config_retry_failed=%s\n' "$(jq -r '.tasks["HOK-2462"].evalFailed' "$STATE_FILE")"
+  printf 'config_retry_snapshot_exists=%s\n' "$([[ -f "$CASE_DIR/eval-launch-state.json" ]] && echo true || echo false)"
+  printf 'config_retry_snapshot_counter=%s\n' "$(jq -r '.tasks["HOK-2462"].evalHardFailureRetryCount' "$CASE_DIR/eval-launch-state.json")"
+  printf 'terminal_exists=%s\n' "$([[ -f "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" ]] && echo true || echo false)"
+}
+
+run_helper_case() {
+  printf 'max_retries=%s\n' "$(challenge_eval_hard_failure_max_retries)"
+}
+
 "run_${CASE_NAME}_case"
 printf 'eval_launches=%s\n' "$EVAL_LAUNCHES"
 printf 'job_tracker_calls=%s\n' "$JOB_TRACKER_CALLS"
@@ -386,6 +452,12 @@ retry_output="$(CASE_NAME=retry CASE_DIR="$TEST_TMP/retry" REPO_DIR="$REPO_DIR" 
 exhausted_output="$(CASE_NAME=exhausted CASE_DIR="$TEST_TMP/exhausted" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 double_output="$(CASE_NAME=double CASE_DIR="$TEST_TMP/double" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 orphan_output="$(CASE_NAME=orphan CASE_DIR="$TEST_TMP/orphan" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_default_output="$(CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-default" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_config_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":4}}}' CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-config" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_soft_only_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts":9}}}' CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-soft-only" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=3 CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_invalid_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts":9,"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=bad CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-invalid-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+config_retry_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":3}}}' CASE_NAME=config_retry CASE_DIR="$TEST_TMP/config-retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 
 check_contains "legacy hard failure defaults retry counter to zero then increments" "$retry_output" "retry_counter=1"
 check_contains "hard failure retry clears evalFailed before relaunch" "$retry_output" "retry_failed=false"
@@ -415,6 +487,19 @@ check_contains "orphan hard failure path writes forfeit outcome" "$orphan_output
 check_contains "orphan hard failure path records orphan reason" "$orphan_output" "orphan_reason=orphan_pair"
 check_contains "orphan hard failure path awards surviving primary" "$orphan_output" "orphan_winner=primary"
 check_contains "orphan hard failure path marks primary compared" "$orphan_output" "orphan_compared_primary=true"
+
+check_contains "hard failure helper defaults to two retries" "$helper_default_output" "max_retries=2"
+check_contains "hard failure helper reads hard-failure config" "$helper_config_output" "max_retries=4"
+check_contains "soft retry config does not affect hard-failure helper" "$helper_soft_only_output" "max_retries=2"
+check_contains "hard failure env override wins over config" "$helper_env_output" "max_retries=3"
+check_contains "invalid hard failure env falls through to config" "$helper_invalid_env_output" "max_retries=4"
+check_contains "hard failure config allows retry before exhaustion" "$config_retry_output" "config_retry_counter=3"
+check_contains "hard failure config retry clears evalFailed" "$config_retry_output" "config_retry_failed=false"
+check_contains "hard failure config retry does not write terminal record" "$config_retry_output" "terminal_exists=false"
+check_contains "hard failure config retry launches eval" "$config_retry_output" "config_retry_snapshot_exists=true"
+check_contains "hard failure config retry snapshot has configured attempt" "$config_retry_output" "config_retry_snapshot_counter=3"
+check_contains "hard failure config retry records tracked job launch" "$config_retry_output" "job_tracker_calls=1"
+check_contains "hard failure config retry logs configured budget" "$config_retry_output" "challenge eval retrying for HOK-2462: hard failure (attempt 3/3)"
 
 echo ""
 echo "Passed: $PASS"
