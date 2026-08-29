@@ -375,15 +375,6 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const allowedCompanionPaths = findAllowedCompanionPaths(companionCandidates, isInScope);
     const companionSet = new Set(allowedCompanionPaths);
 
-    // When the packet declares "Files to Modify" and no baseline artifact
-    // overrides it, that declaration governs the committed diff. Falling back
-    // to `committedScopeSet` (the git-derived task paths) would admit every
-    // committed path by construction and make the declaration unenforceable —
-    // the fail-open at the heart of HOK-2884. Companion and support-file
-    // allowances still apply, and support-file derivation keeps using the
-    // git-derived set so test/fixture companions are not over-blocked.
-    const declaredGovernsCommitted = declaredScope.length > 0 && !baseline;
-
     // Wavemill's own task context is never product code and is never listed in
     // "Files to Modify", so a declared scope must not turn the task's packet,
     // baseline, or repo config into out-of-scope violations.
@@ -400,7 +391,7 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
         && (path === featureDirRel || path.startsWith(`${featureDirRel}/`)));
 
     const allowedCommitted = (path: string): boolean =>
-      (declaredGovernsCommitted ? false : committedScopeSet.has(path))
+      committedScopeSet.has(path)
       || scopeMatchers.some((matcher) => matcher(path))
       || companionSet.has(path)
       || isTaskContextPath(path)

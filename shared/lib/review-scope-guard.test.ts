@@ -469,6 +469,30 @@ test('validateReviewScope with missing baseline and clean index passes on commit
   }
 });
 
+test('validateReviewScope with missing baseline does not narrow committed fallback scope to declared paths (HOK-2913 REQ-F1)', () => {
+  const { repoDir, featureDir, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'tools/check-review-scope.ts', 'export const guardCli = 1;\n', 'task CLI');
+    commitFile(repoDir, 'tools/write-review-scope-baseline.ts', 'export const writer = 1;\n', 'task writer');
+
+    const result = validateReviewScope({
+      repoDir,
+      featureDir,
+      includeWorkingTree: true,
+      writeBaseline: false,
+    });
+
+    assert.equal(result.status, 'pass', `expected pass, got ${result.status}: ${result.message}`);
+    assert.equal(result.baselineIsArtifact, false);
+    assert.ok(result.declaredScope.includes('src/app.ts'));
+    assert.ok(result.taskPaths.includes('tools/check-review-scope.ts'));
+    assert.ok(result.taskPaths.includes('tools/write-review-scope-baseline.ts'));
+    assert.deepEqual(result.outOfScopePaths, []);
+  } finally {
+    cleanup();
+  }
+});
+
 test('validateReviewScope with missing baseline still blocks unrelated staged review edits (HOK-2913 REQ-F4)', () => {
   const { repoDir, cleanup } = makeGitOnlyRepo();
   try {
