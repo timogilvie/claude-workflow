@@ -34,6 +34,7 @@ TESTS=(
   challenge-record-decisive.test.sh
   native-terminal-failure.test.sh
   challenger-transient-retry.test.sh
+  parent-monitor-function-drift.test.sh
   native-agent-shell-operators.test.sh
   native-coding-commit.test.sh
   hook-write-context-guard.test.sh
@@ -41,6 +42,7 @@ TESTS=(
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh
   launch-ready-phase.test.sh
+  review-scope-baseline-handoff.test.sh
   launch-native-planning-phase.test.sh
   log-hygiene.test.sh
   lifecycle-scenarios.test.sh

@@ -8547,6 +8547,28 @@ $issue_desc
   return $?
 }
 
+# Materialize the review-scope baseline artifact before a review launch
+# (HOK-2913). Create-if-absent: an existing baseline (including one written
+# before earlier review iterations) is never regenerated, so review-fix
+# commits cannot widen the recorded scope. Failure downgrades to a warning —
+# the guard's merge-base fallback still admits the branch's own committed
+# deliverable, so a missing baseline degrades scope narrowing, not liveness.
+ensure_review_scope_baseline() {
+  local issue="$1" worktree="$2" feature_dir="$3"
+  local out rc=0
+  if [[ ! -d "$feature_dir" ]]; then
+    log_warn "$issue → review-scope baseline skipped: feature dir missing ($feature_dir)"
+    return 1
+  fi
+  out="$(wavemill_run_tsx_tool "$TOOLS_DIR/write-review-scope-baseline.ts" \
+    --repo-dir "$worktree" --feature-dir "$feature_dir" 2>&1)" || rc=$?
+  if (( rc != 0 )); then
+    log_warn "$issue → review-scope baseline not materialized (guard falls back to merge-base scope): $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')"
+    return 1
+  fi
+  return 0
+}
+
 # Launch the review phase in an existing tmux window
 launch_review_phase() {
   local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6"
@@ -8557,6 +8579,12 @@ launch_review_phase() {
   win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir" "review")"
   persist_task_window_id "$issue" "$win"
   configure_agent_hooks "$reviewer_agent" "$wt_dir" "$REPO_DIR"
+
+  # Record the committed coding path set once, before the review agent starts
+  # (HOK-2913): with the artifact present the scope guard reviews against the
+  # task-owned set instead of re-deriving (and mis-flagging) the branch's
+  # whole deliverable from merge-base fallback.
+  ensure_review_scope_baseline "$issue" "$wt_dir" "$wt_dir/features/$slug" || true
 
   # Read issue context
   local issue_json issue_desc issue_context

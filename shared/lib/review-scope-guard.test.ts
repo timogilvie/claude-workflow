@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import {
+  REVIEW_SCOPE_GUARD_COMMITTED_REMEDY_MESSAGE,
   REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE,
   REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE,
+  ensureReviewScopeBaseline,
   validateReviewScope,
 } from './review-scope-guard.ts';
 
@@ -392,6 +394,182 @@ test('validateReviewScope ignores reverts that live in the integration branch hi
     assert.deepEqual(result.crossPrReverts, []);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+// ────────────────────────────────────────────────────────────────
+// HOK-2913: missing baseline, remediation wording, PR lookup, baseline writer
+// ────────────────────────────────────────────────────────────────
+
+/** Delegate real commands to git while intercepting gh invocations. */
+function makeGhInterceptingRunner(behavior: 'no-pr' | 'found'): (cmd: string, opts?: { encoding?: string; cwd?: string }) => string {
+  return (cmd, opts) => {
+    if (cmd.startsWith('gh ')) {
+      if (behavior === 'found') {
+        return JSON.stringify({ number: 42, title: 'A PR', body: 'body text' });
+      }
+      throw new Error('no pull requests found for branch "task/scope-guard"');
+    }
+    return execSync(cmd, { ...opts, encoding: 'utf-8', shell: '/bin/bash' }) as string;
+  };
+}
+
+test('validateReviewScope passes with no baseline artifact and a clean index (committed task files are the scope)', () => {
+  // REQ-F1: the branch's own committed deliverable must never be reported as
+  // out-of-scope merely because the baseline artifact is absent.
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/deliverable');
+    commitFile(repoDir, 'shared/lib/new-checker.ts', 'export const c = 1;\n', 'Add checker');
+    commitFile(repoDir, 'package.json', '{"name":"x"}\n', 'Add deps');
+
+    const result = validateReviewScope({ repoDir, includeWorkingTree: true });
+
+    assert.equal(result.status, 'pass');
+    assert.equal(result.baselineIsArtifact, false);
+    assert.deepEqual(result.outOfScopePaths, []);
+    assert.deepEqual(result.taskPaths.sort(), ['package.json', 'shared/lib/new-checker.ts']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope gives committed-history violations a committed remedy, never "unstage"', () => {
+  // REQ-F3: with a clean index, telling the operator to unstage is an
+  // impossible instruction (HOK-2913).
+  const { repoDir, featureDir, baseCommit, cleanup } = makeRepo();
+  try {
+    commitFile(repoDir, 'src/app.ts', 'export const value = 1;\n', 'coding');
+    validateReviewScope({ repoDir, featureDir, sinceCommit: baseCommit, writeBaseline: true });
+    commitFile(repoDir, 'shared/lib/unrelated.ts', 'stale\n', 'bad review fix');
+
+    const result = validateReviewScope({
+      repoDir,
+      featureDir,
+      sinceCommit: baseCommit,
+      writeBaseline: true,
+    });
+
+    assert.equal(result.status, 'fail');
+    const finding = result.findings.find((entry) => entry.path === 'shared/lib/unrelated.ts');
+    assert.equal(finding?.observedIn, 'committed');
+    assert.equal(result.message, REVIEW_SCOPE_GUARD_COMMITTED_REMEDY_MESSAGE);
+    assert.ok(!result.message.includes('unstaged'), 'committed-only failures must not instruct unstaging');
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope marks staged violations as staged and keeps the unstage remedy', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/staged-remedy');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+    stageFile(repoDir, 'tools/unrelated.ts', 'export const b = 2;\n');
+
+    const result = validateReviewScope({ repoDir, includeWorkingTree: true });
+
+    assert.equal(result.status, 'fail');
+    const finding = result.findings.find((entry) => entry.path === 'tools/unrelated.ts');
+    assert.equal(finding?.observedIn, 'staged');
+    assert.equal(result.message, REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope reports prLookup none as a distinct non-blocking outcome', () => {
+  // REQ-F5: "no PR found" must be classified, not folded into the blocking
+  // path or leaked as noise.
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/scope-guard');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+
+    const result = validateReviewScope({
+      repoDir,
+      includeWorkingTree: true,
+      shellRunner: makeGhInterceptingRunner('no-pr'),
+    });
+
+    assert.equal(result.status, 'pass');
+    assert.equal(result.prLookup, 'none');
+    assert.equal(result.prNumber, null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('validateReviewScope reports prLookup found with the PR number', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/scope-guard-pr');
+    commitFile(repoDir, 'tools/observer.ts', 'export const a = 1;\n', 'task work');
+
+    const result = validateReviewScope({
+      repoDir,
+      includeWorkingTree: true,
+      shellRunner: makeGhInterceptingRunner('found'),
+    });
+
+    assert.equal(result.status, 'pass');
+    assert.equal(result.prLookup, 'found');
+    assert.equal(result.prNumber, 42);
+  } finally {
+    cleanup();
+  }
+});
+
+test('ensureReviewScopeBaseline creates the artifact from merge-base and never regenerates it', () => {
+  // REQ-F2: the coding→review handoff materializes the baseline; later calls
+  // (e.g. review relaunches after review-fix commits) keep the original.
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/baseline-writer');
+    commitFile(repoDir, 'shared/lib/new-checker.ts', 'export const c = 1;\n', 'Add checker');
+    const featureDir = join(repoDir, 'features', 'baseline-writer');
+    mkdirSync(featureDir, { recursive: true });
+
+    const first = ensureReviewScopeBaseline({ repoDir, featureDir });
+    assert.equal(first.created, true);
+    assert.deepEqual(first.baseline.paths, ['shared/lib/new-checker.ts']);
+    assert.ok(existsSync(first.baselinePath));
+
+    // A later (review-fix) commit must not widen the recorded scope.
+    commitFile(repoDir, 'tools/review-fix.ts', 'export const r = 1;\n', 'review fix');
+    const second = ensureReviewScopeBaseline({ repoDir, featureDir });
+    assert.equal(second.created, false);
+    assert.deepEqual(second.baseline.paths, ['shared/lib/new-checker.ts']);
+
+    const onDisk = JSON.parse(readFileSync(first.baselinePath, 'utf-8')) as { paths: string[] };
+    assert.deepEqual(onDisk.paths, ['shared/lib/new-checker.ts']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('write-review-scope-baseline CLI materializes the artifact for the mill handoff', () => {
+  const { repoDir, cleanup } = makeGitOnlyRepo();
+  try {
+    git(repoDir, 'checkout -b task/cli-baseline');
+    commitFile(repoDir, 'shared/lib/new-checker.ts', 'export const c = 1;\n', 'Add checker');
+    const featureDir = join(repoDir, 'features', 'cli-baseline');
+    mkdirSync(featureDir, { recursive: true });
+
+    const result = spawnSync(
+      join(process.cwd(), 'node_modules', '.bin', 'tsx'),
+      [
+        join(process.cwd(), 'tools', 'write-review-scope-baseline.ts'),
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ],
+      { encoding: 'utf-8' },
+    );
+
+    assert.equal(result.status, 0, `expected exit 0, got ${result.status}: ${result.stdout}\n${result.stderr}`);
+    assert.ok(existsSync(join(featureDir, '.review-scope-baseline.json')));
+  } finally {
+    cleanup();
   }
 });
 

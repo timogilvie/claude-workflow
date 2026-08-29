@@ -94,6 +94,7 @@ for f in \
   "$REPO_DIR"/tests/wavemill-usage-tips.test.sh \
   "$REPO_DIR"/tests/wavemill-dependent-launch.test.sh \
   "$REPO_DIR"/tests/wavemill-guards.test.sh \
+  "$REPO_DIR"/tests/review-scope-baseline-handoff.test.sh \
   "$REPO_DIR"/tests/wavemill-mill-advance.test.sh \
   "$REPO_DIR"/tests/wavemill-backlog-budget.test.sh \
   "$REPO_DIR"/tests/wavemill-dependency-queue-filter.test.sh \
@@ -118,6 +119,7 @@ for f in \
   "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/challenger-transient-retry.test.sh \
+  "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \

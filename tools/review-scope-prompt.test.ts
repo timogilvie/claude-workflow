@@ -56,6 +56,16 @@ function assertExitCodeDistinction(text: string, label: string): void {
     /Do not treat exit 2 as a scope violation/i,
     `${label} must forbid treating guard exit 2 as a scope violation`,
   );
+  assert.match(
+    text,
+    /exits 3[\s\S]*?no PR exists yet[\s\S]*?not a violation/i,
+    `${label} must describe guard exit 3 (no PR yet) as a non-violation`,
+  );
+  assert.match(
+    text,
+    /exits 3[\s\S]*?proceed exactly as for exit 0/i,
+    `${label} must allow the pre-PR workflow to proceed on guard exit 3`,
+  );
 }
 
 test('review-phase prompt requires review scope guard immediately before review-fix commits', () => {
