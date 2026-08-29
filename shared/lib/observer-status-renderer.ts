@@ -49,17 +49,13 @@ export interface ObserverRenderOptions {
 
 const SEVERITY_ORDER: Record<ObserverSeverity, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
 const SEVERITY_MARK: Record<ObserverSeverity, string> = { urgent: '!!', high: ' !', medium: ' ·', low: ' ·' };
-const LOG_NOISE_HIGH_OCCURRENCE_THRESHOLD = 3;
 
 /**
- * True for findings that merely echo a mill log line and have not crossed a
- * severity/recurrence threshold that makes them actionable.
+ * True for findings that merely echo a mill log line. These are the highest-volume
+ * and lowest-signal category, so the pane rolls them up rather than listing them.
  */
-export function isLogNoiseFinding(finding: Pick<RenderableFinding, 'id' | 'severity' | 'occurrenceCount'>): boolean {
-  if (!/^log-(error|warning)-/.test(finding.id)) return false;
-  if (finding.severity === 'urgent') return false;
-  if (finding.severity === 'high' && (finding.occurrenceCount ?? 1) >= LOG_NOISE_HIGH_OCCURRENCE_THRESHOLD) return false;
-  return true;
+export function isLogNoiseFinding(id: string): boolean {
+  return /^log-(error|warning)-/.test(id);
 }
 
 /** Strip a leading `HH:MM:SS` (and optional level tag) so repeated messages collapse. */
@@ -106,8 +102,8 @@ export function renderObserverStatus(
     if (finding.severity in counts) counts[finding.severity] += 1;
   }
 
-  const noise = includeNoise ? [] : findings.filter((finding) => isLogNoiseFinding(finding));
-  const actionable = includeNoise ? [...findings] : findings.filter((finding) => !isLogNoiseFinding(finding));
+  const noise = includeNoise ? [] : findings.filter((finding) => isLogNoiseFinding(finding.id));
+  const actionable = includeNoise ? [...findings] : findings.filter((finding) => !isLogNoiseFinding(finding.id));
   actionable.sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9));
 
   const stamp = shortTimestamp(snapshot.timestamp);

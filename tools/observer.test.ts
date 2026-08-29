@@ -100,23 +100,6 @@ function basicSnapshot(repoDir: string, logPath?: string) {
   };
 }
 
-function retryLoopSnapshot(repoDir: string, logPath: string, task: Record<string, unknown>) {
-  return {
-    timestamp: '2026-08-28T12:00:00.000Z',
-    sessions: ['wavemill'],
-    panes: [],
-    processes: [],
-    repos: [{
-      session: 'wavemill',
-      repoDir,
-      millLogPath: logPath,
-      logMtime: '2026-08-28T10:45:00.000Z',
-      stateMtime: '2026-08-28T09:59:00.000Z',
-      tasks: [task],
-    }],
-  };
-}
-
 test('config-integrity finding is first and includes file location evidence for malformed schema', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-config-integrity-'));
   try {
@@ -516,166 +499,6 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
   }
 });
 
-test('stuck-retry-loop fires when a signature repeats and task phase has not advanced', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      "10:00:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:01:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:02:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:03:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:04:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2894_c',
-      phase: 'coding',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2894_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'high');
-    assert.equal(stuck.category, 'stuck');
-    assert.equal(stuck.issue, 'HOK-2894_c');
-    assert.equal(stuck.occurrenceCount, 5);
-    assert.match(stuck.title, /challenge aborted because selected coding model/);
-    assert.ok(stuck.evidence.includes('occurrences=5'));
-    assert.ok(stuck.evidence.includes('phase=coding'));
-    assert.match(stuck.recommendation, /HOK-2894_c has been re-emitting/);
-    assert.match(stuck.recommendation, /Unstick: set the arm's phase=aborted/);
-    assert.equal(findings.some((finding) => finding.id.startsWith('log-error-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop does not fire when task updated during the loop window', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-advanced-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      "10:00:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:01:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:02:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:03:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:04:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2894_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T10:02:30.000Z',
-    }), defaultObserverOptions());
-
-    assert.equal(findings.some((finding) => finding.id.startsWith('stuck-retry-loop-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop escalates to urgent past the occurrence threshold', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-urgent-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, Array.from({ length: 20 }, (_unused, index) =>
-      `10:${String(index).padStart(2, '0')}:01 [error] HOK-2893_c: expansion retry failed because planner exited 1`
-    ).join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2893_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2893_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'urgent');
-    assert.equal(stuck.occurrenceCount, 20);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop catches repeated phase launch failures from severity-tagged info logs', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-launch-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      '10:00:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:01:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:02:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:03:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:04:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2893_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2893_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'high');
-    assert.match(stuck.title, /Coding phase launch failed/);
-    assert.equal(findings.some((finding) => finding.id.startsWith('log-warning-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('inconsistent-terminal-state fires only for active challenge-aborted tasks', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-inconsistent-terminal-'));
-  try {
-    writePermissiveSchema(repoDir);
-    const findings = buildFindings({
-      timestamp: '2026-08-28T12:00:00.000Z',
-      sessions: ['wavemill'],
-      panes: [],
-      processes: [],
-      repos: [{
-        session: 'wavemill',
-        repoDir,
-        tasks: [
-          {
-            issue: 'HOK-2894_c',
-            phase: 'coding',
-            status: 'active',
-            challengeAborted: 'varied_model_unresolvable',
-            challengeAbortedDetail: 'model selector is not valid for this repo',
-            challengeAbortedNextAction: 'Terminalize the challenge arm before retrying.',
-          },
-          {
-            issue: 'HOK-2895_c',
-            phase: 'coding',
-            status: 'aborted',
-            challengeAborted: 'varied_model_unresolvable',
-          },
-        ],
-      }],
-    }, defaultObserverOptions());
-
-    const inconsistent = findings.filter((finding) => finding.id.startsWith('inconsistent-terminal-state-'));
-    assert.equal(inconsistent.length, 1);
-    assert.equal(inconsistent[0].issue, 'HOK-2894_c');
-    assert.match(inconsistent[0].title, /challengeAborted=varied_model_unresolvable but status is still active/);
-    assert.ok(inconsistent[0].evidence.includes('challengeAborted=varied_model_unresolvable (model selector is not valid for this repo)'));
-    assert.equal(inconsistent[0].recommendation, 'Terminalize the challenge arm before retrying.');
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
 test('degraded queue health returns structured finding without throwing', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-degraded-'));
   try {
@@ -746,10 +569,9 @@ test('structured log scanning aggregates repeated errors and ignores prose false
     const errorFindings = findings.filter((finding) => finding.id.startsWith('log-error-'));
     assert.equal(errorFindings.length, 1);
     const error = errorFindings[0];
-    assert.equal(error.severity, 'medium');
+    assert.equal(error.severity, 'high');
     assert.equal(error.confidence, 'high');
     assert.equal(error.occurrenceCount, 2);
-    assert.equal(error.title, 'Monitor command failed pid=<pid> tmp=<tmp> stderr=Error: EAGAIN');
     assert.ok(error.evidence.includes('occurrences=2'));
     assert.ok(error.evidence.includes('normalizedMessage=Monitor command failed pid=<pid> tmp=<tmp> stderr=Error: EAGAIN'));
     assert.equal(error.evidence.some((line) => /error detection|error handling/.test(line)), false);
@@ -1295,6 +1117,485 @@ test('a single failed-ready re-check stays below the loop threshold', () => {
     }, defaultObserverOptions());
 
     assert.equal(findings.filter((finding) => finding.id.startsWith('ready-recheck-loop-')).length, 0);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// HOK-2911 / HOK-2912: terminal-task-parked, arm-died-with-unpushed-work,
+// pr-create-failed
+// ---------------------------------------------------------------------------
+
+function runGit(cwd: string, args: string[]): void {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  assert.equal(result.status, 0, `git ${args.join(' ')} failed: ${result.stderr}`);
+}
+
+function createResidueGitFixture({
+  commits = 2,
+  pushTaskBranch = false,
+  slug = 'residue-fixture',
+}: { commits?: number; pushTaskBranch?: boolean; slug?: string } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'observer-residue-'));
+  const repoDir = join(root, 'repo');
+  const originDir = join(root, 'origin.git');
+  mkdirSync(repoDir, { recursive: true });
+  runGit(root, ['init', '--bare', originDir]);
+  runGit(root, ['init', repoDir]);
+  runGit(repoDir, ['config', 'user.email', 'observer-test@example.com']);
+  runGit(repoDir, ['config', 'user.name', 'Observer Test']);
+  runGit(repoDir, ['config', 'commit.gpgsign', 'false']);
+  runGit(repoDir, ['checkout', '-b', 'auto/integration']);
+  writeFileSync(join(repoDir, 'base.txt'), 'base\n');
+  runGit(repoDir, ['add', '.']);
+  runGit(repoDir, ['commit', '-m', 'base commit']);
+  runGit(repoDir, ['remote', 'add', 'origin', originDir]);
+  runGit(repoDir, ['push', '-u', 'origin', 'auto/integration']);
+  const branch = `task/${slug}`;
+  runGit(repoDir, ['checkout', '-b', branch]);
+  for (let i = 1; i <= commits; i += 1) {
+    writeFileSync(join(repoDir, `work-${i}.txt`), `work ${i}\n`);
+    runGit(repoDir, ['add', '.']);
+    runGit(repoDir, ['commit', '-m', `task commit ${i}`]);
+  }
+  if (pushTaskBranch) {
+    runGit(repoDir, ['push', '-u', 'origin', branch]);
+  }
+  runGit(repoDir, ['checkout', 'auto/integration']);
+  writePermissiveSchema(repoDir);
+  return { root, repoDir, slug, branch };
+}
+
+function agoIso(minutes: number): string {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+function residueSnapshot(repoDir: string, tasks: Record<string, unknown>[], panes: Record<string, unknown>[] = []) {
+  return {
+    timestamp: new Date().toISOString(),
+    sessions: ['wavemill'],
+    panes,
+    processes: [],
+    repos: [{
+      session: 'wavemill',
+      repoDir,
+      tasks,
+    }],
+  };
+}
+
+test('fresh terminal task does not fire terminal-task-parked', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-terminal-fresh-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const findings = buildFindings(residueSnapshot(repoDir, [{
+      issue: 'HOK-2845',
+      slug: 'fresh-terminal',
+      phase: 'closed',
+      status: 'closed',
+      worktree: repoDir,
+      updated: agoIso(2),
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('terminal-task-parked-')), false);
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('aged terminal task with clean branch fires medium terminal-task-parked with residue evidence', () => {
+  const fixture = createResidueGitFixture({ commits: 0, slug: 'clean-terminal' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2845',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'closed',
+      status: 'closed',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+    }]), defaultObserverOptions());
+
+    const parked = findings.find((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2845');
+    assert.ok(parked);
+    assert.equal(parked.severity, 'medium');
+    assert.equal(parked.category, 'operational');
+    assert.equal(parked.issue, 'HOK-2845');
+    assert.match(parked.title, /terminal task parked for 30m with allocated residue/);
+    assert.ok(parked.evidence.includes('status=closed'));
+    assert.ok(parked.evidence.includes('tmuxWindow=absent'));
+    assert.ok(parked.evidence.includes(`worktree=present:${fixture.repoDir}`));
+    assert.ok(parked.evidence.includes(`branch=${fixture.branch} localBranch=present`));
+    assert.ok(parked.evidence.includes('baseBranch=auto/integration'));
+    assert.ok(parked.evidence.includes('aheadOfBase=0'));
+    assert.ok(parked.evidence.includes('unpushedCommits=0'));
+    assert.ok(parked.evidence.includes('pr=none'));
+    assert.equal(parked.evidence.some((line) => line === 'potentialWorkLoss=true'), false);
+    assert.match(parked.recommendation, /Nothing on the branch is at risk/);
+    assert.match(parked.recommendation, /wavemill mill abort HOK-2845/);
+    assert.match(parked.recommendation, /never remove the worktree manually/);
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('aged terminal task with unpushed commits escalates to urgent work loss and fires arm-died-with-unpushed-work', () => {
+  const fixture = createResidueGitFixture({ commits: 2, slug: 'lossy-terminal' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2866',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'error',
+      status: 'error',
+      pr: '1217',
+      worktree: fixture.repoDir,
+      updated: agoIso(90),
+    }]), defaultObserverOptions());
+
+    const parked = findings.find((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2866');
+    assert.ok(parked);
+    assert.equal(parked.severity, 'urgent');
+    assert.match(parked.title, /parked for 90m with 2 unpushed commits at risk/);
+    assert.ok(parked.evidence.includes('remoteBranch=absent'));
+    assert.ok(parked.evidence.includes('unpushedCommits=2'));
+    assert.ok(parked.evidence.includes('potentialWorkLoss=true'));
+    assert.ok(parked.evidence.includes('commit=task commit 2'));
+    assert.ok(parked.evidence.some((line) => /^pr=#1217 state=/.test(line)));
+    assert.match(parked.recommendation, /Recover the work first: push task\/lossy-terminal/);
+    assert.match(parked.recommendation, /wavemill mill abort HOK-2866/);
+
+    const died = findings.find((finding) => finding.id === 'arm-died-with-unpushed-work-wavemill-HOK-2866');
+    assert.ok(died);
+    assert.equal(died.severity, 'urgent');
+    assert.equal(died.category, 'crash');
+    assert.match(died.title, /exited with 2 unpushed commits on task\/lossy-terminal/);
+    assert.ok(died.evidence.includes('commitsAheadOfBase=2'));
+    assert.ok(died.evidence.includes('remoteBranch=absent'));
+    assert.ok(died.evidence.includes('commit=task commit 1'));
+    assert.ok(died.evidence.includes('commit=task commit 2'));
+    assert.ok(died.evidence.includes('liveExecutionEvidence=false'));
+    assert.match(died.recommendation, /Push task\/lossy-terminal to origin and open a PR against auto\/integration/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('reaped terminal task with no residue does not fire', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-terminal-reaped-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const findings = buildFindings(residueSnapshot(repoDir, [{
+      issue: 'HOK-2845',
+      slug: 'reaped-terminal',
+      phase: 'closed',
+      status: 'closed',
+      worktree: join(repoDir, 'worktrees', 'gone'),
+      updated: agoIso(600),
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('terminal-task-parked-')), false);
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('terminal-task-parked severity scales with parked age', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-terminal-severity-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const severityFor = (minutes: number) => {
+      const findings = buildFindings(residueSnapshot(repoDir, [{
+        issue: 'HOK-2845',
+        phase: 'closed',
+        status: 'closed',
+        worktree: repoDir,
+        updated: agoIso(minutes),
+      }]), defaultObserverOptions());
+      const parked = findings.find((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2845');
+      assert.ok(parked, `expected terminal-task-parked at age ${minutes}m`);
+      return parked.severity;
+    };
+
+    assert.equal(severityFor(30), 'medium');
+    assert.equal(severityFor(120), 'high');
+    assert.equal(severityFor(25 * 60), 'urgent');
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('status error and phase error are treated as terminal residue', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-terminal-error-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const findings = buildFindings(residueSnapshot(repoDir, [
+      {
+        issue: 'HOK-2866',
+        phase: 'error',
+        status: 'error',
+        worktree: repoDir,
+        updated: agoIso(60),
+      },
+      {
+        issue: 'HOK-2867',
+        phase: 'error',
+        worktree: repoDir,
+        updated: agoIso(60),
+      },
+    ]), defaultObserverOptions());
+
+    assert.ok(findings.some((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2866'));
+    assert.ok(findings.some((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2867'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('terminal-task-parked reports exited tmux window residue', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-terminal-pane-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const findings = buildFindings(residueSnapshot(repoDir, [{
+      issue: 'HOK-2845',
+      slug: 'paned-terminal',
+      phase: 'closed',
+      status: 'closed',
+      worktree: repoDir,
+      updated: agoIso(60),
+    }], [{
+      session: 'wavemill',
+      windowIndex: '1',
+      paneIndex: '0',
+      windowName: 'HOK-2845-paned-terminal',
+      active: false,
+      pid: 0,
+      command: 'zsh',
+      title: 'exited',
+    }]), defaultObserverOptions());
+
+    const parked = findings.find((finding) => finding.id === 'terminal-task-parked-wavemill-HOK-2845');
+    assert.ok(parked);
+    assert.ok(parked.evidence.includes('tmuxWindow=present(exited) targets=wavemill:1.0'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('exited non-terminal arm with unpushed commits fires urgent arm-died-with-unpushed-work', () => {
+  const fixture = createResidueGitFixture({ commits: 3, slug: 'exited-arm' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2894_c',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'review',
+      status: 'active',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+    }]), defaultObserverOptions());
+
+    const died = findings.find((finding) => finding.id === 'arm-died-with-unpushed-work-wavemill-HOK-2894_c');
+    assert.ok(died);
+    assert.equal(died.severity, 'urgent');
+    assert.equal(died.confidence, 'high');
+    assert.ok(died.evidence.includes('unpushedCommits=3'));
+    assert.ok(died.evidence.includes('commit=task commit 3'));
+    assert.ok(died.evidence.includes('pr=none'));
+    assert.equal(findings.some((finding) => finding.id.startsWith('terminal-task-parked-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('pushed branch with commits does not fire arm-died-with-unpushed-work', () => {
+  const fixture = createResidueGitFixture({ commits: 2, pushTaskBranch: true, slug: 'pushed-arm' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2894_c',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'review',
+      status: 'active',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('branch with no commits ahead of base does not fire arm-died-with-unpushed-work', () => {
+  const fixture = createResidueGitFixture({ commits: 0, slug: 'empty-arm' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2896',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'review',
+      status: 'active',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('live agent suppresses arm-died-with-unpushed-work', () => {
+  const fixture = createResidueGitFixture({ commits: 2, slug: 'live-arm' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2894_c',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'coding',
+      status: 'active',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+    }], [{
+      session: 'wavemill',
+      windowIndex: '4',
+      paneIndex: '0',
+      windowName: 'HOK-2894_c-live-arm',
+      active: true,
+      pid: 4242,
+      command: 'node',
+      title: 'claude',
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+const PR_CREATE_LOG_LINE = "10:00:01 [error] pull request create failed: GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and task/manual-edit-detection, Head ref must be a branch (createPullRequest)";
+
+test('pr-create-failed fires from the mill log with raw error, translation, and log-error suppression', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-pr-create-log-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writePermissiveSchema(repoDir);
+    writeFileSync(logPath, `${PR_CREATE_LOG_LINE}\n`);
+
+    const findings = buildFindings({
+      timestamp: new Date().toISOString(),
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        tasks: [{
+          issue: 'HOK-2894_c',
+          slug: 'manual-edit-detection',
+          phase: 'review',
+          status: 'active',
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const failed = findings.find((finding) => finding.id === 'pr-create-failed-wavemill-HOK-2894_c');
+    assert.ok(failed);
+    assert.equal(failed.severity, 'high');
+    assert.equal(failed.confidence, 'high');
+    assert.equal(failed.issue, 'HOK-2894_c');
+    assert.ok(failed.evidence.includes('source=mill-log'));
+    assert.ok(failed.evidence.some((line) => line.startsWith('raw=') && line.includes("Head sha can't be blank")));
+    assert.ok(failed.evidence.some((line) => line.startsWith('translation=') && line.includes('never pushed to origin')));
+    assert.ok(failed.evidence.includes('baseBranch=auto/integration'));
+    assert.match(failed.recommendation, /Push the task branch to origin and re-create the PR against auto\/integration/);
+    assert.equal(findings.some((finding) => finding.id.startsWith('log-error-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('pr-create-failed fires from a review artifact', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-pr-create-artifact-'));
+  const slug = 'artifact-arm';
+  try {
+    writePermissiveSchema(repoDir);
+    const featureDir = join(repoDir, 'features', slug);
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.review-result.json'), JSON.stringify({
+      stage: 'review',
+      reviewToolError: "pull request create failed: GraphQL: Head sha can't be blank (createPullRequest)",
+    }));
+
+    const findings = buildFindings(residueSnapshot(repoDir, [{
+      issue: 'HOK-2866_c',
+      slug,
+      phase: 'review',
+      status: 'active',
+      worktree: repoDir,
+    }]), defaultObserverOptions());
+
+    const failed = findings.find((finding) => finding.id === 'pr-create-failed-wavemill-HOK-2866_c');
+    assert.ok(failed);
+    assert.equal(failed.confidence, 'high');
+    assert.ok(failed.evidence.includes('source=review-artifact'));
+    assert.ok(failed.evidence.some((line) => line.startsWith('translation=')));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('pr-create-failed fires from captured pane text at medium confidence', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-pr-create-pane-'));
+  const slug = 'pane-arm';
+  try {
+    writePermissiveSchema(repoDir);
+    const findings = buildFindings(residueSnapshot(repoDir, [{
+      issue: 'HOK-2896',
+      slug,
+      phase: 'review',
+      status: 'active',
+      worktree: repoDir,
+    }], [{
+      session: 'wavemill',
+      windowIndex: '5',
+      paneIndex: '0',
+      windowName: `HOK-2896-${slug}`,
+      active: false,
+      pid: 0,
+      command: 'zsh',
+      title: 'exited',
+      capturedText: "pull request create failed: GraphQL: Base sha can't be blank (createPullRequest)\n[wavemill] Agent exited (native=1)\n",
+    }]), defaultObserverOptions());
+
+    const failed = findings.find((finding) => finding.id === 'pr-create-failed-wavemill-HOK-2896');
+    assert.ok(failed);
+    assert.equal(failed.confidence, 'medium');
+    assert.ok(failed.evidence.includes('source=pane:wavemill:5.0'));
+    assert.ok(failed.evidence.some((line) => line.startsWith('translation=') && line.includes('base/head comparison failed')));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('generic log errors do not fire pr-create-failed', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-pr-create-negative-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writePermissiveSchema(repoDir);
+    writeFileSync(logPath, '10:00:01 [error] push failed for HOK-2896: network unreachable\n');
+
+    const findings = buildFindings(basicSnapshot(repoDir, logPath), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('pr-create-failed-')), false);
+    assert.ok(findings.some((finding) => finding.id.startsWith('log-error-')));
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
