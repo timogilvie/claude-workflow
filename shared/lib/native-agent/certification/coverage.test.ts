@@ -99,6 +99,60 @@ describe('evaluateSuiteCoverage', () => {
     }
   });
 
+  it('flags identity drift when artifacts are on the right suite but no longer match their subject', () => {
+    const root = mkdtempSync(join(tmpdir(), 'suite-coverage-drift-'));
+    const registry = makeRegistry('vNEW');
+    try {
+      // A healthy store: right suite, right subject.
+      writeArtifact(root, makeArtifact('vNEW', registry));
+      assert.equal(evaluateSuiteCoverage({ registry, root }).status, 'ok');
+
+      // Now simulate the launch-priority fixture changing underneath it. The
+      // artifact count and suite version are untouched — only catalogHash moves,
+      // which is precisely the case the count-based guard could not see.
+      const drifted = makeArtifact('vNEW', registry);
+      drifted.subject = { ...drifted.subject!, catalogHash: 'hash-from-a-previous-fixture' };
+      writeArtifact(root, drifted);
+
+      const coverage = evaluateSuiteCoverage({ registry, root });
+      assert.equal(coverage.status, 'identity-drift');
+      assert.equal(coverage.artifactCountForRequiredSuite, 1, 'count signal is unchanged');
+      assert.equal(coverage.eligibleModelCount, 0);
+      assert.equal(coverage.identityDriftCount, 1);
+      assert.deepEqual(
+        coverage.ineligibleModels.map((m) => m.reason),
+        ['identity-reidentified'],
+      );
+
+      // Re-certifying restores eligibility.
+      writeArtifact(root, makeArtifact('vNEW', registry));
+      assert.equal(evaluateSuiteCoverage({ registry, root }).status, 'ok');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not raise identity drift for a lone stale orphan while the fleet is healthy', () => {
+    const root = mkdtempSync(join(tmpdir(), 'suite-coverage-orphan-'));
+    const registry = makeRegistry('vNEW');
+    try {
+      writeArtifact(root, makeArtifact('vNEW', registry));
+      // An artifact for a model that is no longer in the registry at all must not
+      // be counted against the fleet: it is never resolved as a certifiable model.
+      const orphan = makeArtifact('vNEW', registry);
+      orphan.provider = 'stealth';
+      orphan.model = 'removed-model';
+      writeArtifact(root, orphan);
+
+      const coverage = evaluateSuiteCoverage({ registry, root });
+      assert.equal(coverage.status, 'ok');
+      assert.equal(coverage.eligibleModelCount, 1);
+      assert.equal(coverage.identityDriftCount, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('treats an empty store as a warning state, not a bump failure', () => {
     const root = mkdtempSync(join(tmpdir(), 'suite-coverage-empty-'));
     try {
