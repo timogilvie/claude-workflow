@@ -178,6 +178,7 @@ harness_extract_real_functions() {
     seam_validation_error_summary \
     seam_validation_has_code \
     write_coding_complete_marker \
+    persist_review_scope_baseline \
     wavemill_capacity_stall_seconds \
     codex_capacity_recovery_marker \
     codex_capacity_dwell_marker \

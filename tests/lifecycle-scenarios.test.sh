@@ -144,6 +144,7 @@ for fn in \
   seam_validation_has_code \
   write_coding_complete_marker \
   wavemill_run_tsx_tool \
+  persist_review_scope_baseline \
   guard_coding_complete_handoff \
   archive_stale_coding_artifacts \
   clear_coding_uncommitted_output_attention \
