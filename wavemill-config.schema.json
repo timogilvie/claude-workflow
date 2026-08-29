@@ -1021,6 +1021,12 @@
                             "minimum": 0,
                             "default": 1,
                             "description": "How many eval relaunch attempts to allow before marking the challenge eval path as failed to persist."
+                        },
+                        "hardFailureRetryMaxAttempts": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "default": 2,
+                            "description": "How many challenge eval hard-failure recovery attempts to allow before resolving the challenge pair as terminal. This is separate from soft eval relaunch retryMaxAttempts."
                         }
                     },
                     "additionalProperties": false

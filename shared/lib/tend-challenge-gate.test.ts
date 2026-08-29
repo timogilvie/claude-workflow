@@ -884,7 +884,7 @@ describe('unresolvable pair states in applyChallengePairGates', () => {
 
   it('blocks a pair when the sibling exhausted eval hard-failure retries', async () => {
     const { repoDir, cleanup } = setupRepoDir({
-      challenge: { eval: { retryMaxAttempts: 2 } },
+      challenge: { eval: { hardFailureRetryMaxAttempts: 2 } },
     });
     try {
       const items = [makeWorkItem({
@@ -921,6 +921,167 @@ describe('unresolvable pair states in applyChallengePairGates', () => {
 
       assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:sibling-eval-hard-failed');
     } finally {
+      cleanup();
+    }
+  });
+
+  it('keeps hard-failure retries independent from soft eval relaunch retries', async () => {
+    const { repoDir, cleanup } = setupRepoDir({
+      challenge: { eval: { retryMaxAttempts: 99 } },
+    });
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:sibling-eval-hard-failed');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('uses hard-failure config before classifying retries as exhausted', async () => {
+    const { repoDir, cleanup } = setupRepoDir({
+      challenge: { eval: { hardFailureRetryMaxAttempts: 3 } },
+    });
+    try {
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const pending = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+      assert.equal(pending.blocked[0].reason, 'challenge:pair-unresolved:no-comparison');
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 3,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const exhausted = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+      assert.equal(exhausted.blocked[0].reason, 'challenge:pair-unresolvable:sibling-eval-hard-failed');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('lets hard-failure env override repo config', async () => {
+    const { repoDir, cleanup } = setupRepoDir({
+      challenge: { eval: { hardFailureRetryMaxAttempts: 5 } },
+    });
+    const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    try {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = '2';
+      const items = [makeWorkItem({
+        number: 101,
+        headRefName: 'task/pair-primary',
+        challengePairId: 'pair-1',
+        challenge: true,
+      })];
+
+      writeWorkflowState(repoDir, {
+        HOK_1: {
+          pr: 101,
+          branch: 'task/pair-primary',
+          challengePairId: 'pair-1',
+          challengeRole: 'primary',
+          evalCompleted: true,
+          updated: '2026-07-01T00:00:00Z',
+        },
+        HOK_1_c: {
+          pr: 102,
+          branch: 'task/pair-primary-challenger',
+          challengePairId: 'pair-1',
+          challengeRole: 'challenger',
+          evalFailed: true,
+          evalHardFailureRetryCount: 2,
+          updated: '2026-07-01T00:00:00Z',
+        },
+      });
+
+      const result = await applyChallengePairGates(items, [], repoDir, {
+        remoteBranches: ['task/pair-primary', 'task/pair-primary-challenger'],
+        coolOffSeconds: 0,
+      });
+
+      assert.equal(result.blocked[0].reason, 'challenge:pair-unresolvable:sibling-eval-hard-failed');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+      } else {
+        process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+      }
       cleanup();
     }
   });
@@ -1051,7 +1212,7 @@ describe('unresolvable pair states in applyChallengePairGates', () => {
 
   it('blocks a pair when both sides exhausted eval hard-failure retries', async () => {
     const { repoDir, cleanup } = setupRepoDir({
-      challenge: { eval: { retryMaxAttempts: 2 } },
+      challenge: { eval: { hardFailureRetryMaxAttempts: 2 } },
     });
     try {
       const items = [makeWorkItem({

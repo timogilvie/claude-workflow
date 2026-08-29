@@ -10,7 +10,7 @@ import {
   getReadyRemediationConfig,
   getReadyVerificationConfig,
   getReadyWatchdogConfig,
-  loadWavemillConfig,
+  getChallengeEvalHardFailureRetryMaxAttempts,
   type ReadyWatchdogConfig,
 } from './config.ts';
 import { classifyCiFailure, type CiFailureCategory } from './ci-failure-classifier.ts';
@@ -40,7 +40,6 @@ import {
 const execFileAsync = promisify(execFile);
 const MAX_AUTO_UPDATE_ATTEMPTS = 3;
 const FAILING_CHECK_STABILITY_THRESHOLD = 2;
-const DEFAULT_CHALLENGE_HARD_FAILURE_RETRY_MAX = 2;
 const WAVEMILL_TOOLS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'tools');
 const READY_WATCHDOG_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'ready-watchdog.ts');
 const CHALLENGE_PAIR_RESOLVER_TOOL_PATH = path.join(WAVEMILL_TOOLS_DIR, 'resolve-orphan-challenge-pair.ts');
@@ -1330,18 +1329,6 @@ function buildChallengePairRecoveryCommand(
   ].join(' ');
 }
 
-function getChallengeHardFailureRetryMax(repoDir: string): number {
-  const fromEnv = Number(process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES ?? '');
-  if (Number.isInteger(fromEnv) && fromEnv >= 0) {
-    return fromEnv;
-  }
-
-  const raw = loadWavemillConfig(repoDir).challenge?.eval?.retryMaxAttempts;
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
-    ? raw
-    : DEFAULT_CHALLENGE_HARD_FAILURE_RETRY_MAX;
-}
-
 async function buildSnapshot(
   issueId: string,
   task: WorkflowTaskRecord,
@@ -1711,7 +1698,7 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
   // challenge PRs that tend would block even when GitHub shows them as clean/green.
   const challengeWorkflowState = loadWorkflowStateChallengeData(options.repoDir);
   const challengePairMap = challengeWorkflowState.challengePairMap;
-  const challengeEvalRetryMax = getChallengeHardFailureRetryMax(options.repoDir);
+  const challengeEvalRetryMax = getChallengeEvalHardFailureRetryMaxAttempts(options.repoDir);
   const remoteTaskBranches = new Set(
     Object.values(tasks).some((task) => typeof (task as WorkflowTaskRecord).challengePairId === 'string')
       ? listRemoteTaskBranches(options.repoDir)

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
-import { getChallengeConfig, getChallengeGateConfig, loadWavemillConfig } from './config.ts';
+import { getChallengeConfig, getChallengeEvalHardFailureRetryMaxAttempts, getChallengeGateConfig } from './config.ts';
 import { errorMessage } from './error-utils.ts';
 import { normalizeJobs, type MillJob, type WorkflowStateLike } from './job-tracker.ts';
 import { listOpenIssuesByIdentifierPrefix, type LinearIssueSummary } from './linear.ts';
@@ -556,7 +556,7 @@ export async function applyChallengePairGates<T extends ChallengeEligibleWorkIte
   const gateConfig = getChallengeGateConfig(repoDir);
   const coolOffSeconds = options.coolOffSeconds ?? gateConfig.coolOffSeconds;
   const nowMs = options.nowMs ?? (() => Date.now());
-  const evalHardFailureRetryMax = getHardFailureRetryMax(repoDir);
+  const evalHardFailureRetryMax = getChallengeEvalHardFailureRetryMaxAttempts(repoDir);
 
   const remoteBranches = options.remoteBranches
     ?? (options.listRemoteBranches
@@ -854,13 +854,6 @@ function isOrphanedPair(
   }
   const now = nowMs?.() ?? Date.now();
   return now - loneTask.updatedAt >= (orphanGraceMs ?? ORPHAN_PAIR_GRACE_MS);
-}
-
-function getHardFailureRetryMax(repoDir: string): number {
-  const raw = loadWavemillConfig(repoDir).challenge?.eval?.retryMaxAttempts;
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
-    ? raw
-    : DEFAULT_HARD_FAILURE_RETRY_MAX;
 }
 
 const CHALLENGER_SUFFIX = '-challenger';

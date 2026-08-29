@@ -856,7 +856,13 @@ challenge_eval_retry_max_attempts() {
 }
 
 challenge_eval_hard_failure_max_retries() {
-  local max_retries="${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES:-2}"
+  local max_retries
+  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
+    return
+  fi
+
+  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
   if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "$max_retries"
   else
@@ -4573,7 +4579,13 @@ challenge_eval_retry_max_attempts() {
 }
 
 challenge_eval_hard_failure_max_retries() {
-  local max_retries="${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES:-2}"
+  local max_retries
+  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
+    return
+  fi
+
+  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
   if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
     printf '%s\n' "$max_retries"
   else

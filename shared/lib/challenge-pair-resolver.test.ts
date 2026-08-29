@@ -516,6 +516,138 @@ test('resolver writes a double-forfeit when both sides exhausted eval hard-failu
   }
 });
 
+test('resolver waits for hard-failure config before resolving exhausted retries', async () => {
+  const { repoDir, cleanup } = setupRepoDir({
+    challenge: { eval: { hardFailureRetryMaxAttempts: 3 } },
+  });
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalFailed: true,
+        evalHardFailureRetryCount: 2,
+      },
+    });
+
+    const result = await resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      remoteBranches: ['task/primary', 'task/primary-challenger'],
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'skipped');
+    assert.match(result.reason, /not currently unresolvable/);
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver ignores soft retry config for hard-failure exhaustion', async () => {
+  const { repoDir, cleanup } = setupRepoDir({
+    challenge: { eval: { retryMaxAttempts: 3 } },
+  });
+  try {
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalFailed: true,
+        evalHardFailureRetryCount: 2,
+      },
+    });
+
+    const result = await resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      remoteBranches: ['task/primary', 'task/primary-challenger'],
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'sibling-eval-hard-failed');
+    assert.equal(result.outcome, 'forfeit');
+  } finally {
+    cleanup();
+  }
+});
+
+test('resolver lets hard-failure env override repo config', async () => {
+  const { repoDir, cleanup } = setupRepoDir({
+    challenge: { eval: { hardFailureRetryMaxAttempts: 5 } },
+  });
+  const previous = process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+  try {
+    process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = '2';
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 101,
+        branch: 'task/primary',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+      },
+      HOK_1_c: {
+        pr: 102,
+        branch: 'task/primary-challenger',
+        updated: '2026-07-01T00:00:00Z',
+        challengePairId: 'pair-1',
+        challengeRole: 'challenger',
+        challengeModel: 'claude-opus-4-8',
+        evalFailed: true,
+        evalHardFailureRetryCount: 2,
+      },
+    });
+
+    const result = await resolveUnresolvablePair({
+      pairId: 'pair-1',
+      repoDir,
+      remoteBranches: ['task/primary', 'task/primary-challenger'],
+      now: () => new Date('2026-07-17T12:00:00Z'),
+    });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'sibling-eval-hard-failed');
+    assert.equal(result.outcome, 'forfeit');
+  } finally {
+    if (previous === undefined) {
+      delete process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES;
+    } else {
+      process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES = previous;
+    }
+    cleanup();
+  }
+});
+
 test('resolver unblocks the surviving PR in applyChallengePairGates', async () => {
   const { repoDir, cleanup } = setupRepoDir({ challenge: { autoMergeWinner: true } });
   try {
