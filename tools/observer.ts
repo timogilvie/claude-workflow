@@ -27,6 +27,9 @@ const DEFAULT_OBSERVER_PANE_TITLE = 'Wavemill Observer';
 const READY_RECHECK_LOOP_THRESHOLD = 3;
 const READY_RECHECK_LOOP_URGENT_THRESHOLD = 6;
 const MODEL_DOWNGRADE_THRESHOLD = 3;
+const STUCK_RETRY_LOOP_THRESHOLD = 5;
+const STUCK_RETRY_LOOP_URGENT_THRESHOLD = 20;
+const STUCK_RETRY_LOOP_URGENT_WINDOW_MINUTES = 30;
 
 interface ObserverOptions {
   loop: boolean;
@@ -83,6 +86,9 @@ interface TaskState {
   updated?: string;
   agent?: string;
   challengeRole?: string;
+  challengeAborted?: string;
+  challengeAbortedDetail?: string;
+  challengeAbortedNextAction?: string;
 }
 
 interface Finding {
@@ -128,6 +134,8 @@ interface AggregatedMillLogFinding {
   level: 'error' | 'warn';
   normalizedMessage: string;
   lines: string[];
+  firstTs: string;
+  lastTs: string;
 }
 
 interface ModelDowngradeLogEntry {
@@ -510,6 +518,9 @@ function readWorkflowTasks(stateFile: string): TaskState[] {
         updated: stringValue(task.updated),
         agent: stringValue(task.agent),
         challengeRole: stringValue(task.challengeRole),
+        challengeAborted: stringValue(task.challengeAborted),
+        challengeAbortedDetail: stringValue(task.challengeAbortedDetail),
+        challengeAbortedNextAction: stringValue(task.challengeAbortedNextAction),
       };
     });
   } catch {
@@ -883,6 +894,32 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       }
     }
 
+    for (const task of repo.tasks) {
+      if (!task.challengeAborted) continue;
+      if (terminalStatus(task.status)) continue;
+      const detail = task.challengeAbortedDetail
+        ? `${task.challengeAborted} (${task.challengeAbortedDetail})`
+        : task.challengeAborted;
+      const nextAction = task.challengeAbortedNextAction
+        ?? `Set ${task.issue} status=aborted or run \`wavemill mill abort ${task.issue}\` to stop the mill re-aborting it every poll.`;
+      findings.push({
+        id: `inconsistent-terminal-state-${repo.session}-${task.issue}`,
+        severity: 'high',
+        category: 'stuck',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        issue: task.issue,
+        title: `${task.issue} has challengeAborted=${task.challengeAborted} but status is still ${task.status ?? 'unset'}`,
+        evidence: [
+          `challengeAborted=${detail}`,
+          `status=${task.status ?? 'unknown'}`,
+          `phase=${task.phase ?? 'unknown'}`,
+        ],
+        recommendation: nextAction,
+      });
+    }
+
     const logLines = repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : [];
     const queueHealthDegraded = repo.queueHealth?.status === 'degraded';
     const repeatedReadyWatchdogLines = new Set<string>();
@@ -991,8 +1028,9 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       const parsed = parseMillLogLine(line);
       if (!parsed) continue;
       if (isAgentBoxOutputMessage(parsed.message)) continue;
-      if (parsed.level !== 'error' && parsed.level !== 'warn') continue;
-      if (parsed.level === 'warn') {
+      const logFindingLevel = millLogFindingLevel(parsed);
+      if (!logFindingLevel) continue;
+      if (logFindingLevel === 'warn') {
         if (repeatedReadyWatchdogLines.has(line)) continue;
         if (readyRecheckLines.has(line)) continue;
         if (modelDowngradeLines.has(line)) continue;
@@ -1000,41 +1038,89 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       }
 
       const normalizedMessage = normalizeMillLogFingerprintMessage(parsed.message);
-      const key = `${parsed.level}\0${normalizedMessage}`;
+      const key = `${logFindingLevel}\0${normalizedMessage}`;
       const grouped = genericLogFindings.get(key) ?? {
-        level: parsed.level,
+        level: logFindingLevel,
         normalizedMessage,
         lines: [],
+        firstTs: parsed.timestamp,
+        lastTs: parsed.timestamp,
       };
       grouped.lines.push(line);
+      grouped.lastTs = parsed.timestamp;
       genericLogFindings.set(key, grouped);
     }
 
+    const stuckRetryLoopLines = new Set<string>();
+    // Upstream log throttling means these occurrence counts are a lower bound.
     for (const grouped of genericLogFindings.values()) {
-      const latestLine = grouped.lines[grouped.lines.length - 1];
+      if (grouped.lines.length < STUCK_RETRY_LOOP_THRESHOLD) continue;
+      const issue = extractIssueFromLogSignature(grouped.normalizedMessage);
+      if (!issue) continue;
+      const task = repo.tasks.find((candidate) => candidate.issue === issue);
+      if (!task || !taskPhaseUnchangedAcrossLogWindow(repo, task, grouped.firstTs)) continue;
+      const elapsedMinutes = elapsedLogWindowMinutes(grouped.firstTs, grouped.lastTs);
+      const severity: Severity = grouped.lines.length >= STUCK_RETRY_LOOP_URGENT_THRESHOLD
+        || elapsedMinutes >= STUCK_RETRY_LOOP_URGENT_WINDOW_MINUTES
+        ? 'urgent'
+        : 'high';
+      for (const line of grouped.lines) stuckRetryLoopLines.add(line);
+      findings.push({
+        id: `stuck-retry-loop-${repo.session}-${issue}-${hashText(grouped.normalizedMessage)}`,
+        severity,
+        category: 'stuck',
+        confidence: 'high',
+        session: repo.session,
+        repoDir: repo.repoDir,
+        issue,
+        title: truncate(`${issue}: ${grouped.normalizedMessage}`, 160),
+        evidence: [
+          `occurrences=${grouped.lines.length}`,
+          `firstSeen=${grouped.firstTs}`,
+          `lastSeen=${grouped.lastTs}`,
+          `windowMinutes=${elapsedMinutes}`,
+          `phase=${task.phase ?? 'unknown'}`,
+          `status=${task.status ?? 'unknown'}`,
+          ...grouped.lines.slice(-4),
+        ],
+        recommendation:
+          `${issue} has been re-emitting "${truncate(grouped.normalizedMessage, 80)}" ${grouped.lines.length}x over ~${elapsedMinutes}m `
+          + `while phase (${task.phase ?? '?'}) has not advanced. `
+          + `Unstick: set the arm's phase=aborted (or run \`wavemill mill abort ${issue}\`) and investigate the underlying failure; `
+          + 'an unbounded retry is a Wavemill defect, not a transient failure.',
+        occurrenceCount: grouped.lines.length,
+      });
+    }
+
+    for (const grouped of genericLogFindings.values()) {
+      const unsuppressedLines = grouped.lines.filter((line) => !stuckRetryLoopLines.has(line));
+      if (unsuppressedLines.length === 0) continue;
+      const latestLine = unsuppressedLines[unsuppressedLines.length - 1];
       const evidence = [
-        `occurrences=${grouped.lines.length}`,
+        `occurrences=${unsuppressedLines.length}`,
         `normalizedMessage=${grouped.normalizedMessage}`,
         latestLine,
       ];
-      if (grouped.lines.length > 1) {
-        const firstLine = grouped.lines[0];
+      if (unsuppressedLines.length > 1) {
+        const firstLine = unsuppressedLines[0];
         if (firstLine !== latestLine) evidence.push(`first=${firstLine}`);
       }
       if (grouped.level === 'error') {
+        evidence.push('categoryLabel=Recent mill log contains an error-level event');
         findings.push({
           id: `log-error-${repo.session}-${hashText(grouped.normalizedMessage)}`,
-          severity: 'high',
+          severity: unsuppressedLines.length >= 3 ? 'high' : 'medium',
           category: 'crash',
           confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
-          title: 'Recent mill log contains an error-level event',
+          title: truncate(grouped.normalizedMessage, 160),
           evidence,
           recommendation: 'Inspect surrounding log context and file a bug if this is not a task-local failure.',
-          occurrenceCount: grouped.lines.length,
+          occurrenceCount: unsuppressedLines.length,
         });
       } else {
+        evidence.push('categoryLabel=Recent mill log contains a warning');
         findings.push({
           id: `log-warning-${repo.session}-${hashText(grouped.normalizedMessage)}`,
           severity: 'low',
@@ -1042,10 +1128,10 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
           confidence: 'high',
           session: repo.session,
           repoDir: repo.repoDir,
-          title: 'Recent mill log contains a warning',
+          title: truncate(grouped.normalizedMessage, 160),
           evidence,
           recommendation: 'Watch for repeated occurrences. File an issue if the warning repeats or blocks progression.',
-          occurrenceCount: grouped.lines.length,
+          occurrenceCount: unsuppressedLines.length,
         });
       }
     }
@@ -1213,6 +1299,65 @@ function readReadyFailureReason(repo: RepoSnapshot, issue: string): string | und
   } catch {
     return undefined;
   }
+}
+
+function millLogFindingLevel(parsed: MillLogLine): 'error' | 'warn' | undefined {
+  if (parsed.level === 'error' || parsed.level === 'warn') return parsed.level;
+  if (parsed.level === 'info' && /^error\b/i.test(parsed.message)) return 'error';
+  if (parsed.level === 'info' && /^warn\b/i.test(parsed.message)) return 'warn';
+  return undefined;
+}
+
+function extractIssueFromLogSignature(normalizedMessage: string): string | undefined {
+  const patterns = [
+    /^\[([A-Z]+-\d+(?:_c)?)\]/,
+    /^([A-Z]+-\d+(?:_c)?):/,
+    /\bfor\s+([A-Z]+-\d+(?:_c)?)\b/,
+    /\b([A-Z]+-\d+(?:_c)?)\b/,
+  ];
+  for (const pattern of patterns) {
+    const match = normalizedMessage.match(pattern);
+    if (match?.[1]) return match[1];
+  }
+  return undefined;
+}
+
+function taskPhaseUnchangedAcrossLogWindow(repo: RepoSnapshot, task: TaskState, firstTs: string): boolean {
+  const firstLogMs = logTimestampMs(firstTs, repo.logMtime);
+  const taskUpdatedMs = task.updated ? Date.parse(task.updated) : NaN;
+  if (Number.isFinite(taskUpdatedMs) && firstLogMs !== undefined) {
+    return taskUpdatedMs <= firstLogMs;
+  }
+
+  const logMtimeMs = repo.logMtime ? Date.parse(repo.logMtime) : NaN;
+  const stateMtimeMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  if (Number.isFinite(logMtimeMs) && Number.isFinite(stateMtimeMs)) {
+    return logMtimeMs - stateMtimeMs > 60_000;
+  }
+
+  return false;
+}
+
+function logTimestampMs(timestamp: string, referenceIso?: string): number | undefined {
+  const referenceMs = referenceIso ? Date.parse(referenceIso) : Date.now();
+  if (!Number.isFinite(referenceMs)) return undefined;
+  const date = new Date(referenceMs).toISOString().slice(0, 10);
+  const parsed = Date.parse(`${date}T${timestamp}.000Z`);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function elapsedLogWindowMinutes(firstTs: string, lastTs: string): number {
+  const firstSeconds = timeOfDaySeconds(firstTs);
+  const lastSeconds = timeOfDaySeconds(lastTs);
+  if (firstSeconds === undefined || lastSeconds === undefined) return 0;
+  const adjustedLast = lastSeconds < firstSeconds ? lastSeconds + 24 * 60 * 60 : lastSeconds;
+  return Math.max(0, Math.round((adjustedLast - firstSeconds) / 60));
+}
+
+function timeOfDaySeconds(timestamp: string): number | undefined {
+  const match = timestamp.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+  if (!match) return undefined;
+  return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
 }
 
 function parseMillLogLine(line: string): MillLogLine | null {
