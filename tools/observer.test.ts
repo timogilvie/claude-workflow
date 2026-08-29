@@ -1,10 +1,11 @@
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildFindings, parseArgs, redactObserverText, syncIncidentsToLinear, writeServiceHeartbeat } from './observer.ts';
+import { buildFindings, compactSnapshotForRender, parseArgs, redactObserverText, syncIncidentsToLinear, writeServiceHeartbeat } from './observer.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import { createIncidentDraft } from '../shared/lib/wavemill-incident-model.ts';
 
@@ -76,6 +77,219 @@ function markerAgeSeconds(finding: { evidence: string[] }): number {
   assert.ok(evidence);
   return Number(evidence.slice('markerAgeSeconds='.length));
 }
+
+function writePermissiveSchema(repoDir: string): void {
+  writeFileSync(join(repoDir, 'wavemill-config.schema.json'), JSON.stringify({
+    type: 'object',
+    additionalProperties: true,
+  }));
+}
+
+function basicSnapshot(repoDir: string, logPath?: string) {
+  return {
+    timestamp: '2026-08-28T12:00:00.000Z',
+    sessions: ['wavemill'],
+    panes: [],
+    processes: [],
+    repos: [{
+      session: 'wavemill',
+      repoDir,
+      millLogPath: logPath,
+      tasks: [],
+    }],
+  };
+}
+
+test('config-integrity finding is first and includes file location evidence for malformed schema', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-config-integrity-'));
+  try {
+    writeFileSync(join(repoDir, 'wavemill-config.schema.json'), '{\n  "type": "object"\n}\n,\n{}\n');
+
+    const findings = buildFindings(basicSnapshot(repoDir), defaultObserverOptions());
+
+    assert.ok(findings[0].id.startsWith('config-integrity-'));
+    assert.equal(findings[0].severity, 'urgent');
+    assert.equal(findings[0].category, 'crash');
+    assert.match(findings[0].title, /wavemill-config\.schema\.json is malformed at line \d+ column \d+/);
+    assert.ok(findings[0].evidence.includes(`file=${join(repoDir, 'wavemill-config.schema.json')}`));
+    assert.ok(findings[0].evidence.some((line) => /^line=\d+$/.test(line)));
+    assert.ok(findings[0].evidence.some((line) => /^column=\d+$/.test(line)));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('config-integrity groups downgrade and watchdog symptoms as downstream', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-config-correlation-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writeFileSync(join(repoDir, 'wavemill-config.schema.json'), '{\n  "type": "object"\n}\n,\n{}\n');
+    writeFileSync(logPath, [
+      "10:00:01 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      "10:00:02 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      "10:00:03 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      '10:00:04 [warn] ready watchdog tick failed: Error: Unexpected non-whitespace character after JSON at position 141378 (line 2903 column 6)',
+    ].join('\n'));
+
+    const findings = buildFindings(basicSnapshot(repoDir, logPath), defaultObserverOptions());
+    const config = findings.find((finding) => finding.id.startsWith('config-integrity-'));
+    const downgrade = findings.find((finding) => finding.id.startsWith('model-downgrade-'));
+    const watchdog = findings.find((finding) =>
+      finding.id.startsWith('log-warning-') &&
+      finding.evidence.some((line) => /ready watchdog tick failed/.test(line))
+    );
+
+    assert.ok(config);
+    assert.ok(downgrade);
+    assert.ok(watchdog);
+    assert.equal(downgrade.groupedUnder, config.id);
+    assert.equal(watchdog.groupedUnder, config.id);
+    assert.ok(config.evidence.some((line) => line.includes(`downstream=${downgrade.id}`)));
+    assert.ok(config.evidence.some((line) => line.includes(`downstream=${watchdog.id}`)));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('compact snapshot hides grouped findings and annotates parent title', () => {
+  const snapshot = {
+    timestamp: '2026-08-28T12:00:00.000Z',
+    sessions: ['wavemill'],
+    panes: [],
+    processes: [],
+    repos: [],
+    findings: [
+      {
+        id: 'config-integrity-wavemill-x',
+        severity: 'urgent',
+        category: 'crash',
+        confidence: 'high',
+        title: 'schema is malformed',
+        evidence: [],
+        recommendation: 'repair schema',
+      },
+      {
+        id: 'model-downgrade-wavemill-x',
+        severity: 'high',
+        category: 'warning',
+        confidence: 'high',
+        title: 'model fallback',
+        evidence: [],
+        recommendation: 'repair config',
+        groupedUnder: 'config-integrity-wavemill-x',
+      },
+      {
+        id: 'log-warning-wavemill-x',
+        severity: 'low',
+        category: 'warning',
+        confidence: 'high',
+        title: 'ready watchdog tick failed',
+        evidence: [],
+        recommendation: 'repair config',
+        groupedUnder: 'config-integrity-wavemill-x',
+      },
+    ],
+  } as const;
+
+  const compact = compactSnapshotForRender(snapshot);
+
+  assert.equal(compact.findings.length, 1);
+  assert.equal(compact.findings[0].id, 'config-integrity-wavemill-x');
+  assert.equal(compact.findings[0].title, 'schema is malformed (+2 downstream)');
+});
+
+test('repeated model downgrade gets high-severity tier and is excluded from generic warnings', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-model-downgrade-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writePermissiveSchema(repoDir);
+    writeFileSync(logPath, [
+      "10:00:01 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      "10:00:02 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      "10:00:03 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+    ].join('\n'));
+
+    const findings = buildFindings(basicSnapshot(repoDir, logPath), defaultObserverOptions());
+    const downgrade = findings.find((finding) => finding.id.startsWith('model-downgrade-'));
+
+    assert.ok(downgrade);
+    assert.equal(downgrade.severity, 'high');
+    assert.equal(downgrade.category, 'warning');
+    assert.equal(downgrade.occurrenceCount, 3);
+    assert.match(downgrade.recommendation, /silent correctness regression/);
+    assert.equal(findings.some((finding) => finding.id.startsWith('log-warning-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('two model downgrade warnings remain below threshold', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-model-downgrade-low-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writePermissiveSchema(repoDir);
+    writeFileSync(logPath, [
+      "10:00:01 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+      "10:00:02 [warn]   Invalid coding model 'claude-sonnet-5'; using 'claude-opus-4-7'",
+    ].join('\n'));
+
+    const findings = buildFindings(basicSnapshot(repoDir, logPath), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('model-downgrade-')), false);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('model downgrade depth-tag variant is counted', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-model-downgrade-depth-'));
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  try {
+    writePermissiveSchema(repoDir);
+    writeFileSync(logPath, [
+      "10:00:01 [warn]   Invalid coding model 'high' looks like a depth tag; using 'claude-opus-4-7'",
+      "10:00:02 [warn]   Invalid coding model 'high' looks like a depth tag; using 'claude-opus-4-7'",
+      "10:00:03 [warn]   Invalid coding model 'high' looks like a depth tag; using 'claude-opus-4-7'",
+    ].join('\n'));
+
+    const findings = buildFindings(basicSnapshot(repoDir, logPath), defaultObserverOptions());
+    const downgrade = findings.find((finding) => finding.id.startsWith('model-downgrade-'));
+
+    assert.ok(downgrade);
+    assert.equal(downgrade.occurrenceCount, 3);
+    assert.ok(downgrade.evidence.includes('model=high'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('observer once exits zero in degraded mode with malformed schema', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-once-degraded-'));
+  const logDir = join(repoDir, '.wavemill', 'logs');
+  try {
+    mkdirSync(logDir, { recursive: true });
+    writeFileSync(join(repoDir, 'wavemill-config.schema.json'), '{\n  "type": "object"\n}\n,\n{}\n');
+    writeFileSync(join(logDir, 'mill-unknown.log'), '10:00:00 [error] independent monitor failure\n');
+
+    const result = spawnSync('npx', ['tsx', join(process.cwd(), 'tools', 'observer.ts'), '--once', '--json', '--repo-dir', repoDir], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 20_000,
+    });
+
+    assert.equal(result.status, 0, result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.ok(parsed.findings.some((finding: { id: string; severity: string }) =>
+      finding.id.startsWith('config-integrity-') && finding.severity === 'urgent'
+    ));
+    assert.ok(parsed.findings.some((finding: { id: string; evidence?: string[] }) =>
+      finding.id.startsWith('log-error-') &&
+      finding.evidence?.some((line) => /independent monitor failure/.test(line))
+    ));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
 
 test('fresh coding marker does not produce marker-ignored finding', () => {
   const markerMtime = new Date(Date.now() - 30_000);
