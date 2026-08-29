@@ -19,10 +19,60 @@ function finding(overrides: Partial<RenderableFinding> & { id: string }): Render
 }
 
 test('log-scrape findings are recognized as noise', () => {
-  assert.equal(isLogNoiseFinding('log-error-wavemill-3qzf6b'), true);
-  assert.equal(isLogNoiseFinding('log-warning-wavemill-8g0hsy'), true);
-  assert.equal(isLogNoiseFinding('plan-marker-ignored-HOK-2881'), false);
-  assert.equal(isLogNoiseFinding('dead-pane-HOK-2882_c'), false);
+  assert.equal(isLogNoiseFinding(finding({ id: 'log-error-wavemill-3qzf6b' })), true);
+  assert.equal(isLogNoiseFinding(finding({ id: 'log-warning-wavemill-8g0hsy' })), true);
+  assert.equal(isLogNoiseFinding(finding({ id: 'plan-marker-ignored-HOK-2881' })), false);
+  assert.equal(isLogNoiseFinding(finding({ id: 'dead-pane-HOK-2882_c' })), false);
+});
+
+test('log-error with high severity and recurring occurrences surfaces as actionable', () => {
+  const out = renderObserverStatus({
+    findings: [
+      finding({
+        id: 'log-error-wavemill-repeat',
+        severity: 'high',
+        title: 'HOK-2893_c: challenge aborted because selected coding model failed validation',
+        recommendation: 'repair the selector',
+        occurrenceCount: 4,
+      }),
+    ],
+  });
+
+  assert.match(out, /challenge aborted because selected coding model failed validation/);
+  assert.match(out, /repair the selector/);
+  assert.equal(/log noise:/.test(out), false);
+});
+
+test('log-error with low severity and single occurrence stays in the noise rollup', () => {
+  const out = renderObserverStatus({
+    findings: [
+      finding({
+        id: 'log-error-wavemill-single',
+        severity: 'low',
+        title: 'one-off task-local failure',
+        occurrenceCount: 1,
+      }),
+    ],
+  });
+
+  assert.match(out, /log noise: 1 finding\(s\)/);
+  assert.equal(/one-off task-local failure/.test(out), false);
+});
+
+test('log-error title carries the normalized message in the pane output', () => {
+  const message = 'HOK-2894_c: challenge aborted because selected review model failed validation';
+  const out = renderObserverStatus({
+    findings: [
+      finding({
+        id: 'log-error-wavemill-message',
+        severity: 'high',
+        title: message,
+        occurrenceCount: 3,
+      }),
+    ],
+  });
+
+  assert.match(out, new RegExp(message));
 });
 
 test('noise is rolled into one counted line instead of listed', () => {
