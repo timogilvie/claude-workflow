@@ -324,13 +324,44 @@ export function resolveLaunchPriorityModel(
 }
 
 /**
- * Hash the launch-priority fixture for snapshot auditability. Hashes the
- * raw file bytes so any whitespace or ordering change yields a new hash.
+ * Produce a canonical, formatting-independent serialization of a parsed JSON
+ * value: object keys sorted, no insignificant whitespace. Array order is
+ * preserved because fixture ordering is meaningful (priority tiers).
+ */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * Hash the launch-priority fixture for snapshot auditability and certification
+ * identity (`CertificationSubject.catalogHash`).
+ *
+ * Hashes a *canonical* serialization rather than the raw bytes. Re-indenting the
+ * fixture — which a JSON round-trip does routinely, and which has silently
+ * uncertified the entire native fleet on every machine more than once — must not
+ * change the hash. Only a real catalog change (an added/removed/edited model)
+ * does. Falls back to raw bytes only if the file is not parseable JSON, so a
+ * corrupt fixture still produces a distinct hash rather than throwing here.
  */
 export function hashLaunchPriorityFixture(fixturePath?: string): string {
   const path = fixturePath ?? defaultLaunchPriorityFixturePath();
   const raw = readFileSync(path);
-  return createHash('sha256').update(raw).digest('hex');
+  let canonical: string;
+  try {
+    canonical = canonicalJson(JSON.parse(raw.toString('utf-8')));
+  } catch {
+    return createHash('sha256').update(raw).digest('hex');
+  }
+  return createHash('sha256').update(canonical, 'utf-8').digest('hex');
 }
 
 // ── OpenRouter HTTP fetcher ──────────────────────────────────────────────────

@@ -93,6 +93,62 @@ describe('loadLaunchPriorityFixture', () => {
     assert.equal(a, b);
     assert.match(a, /^[0-9a-f]{64}$/);
   });
+
+  it('is invariant to reformatting, because catalogHash gates every certification', () => {
+    // Re-indenting this fixture (what a JSON round-trip does) used to move
+    // catalogHash and silently uncertify the entire native fleet on every
+    // machine. Only a real catalog change may move the hash.
+    const dir = mkdtempSync(join(tmpdir(), 'fixture-hash-'));
+    try {
+      const parsed = loadLaunchPriorityFixture();
+      const write = (name: string, contents: string): string => {
+        const path = join(dir, name);
+        writeFileSync(path, contents);
+        return path;
+      };
+      const compact = write('compact.json', JSON.stringify(parsed));
+      const indented = write('indented.json', `${JSON.stringify(parsed, null, 4)}\n`);
+      const reordered = write(
+        'reordered.json',
+        JSON.stringify(Object.fromEntries(Object.entries(parsed).reverse()), null, 2),
+      );
+
+      const baseline = hashLaunchPriorityFixture(compact);
+      assert.equal(hashLaunchPriorityFixture(indented), baseline, 'indentation must not matter');
+      assert.equal(hashLaunchPriorityFixture(reordered), baseline, 'top-level key order must not matter');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('still changes when the catalog actually changes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fixture-hash-semantic-'));
+    try {
+      const parsed = loadLaunchPriorityFixture() as { models: Array<Record<string, unknown>> };
+      const basePath = join(dir, 'base.json');
+      writeFileSync(basePath, JSON.stringify(parsed, null, 2));
+
+      const mutated = JSON.parse(JSON.stringify(parsed)) as typeof parsed;
+      mutated.models[0]!.status = 'deprecated';
+      const mutatedPath = join(dir, 'mutated.json');
+      writeFileSync(mutatedPath, JSON.stringify(mutated, null, 2));
+
+      assert.notEqual(hashLaunchPriorityFixture(mutatedPath), hashLaunchPriorityFixture(basePath));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to a byte hash rather than throwing on an unparseable fixture', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fixture-hash-corrupt-'));
+    try {
+      const path = join(dir, 'corrupt.json');
+      writeFileSync(path, '{ not valid json');
+      assert.match(hashLaunchPriorityFixture(path), /^[0-9a-f]{64}$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('fetchOpenRouterModels', () => {
