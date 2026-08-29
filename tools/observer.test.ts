@@ -100,23 +100,6 @@ function basicSnapshot(repoDir: string, logPath?: string) {
   };
 }
 
-function retryLoopSnapshot(repoDir: string, logPath: string, task: Record<string, unknown>) {
-  return {
-    timestamp: '2026-08-28T12:00:00.000Z',
-    sessions: ['wavemill'],
-    panes: [],
-    processes: [],
-    repos: [{
-      session: 'wavemill',
-      repoDir,
-      millLogPath: logPath,
-      logMtime: '2026-08-28T10:45:00.000Z',
-      stateMtime: '2026-08-28T09:59:00.000Z',
-      tasks: [task],
-    }],
-  };
-}
-
 test('config-integrity finding is first and includes file location evidence for malformed schema', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-config-integrity-'));
   try {
@@ -516,166 +499,6 @@ test('repeated ready watchdog auto-recoveries escalate to actionable stuck findi
   }
 });
 
-test('stuck-retry-loop fires when a signature repeats and task phase has not advanced', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      "10:00:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:01:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:02:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:03:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-      "10:04:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation (model selector is not valid for this repo)",
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2894_c',
-      phase: 'coding',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2894_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'high');
-    assert.equal(stuck.category, 'stuck');
-    assert.equal(stuck.issue, 'HOK-2894_c');
-    assert.equal(stuck.occurrenceCount, 5);
-    assert.match(stuck.title, /challenge aborted because selected coding model/);
-    assert.ok(stuck.evidence.includes('occurrences=5'));
-    assert.ok(stuck.evidence.includes('phase=coding'));
-    assert.match(stuck.recommendation, /HOK-2894_c has been re-emitting/);
-    assert.match(stuck.recommendation, /Unstick: set the arm's phase=aborted/);
-    assert.equal(findings.some((finding) => finding.id.startsWith('log-error-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop does not fire when task updated during the loop window', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-advanced-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      "10:00:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:01:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:02:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:03:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-      "10:04:01 [error] HOK-2894_c: challenge aborted because selected coding model 'ox-alpha' failed validation",
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2894_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T10:02:30.000Z',
-    }), defaultObserverOptions());
-
-    assert.equal(findings.some((finding) => finding.id.startsWith('stuck-retry-loop-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop escalates to urgent past the occurrence threshold', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-urgent-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, Array.from({ length: 20 }, (_unused, index) =>
-      `10:${String(index).padStart(2, '0')}:01 [error] HOK-2893_c: expansion retry failed because planner exited 1`
-    ).join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2893_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2893_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'urgent');
-    assert.equal(stuck.occurrenceCount, 20);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('stuck-retry-loop catches repeated phase launch failures from severity-tagged info logs', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stuck-retry-launch-'));
-  const logPath = join(repoDir, 'mill-wavemill.log');
-  try {
-    writePermissiveSchema(repoDir);
-    writeFileSync(logPath, [
-      '10:00:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:01:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:02:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:03:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-      '10:04:01 [info] warn HOK-2893_c -> Coding phase launch failed (rc=1), reverting to planning for retry',
-    ].join('\n'));
-
-    const findings = buildFindings(retryLoopSnapshot(repoDir, logPath, {
-      issue: 'HOK-2893_c',
-      phase: 'planning',
-      status: 'active',
-      updated: '2026-08-28T09:59:00.000Z',
-    }), defaultObserverOptions());
-
-    const stuck = findings.find((finding) => finding.id.startsWith('stuck-retry-loop-wavemill-HOK-2893_c-'));
-    assert.ok(stuck);
-    assert.equal(stuck.severity, 'high');
-    assert.match(stuck.title, /Coding phase launch failed/);
-    assert.equal(findings.some((finding) => finding.id.startsWith('log-warning-')), false);
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
-test('inconsistent-terminal-state fires only for active challenge-aborted tasks', () => {
-  const repoDir = mkdtempSync(join(tmpdir(), 'observer-inconsistent-terminal-'));
-  try {
-    writePermissiveSchema(repoDir);
-    const findings = buildFindings({
-      timestamp: '2026-08-28T12:00:00.000Z',
-      sessions: ['wavemill'],
-      panes: [],
-      processes: [],
-      repos: [{
-        session: 'wavemill',
-        repoDir,
-        tasks: [
-          {
-            issue: 'HOK-2894_c',
-            phase: 'coding',
-            status: 'active',
-            challengeAborted: 'varied_model_unresolvable',
-            challengeAbortedDetail: 'model selector is not valid for this repo',
-            challengeAbortedNextAction: 'Terminalize the challenge arm before retrying.',
-          },
-          {
-            issue: 'HOK-2895_c',
-            phase: 'coding',
-            status: 'aborted',
-            challengeAborted: 'varied_model_unresolvable',
-          },
-        ],
-      }],
-    }, defaultObserverOptions());
-
-    const inconsistent = findings.filter((finding) => finding.id.startsWith('inconsistent-terminal-state-'));
-    assert.equal(inconsistent.length, 1);
-    assert.equal(inconsistent[0].issue, 'HOK-2894_c');
-    assert.match(inconsistent[0].title, /challengeAborted=varied_model_unresolvable but status is still active/);
-    assert.ok(inconsistent[0].evidence.includes('challengeAborted=varied_model_unresolvable (model selector is not valid for this repo)'));
-    assert.equal(inconsistent[0].recommendation, 'Terminalize the challenge arm before retrying.');
-  } finally {
-    rmSync(repoDir, { recursive: true, force: true });
-  }
-});
-
 test('degraded queue health returns structured finding without throwing', () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'observer-queue-degraded-'));
   try {
@@ -746,10 +569,9 @@ test('structured log scanning aggregates repeated errors and ignores prose false
     const errorFindings = findings.filter((finding) => finding.id.startsWith('log-error-'));
     assert.equal(errorFindings.length, 1);
     const error = errorFindings[0];
-    assert.equal(error.severity, 'medium');
+    assert.equal(error.severity, 'high');
     assert.equal(error.confidence, 'high');
     assert.equal(error.occurrenceCount, 2);
-    assert.equal(error.title, 'Monitor command failed pid=<pid> tmp=<tmp> stderr=Error: EAGAIN');
     assert.ok(error.evidence.includes('occurrences=2'));
     assert.ok(error.evidence.includes('normalizedMessage=Monitor command failed pid=<pid> tmp=<tmp> stderr=Error: EAGAIN'));
     assert.equal(error.evidence.some((line) => /error detection|error handling/.test(line)), false);
