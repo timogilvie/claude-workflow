@@ -1138,6 +1138,7 @@ This is a REQUIRED step — do not skip it or substitute your own review.
      npx tsx $tools_dir/check-review-scope.ts --repo-dir .
    - If the guard exits 1, preserve the index, report the violation, and stop review-fix committing/PR progression. No review commit may be created until the guard passes.
    - If the guard exits 2, scope could not be verified (tool/git failure — infrastructure, not a violation): capture the guard's stderr, note "review scope unverified (infrastructure)" in the commit message body and PR body, and proceed with the commit. Do not treat exit 2 as a scope violation.
+   - If the guard exits 3, scope passed but no PR exists yet for this branch (the normal pre-PR state, not a violation): proceed exactly as for exit 0.
    - Commit fixes: git commit -m "fix: Address self-review findings (iteration N)"
    - Re-run the review tool (step 1)
 
