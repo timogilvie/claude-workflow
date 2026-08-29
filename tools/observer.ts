@@ -5,7 +5,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
-import { getIncidentConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
+import { getIncidentConfig, getMillConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
 import { detectIncidentsForRepo, detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
@@ -30,6 +30,12 @@ const MODEL_DOWNGRADE_THRESHOLD = 3;
 const STUCK_RETRY_LOOP_THRESHOLD = 5;
 const STUCK_RETRY_LOOP_URGENT_THRESHOLD = 20;
 const STUCK_RETRY_LOOP_URGENT_WINDOW_MINUTES = 30;
+// terminal-task-parked severity floors: age escalation never triggers below these,
+// even with a very small --stale-minutes.
+const TERMINAL_PARKED_HIGH_FLOOR_MINUTES = 60;
+const TERMINAL_PARKED_URGENT_FLOOR_MINUTES = 24 * 60;
+const RESIDUE_COMMIT_SUBJECT_LIMIT = 5;
+const PR_CREATE_FAILED_PATTERN = /pull request create failed:?\s*(.*)/i;
 
 interface ObserverOptions {
   loop: boolean;
@@ -66,6 +72,8 @@ interface Pane {
   pid: number;
   command: string;
   title: string;
+  /** Test seam: pre-captured pane text. When absent, tmux capture-pane is used. */
+  capturedText?: string;
 }
 
 interface ProcessRow {
@@ -83,6 +91,8 @@ interface TaskState {
   status?: string;
   pr?: string;
   worktree?: string;
+  branch?: string;
+  baseBranch?: string;
   updated?: string;
   agent?: string;
   challengeRole?: string;
@@ -351,12 +361,13 @@ function parsePositiveInt(value: string, flag: string): number {
   return parsed;
 }
 
-function run(command: string, args: string[], timeoutMs = 10_000): { ok: boolean; stdout: string; stderr: string } {
+function run(command: string, args: string[], timeoutMs = 10_000, cwd?: string): { ok: boolean; stdout: string; stderr: string } {
   try {
     const stdout = execFileSync(command, args, {
       encoding: 'utf8',
       timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
+      cwd,
     });
     return { ok: true, stdout, stderr: '' };
   } catch (error: any) {
@@ -515,6 +526,8 @@ function readWorkflowTasks(stateFile: string): TaskState[] {
         status: stringValue(task.status),
         pr: stringValue(task.pr),
         worktree: stringValue(task.worktree),
+        branch: stringValue(task.branch),
+        baseBranch: stringValue(task.baseBranch),
         updated: stringValue(task.updated),
         agent: stringValue(task.agent),
         challengeRole: stringValue(task.challengeRole),
@@ -920,6 +933,107 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    // Residue detectors: terminal arms parked with allocated resources, and
+    // exited arms whose commits exist only locally. Both run for terminal-status
+    // tasks — the terminalStatus() skips above are exactly where parked work
+    // used to die silently (HOK-2911/HOK-2912).
+    const repoBaseBranch = observerBaseBranch(repo.repoDir);
+    for (const task of repo.tasks) {
+      const ageMinutes = taskAgeMinutes(task, repo, now);
+      // The stale age gate doubles as protection against phase-handoff false
+      // positives: a healthy handoff briefly has no live agent but keeps
+      // task.updated fresh.
+      if (ageMinutes === undefined || !Number.isFinite(ageMinutes) || ageMinutes <= options.staleMinutes) continue;
+
+      const isTerminal = taskHasTerminalResidueStatus(task);
+      const liveEvidence = taskHasLiveExecutionEvidence(repo, task, snapshot.panes, snapshot.processes);
+      // Active tasks with a live agent are healthy; terminal tasks are inspected
+      // even when their window still holds a live (abandoned) agent session.
+      if (!isTerminal && liveEvidence) continue;
+
+      const branch = taskBranch(task);
+      const baseBranch = task.baseBranch || repoBaseBranch;
+      const paneResidue = taskPaneResidue(repo, task, snapshot.panes);
+      const residue = branch ? inspectTaskBranchResidue(repo.repoDir, branch, baseBranch) : undefined;
+      const worktreePresent = task.worktree ? existsSync(task.worktree) : false;
+      const unpushedCommits = residue?.unpushedCommits;
+      const confirmedWorkAtRisk = (unpushedCommits ?? 0) > 0 && residue?.remoteBranch === 'absent';
+
+      const firesUnpushed = !liveEvidence && residue !== undefined && confirmedWorkAtRisk;
+      const terminalResiduePresent = worktreePresent || paneResidue.present || (residue?.localBranchExists ?? false);
+      const firesTerminalParked = isTerminal && terminalResiduePresent;
+      if (!firesUnpushed && !firesTerminalParked) continue;
+
+      const prEvidence = taskPrEvidence(repo.repoDir, task);
+      const stateEvidence = [
+        `status=${task.status ?? 'unknown'}`,
+        `phase=${task.phase ?? 'unknown'}`,
+      ];
+
+      if (firesUnpushed && residue) {
+        findings.push({
+          id: `arm-died-with-unpushed-work-${repo.session}-${task.issue}`,
+          severity: 'urgent',
+          category: 'crash',
+          confidence: 'high',
+          session: repo.session,
+          repoDir: repo.repoDir,
+          issue: task.issue,
+          title: `${task.issue} arm exited with ${unpushedCommits} unpushed commit${unpushedCommits === 1 ? '' : 's'} on ${residue.branch}`,
+          evidence: [
+            ...stateEvidence,
+            `branch=${residue.branch}`,
+            `baseBranch=${baseBranch} comparedAgainst=${residue.baseRef ?? 'unknown'}`,
+            `commitsAheadOfBase=${residue.aheadOfBase ?? 'unknown'}`,
+            'remoteBranch=absent',
+            `unpushedCommits=${unpushedCommits}`,
+            ...residue.commitSubjects.map((subject) => `commit=${subject}`),
+            'liveExecutionEvidence=false',
+            prEvidence,
+          ],
+          recommendation: `These commits exist only locally and are unrecoverable once the worktree and branch are reaped. Push ${residue.branch} to origin and open a PR against ${baseBranch}, or explicitly abandon the branch, before terminalizing cleanup.`,
+        });
+      }
+
+      if (firesTerminalParked) {
+        const ageLabel = formatParkedAge(ageMinutes);
+        const workLoss = (unpushedCommits ?? 0) > 0;
+        const reapAction = `set ${task.issue} phase=aborted (or run \`wavemill mill abort ${task.issue}\`) and let the mill reap the worktree and window - never remove the worktree manually while the mill loop is live`;
+        findings.push({
+          id: `terminal-task-parked-${repo.session}-${task.issue}`,
+          severity: terminalParkedSeverity(ageMinutes, options.staleMinutes, residue),
+          category: 'operational',
+          confidence: 'high',
+          session: repo.session,
+          repoDir: repo.repoDir,
+          issue: task.issue,
+          title: workLoss
+            ? `${task.issue} terminal task parked for ${ageLabel} with ${unpushedCommits} unpushed commit${unpushedCommits === 1 ? '' : 's'} at risk`
+            : `${task.issue} terminal task parked for ${ageLabel} with allocated residue`,
+          evidence: [
+            ...stateEvidence,
+            `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+            `ageMinutes=${Math.round(ageMinutes)}`,
+            paneResidue.present
+              ? `tmuxWindow=present(${paneResidue.live ? 'live' : 'exited'}) targets=${paneResidue.targets.join(',')}`
+              : 'tmuxWindow=absent',
+            task.worktree ? `worktree=${worktreePresent ? 'present' : 'absent'}:${task.worktree}` : 'worktree=none',
+            branch ? `branch=${branch} localBranch=${residue?.localBranchExists ? 'present' : 'absent'}` : 'branch=unknown',
+            `baseBranch=${baseBranch}`,
+            `aheadOfBase=${residue?.aheadOfBase ?? 'unknown'}`,
+            `remoteBranch=${residue?.remoteBranch ?? 'unknown'}`,
+            `unpushedCommits=${unpushedCommits ?? 'unknown'}`,
+            ...(workLoss ? ['potentialWorkLoss=true'] : []),
+            ...(residue?.commitSubjects.map((subject) => `commit=${subject}`) ?? []),
+            prEvidence,
+          ],
+          recommendation: workLoss
+            ? `Recover the work first: push ${branch} to origin and open or update a PR against ${baseBranch}, or explicitly abandon the branch. Then ${reapAction}.`
+            : `Nothing on the branch is at risk; ${reapAction}.`,
+        });
+      }
+    }
+
     const logLines = repo.millLogPath ? tailLines(repo.millLogPath, options.maxLogLines) : [];
     const queueHealthDegraded = repo.queueHealth?.status === 'degraded';
     const repeatedReadyWatchdogLines = new Set<string>();
@@ -1023,10 +1137,66 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       });
     }
 
+    // pr-create-failed: surface `pull request create failed` diagnostics from
+    // the mill log, review artifacts, and (as a last resort) captured pane
+    // output, with a translation of GitHub's misleading blank-sha errors.
+    const prCreateFailedLines = new Set<string>();
+    const prCreateReportedIssues = new Set<string>();
+    const prCreateLogGroups = new Map<string, { lines: string[]; issue?: string }>();
+    for (const line of logLines) {
+      if (!PR_CREATE_FAILED_PATTERN.test(line)) continue;
+      prCreateFailedLines.add(line);
+      const issue = matchTaskIssueInText(repo, line);
+      const key = issue ?? hashText(normalizeMillLogFingerprintMessage(line));
+      const group = prCreateLogGroups.get(key) ?? { lines: [], issue };
+      group.lines.push(line);
+      prCreateLogGroups.set(key, group);
+    }
+    for (const group of prCreateLogGroups.values()) {
+      if (group.issue) prCreateReportedIssues.add(group.issue);
+      findings.push(prCreateFailedFinding(
+        repo,
+        group.issue,
+        group.lines[group.lines.length - 1],
+        'mill-log',
+        'high',
+        group.lines.length,
+        repoBaseBranch,
+      ));
+    }
+    for (const task of repo.tasks) {
+      if (prCreateReportedIssues.has(task.issue)) continue;
+      const artifactText = readTaskReviewArtifactText(task);
+      const artifactMatch = artifactText?.match(PR_CREATE_FAILED_PATTERN);
+      if (artifactMatch) {
+        prCreateReportedIssues.add(task.issue);
+        findings.push(prCreateFailedFinding(repo, task.issue, artifactMatch[0], 'review-artifact', 'high', 1, repoBaseBranch));
+        continue;
+      }
+      for (const pane of taskPaneResidue(repo, task, snapshot.panes).panes) {
+        const paneText = capturePaneText(pane);
+        const paneMatch = paneText?.match(PR_CREATE_FAILED_PATTERN);
+        if (!paneMatch) continue;
+        prCreateReportedIssues.add(task.issue);
+        // Pane scrollback is volatile, so this source only earns medium confidence.
+        findings.push(prCreateFailedFinding(
+          repo,
+          task.issue,
+          paneMatch[0],
+          `pane:${pane.session}:${pane.windowIndex}.${pane.paneIndex}`,
+          'medium',
+          1,
+          repoBaseBranch,
+        ));
+        break;
+      }
+    }
+
     const genericLogFindings = new Map<string, AggregatedMillLogFinding>();
     for (const line of logLines) {
       const parsed = parseMillLogLine(line);
       if (!parsed) continue;
+      if (prCreateFailedLines.has(line)) continue;
       if (isAgentBoxOutputMessage(parsed.message)) continue;
       const logFindingLevel = millLogFindingLevel(parsed);
       if (!logFindingLevel) continue;
@@ -1395,9 +1565,21 @@ function terminalStatus(status?: string): boolean {
     || status === 'aborted';
 }
 
-function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes: Pane[], processes: ProcessRow[]): boolean {
+interface PaneResidue {
+  present: boolean;
+  live: boolean;
+  targets: string[];
+  panes: Pane[];
+}
+
+/**
+ * Panes that still belong to a task: its expected window, or a pane whose
+ * title references the issue/worktree. `live` distinguishes a running agent
+ * from a window that has fallen back to a shell or a dead pane.
+ */
+function taskPaneResidue(repo: RepoSnapshot, task: TaskState, panes: Pane[]): PaneResidue {
   const expectedWindow = task.slug ? `${task.issue}-${task.slug}` : task.issue;
-  const matchingPanes = panes.filter((pane) => {
+  const matching = panes.filter((pane) => {
     if (pane.session !== repo.session) return false;
     return pane.windowName === expectedWindow
       || pane.windowName === task.issue
@@ -1405,8 +1587,16 @@ function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes
       || pane.title.includes(task.issue)
       || (task.worktree ? pane.title.includes(task.worktree) : false);
   });
+  return {
+    present: matching.length > 0,
+    live: matching.some((pane) => !/dead|exited/i.test(`${pane.command} ${pane.title}`)),
+    targets: matching.map((pane) => `${pane.session}:${pane.windowIndex}.${pane.paneIndex}`),
+    panes: matching,
+  };
+}
 
-  if (matchingPanes.some((pane) => !/dead|exited/i.test(`${pane.command} ${pane.title}`))) {
+function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes: Pane[], processes: ProcessRow[]): boolean {
+  if (taskPaneResidue(repo, task, panes).live) {
     return true;
   }
 
@@ -1416,6 +1606,243 @@ function taskHasLiveExecutionEvidence(repo: RepoSnapshot, task: TaskState, panes
       || (task.slug ? command.includes(task.slug) : false)
       || (task.worktree ? command.includes(task.worktree) : false);
   });
+}
+
+/**
+ * Terminal residue statuses: everything terminalStatus() covers plus
+ * status/phase "error". HOK-2911 observed error arms parked with live
+ * worktrees and unpushed commits; they must not be exempt from residue checks.
+ */
+function taskHasTerminalResidueStatus(task: TaskState): boolean {
+  return terminalStatus(task.status) || task.status === 'error' || task.phase === 'error';
+}
+
+function taskBranch(task: TaskState): string | undefined {
+  if (task.branch) return task.branch;
+  return task.slug ? `task/${task.slug}` : undefined;
+}
+
+function taskAgeMinutes(task: TaskState, repo: RepoSnapshot, now: number): number | undefined {
+  const updatedMs = task.updated ? Date.parse(task.updated) : NaN;
+  if (Number.isFinite(updatedMs)) return (now - updatedMs) / 60000;
+  const stateMs = repo.stateMtime ? Date.parse(repo.stateMtime) : NaN;
+  if (Number.isFinite(stateMs)) return (now - stateMs) / 60000;
+  return undefined;
+}
+
+function observerBaseBranch(repoDir: string): string {
+  try {
+    return getMillConfig(repoDir).baseBranch || 'auto/integration';
+  } catch {
+    return 'auto/integration';
+  }
+}
+
+type RemoteBranchState = 'present' | 'absent' | 'unknown';
+
+interface BranchResidue {
+  branch: string;
+  localBranchExists: boolean;
+  /** The base ref the ahead count was computed against, when it succeeded. */
+  baseRef?: string;
+  /** Commits on the branch that are not in the base branch; undefined = unknown. */
+  aheadOfBase?: number;
+  remoteBranch: RemoteBranchState;
+  /** Commits at risk of loss if the branch is reaped; undefined = unknown. */
+  unpushedCommits?: number;
+  /** Subjects of at-risk commits, newest first, capped. */
+  commitSubjects: string[];
+}
+
+function gitRefExists(repoDir: string, ref: string): boolean {
+  return run('git', ['-C', repoDir, 'show-ref', '--verify', '--quiet', ref], 8_000).ok;
+}
+
+function gitRevListCount(repoDir: string, range: string): number | undefined {
+  const result = run('git', ['-C', repoDir, 'rev-list', '--count', range], 8_000);
+  if (!result.ok) return undefined;
+  const count = Number.parseInt(result.stdout.trim(), 10);
+  return Number.isFinite(count) && count >= 0 ? count : undefined;
+}
+
+function gitCommitSubjects(repoDir: string, range: string, limit: number): string[] {
+  const result = run('git', ['-C', repoDir, 'log', '--format=%s', '-n', String(limit), range], 8_000);
+  if (!result.ok) return [];
+  return result.stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((subject) => truncate(subject, 120));
+}
+
+/**
+ * Best-effort inspection of a task branch's recoverable state. Every git
+ * failure degrades to "unknown" rather than throwing, and the network-touching
+ * ls-remote only runs when local commits are actually ahead of base and no
+ * remote-tracking ref can answer the question locally.
+ */
+function inspectTaskBranchResidue(repoDir: string, branch: string, baseBranch: string): BranchResidue {
+  const residue: BranchResidue = {
+    branch,
+    localBranchExists: gitRefExists(repoDir, `refs/heads/${branch}`),
+    remoteBranch: 'unknown',
+    commitSubjects: [],
+  };
+  if (!residue.localBranchExists) return residue;
+
+  let baseRef = `origin/${baseBranch}`;
+  let ahead = gitRevListCount(repoDir, `${baseRef}..${branch}`);
+  if (ahead === undefined) {
+    baseRef = baseBranch;
+    ahead = gitRevListCount(repoDir, `${baseRef}..${branch}`);
+  }
+  residue.aheadOfBase = ahead;
+  if (ahead !== undefined) residue.baseRef = baseRef;
+
+  if (gitRefExists(repoDir, `refs/remotes/origin/${branch}`)) {
+    residue.remoteBranch = 'present';
+    residue.unpushedCommits = gitRevListCount(repoDir, `origin/${branch}..${branch}`);
+    if ((residue.unpushedCommits ?? 0) > 0) {
+      residue.commitSubjects = gitCommitSubjects(repoDir, `origin/${branch}..${branch}`, RESIDUE_COMMIT_SUBJECT_LIMIT);
+    }
+    return residue;
+  }
+
+  // No local remote-tracking ref. Confirming remote absence needs a network
+  // call, so only pay for it when there is something at risk.
+  if (ahead === undefined) return residue;
+  if (ahead === 0) {
+    residue.unpushedCommits = 0;
+    return residue;
+  }
+
+  const lsRemote = run('git', ['-C', repoDir, 'ls-remote', '--heads', 'origin', `refs/heads/${branch}`], 8_000);
+  if (!lsRemote.ok) return residue; // network/auth failure: never claim work loss on unknown
+  if (lsRemote.stdout.trim().length > 0) {
+    // Pushed at some point but never fetched here; the local delta is unknowable without a fetch.
+    residue.remoteBranch = 'present';
+    return residue;
+  }
+  residue.remoteBranch = 'absent';
+  residue.unpushedCommits = ahead;
+  residue.commitSubjects = gitCommitSubjects(repoDir, `${baseRef}..${branch}`, RESIDUE_COMMIT_SUBJECT_LIMIT);
+  return residue;
+}
+
+/** Best-effort PR state evidence; a failed gh call reports unknown, never throws. */
+function taskPrEvidence(repoDir: string, task: TaskState): string {
+  if (!task.pr) return 'pr=none';
+  const result = run('gh', ['pr', 'view', task.pr, '--json', 'state,url,baseRefName'], 8_000, repoDir);
+  if (!result.ok) return `pr=#${task.pr} state=unknown`;
+  try {
+    const parsed = JSON.parse(result.stdout) as { state?: unknown; baseRefName?: unknown };
+    const state = typeof parsed.state === 'string' && parsed.state ? parsed.state : 'unknown';
+    const base = typeof parsed.baseRefName === 'string' && parsed.baseRefName ? ` base=${parsed.baseRefName}` : '';
+    return `pr=#${task.pr} state=${state}${base}`;
+  } catch {
+    return `pr=#${task.pr} state=unknown`;
+  }
+}
+
+function terminalParkedSeverity(ageMinutes: number, staleMinutes: number, residue: BranchResidue | undefined): Severity {
+  let severity: Severity = 'medium';
+  if (ageMinutes > Math.max(TERMINAL_PARKED_HIGH_FLOOR_MINUTES, staleMinutes * 6)) severity = 'high';
+  if (ageMinutes > Math.max(TERMINAL_PARKED_URGENT_FLOOR_MINUTES, staleMinutes * 24)) severity = 'urgent';
+  if ((residue?.unpushedCommits ?? 0) > 0) {
+    // Unpushed work turns housekeeping into potential work loss: at least high,
+    // urgent when the remote branch is confirmed absent (nothing else holds the commits).
+    if (residue?.remoteBranch === 'absent') return 'urgent';
+    if (severity === 'medium') return 'high';
+  }
+  return severity;
+}
+
+function formatParkedAge(ageMinutes: number): string {
+  const rounded = Math.round(ageMinutes);
+  if (rounded < 120) return `${rounded}m`;
+  const hours = Math.floor(rounded / 60);
+  const minutes = rounded % 60;
+  return minutes > 0 ? `${hours}h${minutes}m` : `${hours}h`;
+}
+
+/** Match a raw diagnostic line to a task by branch, slug, or issue key. */
+function matchTaskIssueInText(repo: RepoSnapshot, text: string): string | undefined {
+  // Longest issue key first so HOK-1234_c lines never match HOK-1234.
+  const tasks = [...repo.tasks].sort((a, b) => b.issue.length - a.issue.length);
+  for (const task of tasks) {
+    const branch = taskBranch(task);
+    if (branch && text.includes(branch)) return task.issue;
+    if (task.slug && text.includes(task.slug)) return task.issue;
+    if (text.includes(task.issue)) return task.issue;
+  }
+  return undefined;
+}
+
+function capturePaneText(pane: Pane): string | undefined {
+  if (pane.capturedText !== undefined) return pane.capturedText;
+  const target = `${pane.session}:${pane.windowIndex}.${pane.paneIndex}`;
+  const result = run('tmux', ['capture-pane', '-p', '-S', '-200', '-t', target], 5_000);
+  return result.ok ? result.stdout : undefined;
+}
+
+function readTaskReviewArtifactText(task: TaskState): string | undefined {
+  if (!task.worktree || !task.slug) return undefined;
+  const artifactPath = join(task.worktree, 'features', task.slug, '.review-result.json');
+  if (!existsSync(artifactPath)) return undefined;
+  try {
+    return readFileSync(artifactPath, 'utf8').slice(0, 65_536);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Plain-language reading of GitHub's PR-create errors. The raw messages
+ * actively mislead: "No commits between main and task/..." means the branch
+ * has no remote ref, not that the agent produced nothing.
+ */
+function translatePrCreateFailure(text: string, baseBranch: string): string | undefined {
+  if (/Head sha can't be blank|Head ref must be a branch/i.test(text)) {
+    return 'the head branch was never pushed to origin, so GitHub has no ref for it - "No commits between ..." here means "no remote branch", not "the agent did nothing"';
+  }
+  if (/Base sha can't be blank|No commits between/i.test(text)) {
+    return `base/head comparison failed - verify the PR targets the configured base branch (${baseBranch}) and that the head branch is pushed`;
+  }
+  return undefined;
+}
+
+function prCreateFailedFinding(
+  repo: RepoSnapshot,
+  issue: string | undefined,
+  rawText: string,
+  source: string,
+  confidence: Confidence,
+  occurrences: number,
+  baseBranch: string,
+): Finding {
+  const raw = truncate(rawText.trim(), 300);
+  const translation = translatePrCreateFailure(rawText, baseBranch);
+  return {
+    id: `pr-create-failed-${repo.session}-${issue ?? hashText(raw)}`,
+    severity: 'high',
+    category: 'crash',
+    confidence,
+    session: repo.session,
+    repoDir: repo.repoDir,
+    issue,
+    title: issue
+      ? `${issue} failed to create its PR and the arm's work never reached GitHub`
+      : 'A mill arm failed to create its PR and its work never reached GitHub',
+    evidence: [
+      `source=${source}`,
+      `occurrences=${occurrences}`,
+      `raw=${raw}`,
+      ...(translation ? [`translation=${translation}`] : []),
+      `baseBranch=${baseBranch}`,
+    ],
+    recommendation: `Push the task branch to origin and re-create the PR against ${baseBranch}, or explicitly abandon the arm. Do not trust the raw GitHub error text when deciding whether work exists - check \`git rev-list --count ${baseBranch}..<branch>\` locally first.`,
+    occurrenceCount: occurrences,
+  };
 }
 
 function hashText(text: string): string {
