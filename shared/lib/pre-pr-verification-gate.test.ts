@@ -437,8 +437,20 @@ test('gate: operator override cannot bypass a stale artifact', () => {
 });
 
 test('gate: blocks an out-of-scope change with the offending path in the failure', () => {
-  const { tmpDir, repoDir, baseSha } = createGateRepo();
+  const { tmpDir, repoDir, featureDir, baseSha } = createGateRepo();
   try {
+    // Persisted baseline scopes committed changes to feature.txt only, so
+    // rogue.txt (added afterward) falls out of scope and must block. Without
+    // a baseline the branch's own committed diff governs (HOK-2913 REQ-F1),
+    // so the baseline is what makes out-of-scope committed edits enforceable.
+    writeFileSync(join(featureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['feature.txt'],
+    }), 'utf-8');
     const headSha = writeAndCommit(repoDir, 'rogue.txt', 'not declared\n', 'out of scope change');
     writeArtifact(repoDir, {
       version: '1.0',
@@ -533,11 +545,23 @@ test('gate: fails closed as a configuration error when no feature directory reso
 });
 
 test('gate: explicit featureDir argument overrides branch derivation', () => {
-  // Derivation would find features/test (which declares feature.txt and would
-  // pass); the explicit featureDir declares a different scope, so the same
-  // change must now block — proving the override took effect.
-  const { tmpDir, repoDir, headSha, baseSha } = createGateRepo();
+  // Derivation would find features/test (whose baseline scopes feature.txt
+  // and would pass); the explicit featureDir points to a different directory
+  // whose baseline scopes committed changes elsewhere, so the same committed
+  // feature.txt must now block — proving the override took effect. Both dirs
+  // carry baselines because without one the branch's own committed diff
+  // governs (HOK-2913 REQ-F1) and nothing would ever block here.
+  const { tmpDir, repoDir, featureDir, headSha, baseSha } = createGateRepo();
   try {
+    writeFileSync(join(featureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['feature.txt'],
+    }), 'utf-8');
+
     const altFeatureDir = join(repoDir, 'features', 'alt');
     mkdirSync(altFeatureDir, { recursive: true });
     writeFileSync(join(altFeatureDir, 'task-packet.md'), `# Task
@@ -546,6 +570,15 @@ test('gate: explicit featureDir argument overrides branch derivation', () => {
 
 - \`other.txt\`
 `, 'utf-8');
+    writeFileSync(join(altFeatureDir, '.review-scope-baseline.json'), JSON.stringify({
+      version: 1,
+      createdAt: new Date().toISOString(),
+      source: 'test',
+      sinceCommit: baseSha,
+      headRef: 'HEAD',
+      paths: ['other.txt'],
+    }), 'utf-8');
+
     writeArtifact(repoDir, {
       version: '1.0',
       timestamp: new Date().toISOString(),
