@@ -59,7 +59,8 @@ export function runMillConfigPreflight(
   const certificationCoverage = process.env.WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD === '1'
     ? undefined
     : evaluateSuiteCoverage({ repoDir: absRepoDir });
-  const certificationCoverageBlocked = certificationCoverage?.status === 'bump-without-publish';
+  const certificationCoverageBlocked = certificationCoverage?.status === 'bump-without-publish'
+    || certificationCoverage?.status === 'identity-drift';
 
   const report: MillConfigPreflightReport = {
     repoDir: absRepoDir,
@@ -104,6 +105,26 @@ export function formatMillConfigPreflightReport(report: MillConfigPreflightRepor
       'Native certification suite coverage:',
       `  ERROR: certificationSuiteVersion is '${coverage.requiredSuiteVersion}' but the global store (${coverage.root}) has 0 matching artifacts${otherSuites ? ` (${otherSuites} found)` : ''}.`,
       '  The suite version was bumped without republishing the matrix.',
+      `  Run: ${coverage.remediationCommand}`,
+      '  To skip only this guard, set WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1.',
+    );
+  }
+
+  if (report.certificationCoverage?.status === 'identity-drift') {
+    const coverage = report.certificationCoverage;
+    const sample = coverage.ineligibleModels.slice(0, 6).map((m) => m.registryKey).join(', ');
+    const more = coverage.ineligibleModels.length > 6
+      ? ` (+${coverage.ineligibleModels.length - 6} more)`
+      : '';
+    lines.push(
+      '',
+      'Native certification identity drift:',
+      `  ERROR: ${coverage.artifactCountForRequiredSuite} artifact(s) are present at suite '${coverage.requiredSuiteVersion}',`,
+      `  but ${coverage.identityDriftCount} model(s) no longer match their certified subject and only`,
+      `  ${coverage.eligibleModelCount} remain launchable. Store: ${coverage.root}`,
+      `  Affected: ${sample}${more}`,
+      "  This is what a change to shared/fixtures/model_30_launch_priority_models.v1.json does:",
+      '  it moves catalogHash, which invalidates every stored artifact on this machine at once.',
       `  Run: ${coverage.remediationCommand}`,
       '  To skip only this guard, set WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1.',
     );

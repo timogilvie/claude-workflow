@@ -137,6 +137,7 @@ TESTS=(
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts
+  shared/lib/config-integrity.test.ts
   shared/lib/launch-plan-schema.test.ts
   shared/lib/launch-validation.test.ts
   shared/lib/manual-edit-attribution-audit.test.ts
@@ -259,6 +260,7 @@ TESTS=(
   tools/resolve-orphan-challenge-pair.test.ts
   tools/resolve-primary-merged-pair.test.ts
   tests/drift-detector.test.ts
+  shared/lib/parent-monitor-drift.test.ts
   tests/check-drift-tool.test.ts
   tests/jq-filter-smoke.test.ts
   tests/ready-stage-transient-mergeability.test.ts
