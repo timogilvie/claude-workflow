@@ -21,12 +21,33 @@ type ShellRunner = (cmd: string, opts?: { encoding?: string; cwd?: string }) => 
 export const REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE =
   'No review commit may be created until every out-of-scope staged path is unstaged or reverted.';
 
+/**
+ * Remediation for violations that live in committed history rather than the
+ * index. Telling the operator to "unstage" a committed path is an impossible
+ * instruction on a clean index (HOK-2913) — the applicable actions are
+ * reverting the offending commit or restoring the scoped file state.
+ */
+export const REVIEW_SCOPE_GUARD_COMMITTED_REMEDY_MESSAGE =
+  'Out-of-scope changes are already committed on this branch (there is nothing staged to unstage): '
+  + 'revert the offending commit(s) or restore the scoped file state before any further review progress.';
+
 export const REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE =
   'No review commit may be created because the review scope guard could not verify staged scope.';
+
+/**
+ * Printed when scope passed but no PR exists for the branch yet. This is the
+ * normal pre-PR state, never a policy violation: review-fix commits and PR
+ * creation may proceed exactly as for a plain pass.
+ */
+export const REVIEW_SCOPE_GUARD_NO_PR_MESSAGE =
+  'No PR exists for this branch yet (normal before PR creation — not a policy violation). '
+  + 'Scope was fully evaluated; review-fix commits and PR creation may proceed.';
 
 export const REVIEW_SCOPE_GUARD_EXIT_OK = 0;
 export const REVIEW_SCOPE_GUARD_EXIT_POLICY = 1;
 export const REVIEW_SCOPE_GUARD_EXIT_TOOL = 2;
+/** Scope passed but no PR exists for the branch yet — proceed as for exit 0. */
+export const REVIEW_SCOPE_GUARD_EXIT_NO_PR = 3;
 
 /**
  * Registration files that a task may touch as a companion to a legitimate
@@ -59,6 +80,13 @@ export interface ReviewScopeGuardFinding {
    * blocker is what stalled HOK-2884 for 18 hours (HOK-2889).
    */
   kind?: 'violation' | 'missing-authority' | 'error';
+  /**
+   * Where the offending change was observed. Drives remediation wording:
+   * 'staged'/'working-tree' violations can be unstaged or reverted in place;
+   * 'committed' violations already live in branch history, where "unstage" is
+   * an impossible instruction (HOK-2913).
+   */
+  observedIn?: 'staged' | 'working-tree' | 'committed';
   category: 'review-scope' | 'deletion-budget' | 'cross-pr-revert';
   path?: string;
   status?: string;
@@ -106,6 +134,16 @@ export interface ReviewScopeGuardResult {
   outOfScopePaths: string[];
   findings: ReviewScopeGuardFinding[];
   crossPrReverts: CrossPrRevertFinding[];
+  /**
+   * Outcome of the branch PR lookup (REQ-F5, HOK-2913): 'found' when `gh pr
+   * view` resolved a PR, 'none' when gh positively reported no PR for the
+   * branch, 'unavailable' when the lookup could not run (gh missing, no
+   * remote, network failure). Never influences pass/fail — "no PR yet" is the
+   * normal pre-PR state, not a policy violation.
+   */
+  prLookup?: 'found' | 'none' | 'unavailable';
+  /** PR number when prLookup is 'found'. */
+  prNumber?: number | null;
   /** Human-readable one-line outcome summary. */
   message: string;
   /** Populated only when status is 'error'. */
@@ -138,7 +176,7 @@ interface NumstatEntry {
   deletions: number;
 }
 
-interface ReviewScopeBaseline {
+export interface ReviewScopeBaseline {
   version: 1;
   createdAt: string;
   source: string;
@@ -355,15 +393,21 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     const allowedUncommitted = (path: string): boolean =>
       allowedCommitted(path) || taskPathSet.has(path) || baselineSet.has(path);
 
-    const outOfScope = new Map<string, NameStatusEntry>();
-    for (const entry of committedEntries) {
-      if (!allowedCommitted(entry.path)) {
-        outOfScope.set(entry.path, entry);
+    const stagedPathSet = new Set(stagedPaths);
+    const outOfScope = new Map<string, NameStatusEntry & { observedIn: 'staged' | 'working-tree' | 'committed' }>();
+    // Uncommitted entries first: a path that is both committed and re-staged
+    // still has an index-level remedy, so the staged classification wins.
+    for (const entry of uncommittedEntries) {
+      if (!allowedUncommitted(entry.path)) {
+        outOfScope.set(entry.path, {
+          ...entry,
+          observedIn: stagedPathSet.has(entry.path) ? 'staged' : 'working-tree',
+        });
       }
     }
-    for (const entry of uncommittedEntries) {
-      if (!outOfScope.has(entry.path) && !allowedUncommitted(entry.path)) {
-        outOfScope.set(entry.path, entry);
+    for (const entry of committedEntries) {
+      if (!outOfScope.has(entry.path) && !allowedCommitted(entry.path)) {
+        outOfScope.set(entry.path, { ...entry, observedIn: 'committed' });
       }
     }
 
@@ -374,8 +418,9 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
         path: entry.path,
         status: entry.status,
         kind: 'violation',
+        observedIn: entry.observedIn,
         message:
-          `Unexpected review change outside task scope: ${entry.path} (${entry.status}). ` +
+          `Unexpected review change outside task scope: ${entry.path} (${entry.status}, ${entry.observedIn}). ` +
           `Baseline source: ${baselineSource}.`,
         details: {
           baselineSource,
@@ -394,13 +439,20 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       ));
     }
 
+    // ── Branch PR lookup (REQ-F5) — informational, never pass/fail ──
+    // "No PR yet" is the normal pre-PR review state; it is surfaced as a
+    // distinct outcome (exit 3 in the CLI), never folded into the blocking
+    // path. The lookup result also supplies the acknowledgement text so gh is
+    // consulted once.
+    const prLookup = lookupBranchPr(repoDir, shellRunner);
+
     const crossPrReverts = baseRef
       ? collectCrossPrReverts({
         repoDir,
         baseRef,
         headRef,
         integrationRef,
-        acknowledgementText: options.acknowledgementText,
+        acknowledgementText: options.acknowledgementText ?? prLookup.acknowledgementText,
         maxRecentMerges: options.maxRecentMerges,
         shellRunner,
         findings,
@@ -411,7 +463,8 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       findings.push({
         severity: 'blocker',
         category: 'cross-pr-revert',
-      kind: 'violation' as const,
+        kind: 'violation' as const,
+        observedIn: 'committed',
         message:
           `This branch appears to revert changes from PR #${revert.prNumber}` +
           `${revert.title ? ` (${revert.title})` : ''}. ` +
@@ -425,7 +478,8 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
     }
 
     const outOfScopePaths = [...outOfScope.keys()].sort();
-    const failed = findings.some((finding) => finding.severity === 'blocker');
+    const blockers = findings.filter((finding) => finding.severity === 'blocker');
+    const failed = blockers.length > 0;
 
     return {
       ok: !failed,
@@ -443,8 +497,10 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       outOfScopePaths,
       findings,
       crossPrReverts,
+      prLookup: prLookup.lookup,
+      prNumber: prLookup.prNumber,
       message: failed
-        ? REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE
+        ? selectFailureRemedyMessage(blockers)
         : 'Review scope guard passed: every changed path is in task scope or an allowed companion.',
     };
   } catch (error) {
@@ -471,9 +527,68 @@ export function validateReviewScope(options: ReviewScopeGuardOptions): ReviewSco
       outOfScopePaths: [],
       findings: [],
       crossPrReverts: [],
+      prLookup: 'unavailable',
+      prNumber: null,
       message: REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE,
       toolError,
     };
+  }
+}
+
+/**
+ * Pick the remediation sentence(s) matching where the blocking findings were
+ * actually observed (REQ-F3, HOK-2913). "Unstage" is only ever instructed when
+ * a staged/working-tree violation exists; violations that live in committed
+ * history get an action that is possible on a clean index.
+ */
+function selectFailureRemedyMessage(blockers: ReviewScopeGuardFinding[]): string {
+  const hasIndexBlocker = blockers.some(
+    (finding) => finding.observedIn === 'staged' || finding.observedIn === 'working-tree',
+  );
+  const hasCommittedBlocker = blockers.some(
+    (finding) => finding.observedIn !== 'staged' && finding.observedIn !== 'working-tree',
+  );
+  const parts = [
+    hasIndexBlocker ? REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE : null,
+    hasCommittedBlocker ? REVIEW_SCOPE_GUARD_COMMITTED_REMEDY_MESSAGE : null,
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(' ') : REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE;
+}
+
+interface BranchPrLookup {
+  lookup: 'found' | 'none' | 'unavailable';
+  prNumber: number | null;
+  /** PR title + body for revert acknowledgements; undefined when no PR resolved. */
+  acknowledgementText?: string;
+}
+
+/**
+ * Look up the PR for the current branch once. gh's stderr is folded into the
+ * captured output so "no pull requests found" is classified instead of
+ * leaking into the guard's report as if it were a finding (HOK-2913).
+ */
+function lookupBranchPr(repoDir: string, shellRunner: ShellRunner): BranchPrLookup {
+  try {
+    const output = String(shellRunner(
+      'gh pr view --json number,title,body 2>&1',
+      { cwd: repoDir, encoding: 'utf-8' },
+    ));
+    const parsed = JSON.parse(output) as { number?: unknown; title?: unknown; body?: unknown };
+    if (typeof parsed.number !== 'number') {
+      return { lookup: 'unavailable', prNumber: null };
+    }
+    const title = typeof parsed.title === 'string' ? parsed.title : '';
+    const body = typeof parsed.body === 'string' ? parsed.body : '';
+    return { lookup: 'found', prNumber: parsed.number, acknowledgementText: `${title}\n${body}` };
+  } catch (error) {
+    const execError = error as { stdout?: unknown; stderr?: unknown; message?: string };
+    const text = [execError.stdout, execError.stderr, execError.message]
+      .map((chunk) => (chunk instanceof Buffer ? chunk.toString('utf-8') : typeof chunk === 'string' ? chunk : ''))
+      .join('\n');
+    if (/no pull requests found/i.test(text)) {
+      return { lookup: 'none', prNumber: null };
+    }
+    return { lookup: 'unavailable', prNumber: null };
   }
 }
 
@@ -728,6 +843,73 @@ function loadOrCreateBaseline(input: {
   return baseline;
 }
 
+export interface EnsureReviewScopeBaselineResult {
+  /** False when a valid baseline artifact already existed and was kept as-is. */
+  created: boolean;
+  baselinePath: string;
+  baseline: ReviewScopeBaseline;
+}
+
+/**
+ * Materialize the review-scope baseline artifact at the coding→review handoff
+ * (REQ-F2, HOK-2913).
+ *
+ * Create-if-absent: an existing valid baseline is never regenerated, so
+ * review-fix commits made after the handoff cannot widen the recorded scope.
+ * When no `sinceCommit` is supplied, the task's start point is derived as the
+ * merge base against the integration ref — at handoff time the branch diff is
+ * exactly the committed coding deliverable.
+ *
+ * @throws Error when the base SHA cannot be derived or the artifact cannot be
+ * written; callers degrade to the guard's merge-base fallback with a warning.
+ */
+export function ensureReviewScopeBaseline(options: {
+  repoDir: string;
+  featureDir: string;
+  sinceCommit?: string;
+  headRef?: string;
+  integrationRef?: string;
+  shellRunner?: ShellRunner;
+}): EnsureReviewScopeBaselineResult {
+  const repoDir = resolve(options.repoDir);
+  const featureDir = resolve(options.featureDir);
+  const shellRunner = options.shellRunner ?? reviewScopeGuardDeps.execShellCommand;
+  const headRef = options.headRef ?? 'HEAD';
+  const baselinePath = join(featureDir, BASELINE_FILE);
+
+  const existing = readBaseline(baselinePath);
+  if (existing) {
+    return { created: false, baselinePath, baseline: existing };
+  }
+
+  let sinceCommit = options.sinceCommit?.trim() || '';
+  if (!sinceCommit) {
+    const integrationRef = resolveIntegrationRef(repoDir, options.integrationRef);
+    sinceCommit = runGitChecked(
+      shellRunner,
+      repoDir,
+      `git merge-base ${escapeShellArg(integrationRef)} ${escapeShellArg(headRef)}`,
+      'git-merge-base',
+    ).trim();
+    if (!sinceCommit) {
+      throw new Error(`git merge-base returned an empty base for ${integrationRef} and ${headRef}`);
+    }
+  }
+
+  const baseline = loadOrCreateBaseline({
+    repoDir,
+    featureDir,
+    sinceCommit,
+    headRef,
+    writeBaseline: true,
+    shellRunner,
+  });
+  if (!baseline) {
+    throw new Error(`failed to materialize review-scope baseline at ${baselinePath}`);
+  }
+  return { created: true, baselinePath, baseline };
+}
+
 function readBaseline(path: string): ReviewScopeBaseline | null {
   try {
     if (!existsSync(path)) {
@@ -868,6 +1050,7 @@ function collectDeletionBudgetFindings(
       severity: 'blocker' as const,
       category: 'deletion-budget' as const,
       kind: 'violation' as const,
+      observedIn: 'committed' as const,
       path: entry.path,
       message:
         `Deletion budget exceeded outside task baseline: ${entry.path} ` +
@@ -968,21 +1151,18 @@ function blobIdAtRef(
   }
 }
 
+/**
+ * Fallback acknowledgement source when no PR body is available (the PR lookup
+ * already supplies title+body when a PR exists): recent commit messages.
+ */
 function loadAcknowledgementText(repoDir: string, shellRunner: ShellRunner): string {
   try {
     return String(shellRunner(
-      'gh pr view --json body,title,number --jq \'.title + "\\n" + (.body // "")\'',
+      'git log --format=%B -n 20 HEAD',
       { cwd: repoDir, encoding: 'utf-8' },
     ));
   } catch {
-    try {
-      return String(shellRunner(
-        'git log --format=%B -n 20 HEAD',
-        { cwd: repoDir, encoding: 'utf-8' },
-      ));
-    } catch {
-      return '';
-    }
+    return '';
   }
 }
 
@@ -1189,6 +1369,8 @@ export function formatReviewScopeGuardResult(result: ReviewScopeGuardResult): st
       result.mergeBase ? `Merge base: ${result.mergeBase}` : undefined,
       `Baseline source: ${result.baselineSource}`,
       `Staged paths checked: ${result.stagedPaths.length}`,
+      result.prLookup === 'none' ? REVIEW_SCOPE_GUARD_NO_PR_MESSAGE : undefined,
+      result.prLookup === 'found' && result.prNumber != null ? `PR: #${result.prNumber}` : undefined,
     ].filter(Boolean).join('\n');
   }
 
@@ -1200,7 +1382,7 @@ export function formatReviewScopeGuardResult(result: ReviewScopeGuardResult): st
         return `- [${finding.category}]${location} ${finding.message}`;
       }),
       '',
-      REVIEW_SCOPE_GUARD_NO_COMMIT_MESSAGE,
+      result.message,
     ].join('\n');
   }
 

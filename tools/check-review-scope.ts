@@ -1,19 +1,23 @@
 #!/usr/bin/env -S npx tsx
 import { runTool, resolveRepoDir } from '../shared/lib/tool-runner.ts';
 import {
+  REVIEW_SCOPE_GUARD_EXIT_NO_PR,
   REVIEW_SCOPE_GUARD_EXIT_OK,
   REVIEW_SCOPE_GUARD_EXIT_POLICY,
   REVIEW_SCOPE_GUARD_EXIT_TOOL,
   REVIEW_SCOPE_GUARD_UNVERIFIED_MESSAGE,
   formatReviewScopeGuardResult,
   validateReviewScope,
+  type ReviewScopeGuardResult,
 } from '../shared/lib/review-scope-guard.ts';
 
-function exitCodeForStatus(status: 'pass' | 'fail' | 'error'): number {
-  if (status === 'pass') {
-    return REVIEW_SCOPE_GUARD_EXIT_OK;
+function exitCodeForResult(result: ReviewScopeGuardResult): number {
+  if (result.status === 'pass') {
+    // "No PR yet" is a distinct informational outcome (HOK-2913), never a
+    // policy violation: callers treat it exactly like a pass.
+    return result.prLookup === 'none' ? REVIEW_SCOPE_GUARD_EXIT_NO_PR : REVIEW_SCOPE_GUARD_EXIT_OK;
   }
-  if (status === 'fail') {
+  if (result.status === 'fail') {
     return REVIEW_SCOPE_GUARD_EXIT_POLICY;
   }
   return REVIEW_SCOPE_GUARD_EXIT_TOOL;
@@ -25,7 +29,8 @@ runTool({
     'Block out-of-scope staged files before review-fix commits. With no arguments beyond '
     + '--repo-dir, scope is derived from git (merge base against the integration branch) '
     + 'and the staged index plus working tree are fully evaluated. '
-    + 'Exit codes: 0 in scope, 1 policy violation, 2 tool/git failure (scope unverified).',
+    + 'Exit codes: 0 in scope, 1 policy violation, 2 tool/git failure (scope unverified), '
+    + '3 in scope but no PR exists for the branch yet (normal pre-PR state — proceed as for 0).',
   options: {
     'repo-dir': { type: 'string', description: 'Repository directory' },
     'feature-dir': { type: 'string', description: 'Task feature directory (optional narrowing signal)' },
@@ -60,7 +65,7 @@ runTool({
       } else {
         console.log(formatReviewScopeGuardResult(result));
       }
-      process.exit(exitCodeForStatus(result.status));
+      process.exit(exitCodeForResult(result));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (args.json) {
