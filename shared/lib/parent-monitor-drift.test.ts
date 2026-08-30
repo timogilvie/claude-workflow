@@ -3,34 +3,14 @@ import assert from 'node:assert/strict';
 
 import {
   ParentMonitorDriftError,
-  compareParentMonitor,
+  compareParentMonitorFiles,
   extractTopLevelFunctions,
-  splitMonitorRegion,
+  formatFunctionLocation,
 } from './parent-monitor-drift.ts';
 
 const fixture = String.raw;
 
 describe('parent-monitor-drift', () => {
-  it('splits parent and monitor regions around the monitor heredoc', () => {
-    const script = fixture`
-parent_only() {
-  echo parent
-}
-cat > "$tmp" <<'MONITOR_EOF'
-monitor_only() {
-  echo monitor
-}
-MONITOR_EOF
-after_monitor() {
-  echo after
-}
-`;
-
-    const region = splitMonitorRegion(script);
-    assert.deepEqual(region.parentRanges, [[0, 4], [9, 12]]);
-    assert.deepEqual(region.monitorRange, [5, 8]);
-  });
-
   it('extracts top-level functions with nested groups, quotes, and heredocs', () => {
     const script = fixture`
 shared_fn() {
@@ -42,32 +22,33 @@ shared_fn() {
 }
 INNER
 }
-cat <<'MONITOR_EOF'
-shared_fn() {
-  case "$1" in
-    one) echo "quoted } brace" ;;
-    two) { echo nested; }
-  esac
-  cat <<'INNER'
-}
-INNER
-}
-MONITOR_EOF
 function after_monitor {
   echo after
 }
 `;
 
-    const functions = extractTopLevelFunctions(script);
-    assert.deepEqual(functions.map(fn => `${fn.side}:${fn.name}:${fn.startLine}-${fn.endLine}`), [
+    const parentFunctions = extractTopLevelFunctions(script, 'parent');
+    assert.deepEqual(parentFunctions.map(fn => `${fn.side}:${fn.name}:${fn.startLine}-${fn.endLine}`), [
       'parent:shared_fn:2-10',
-      'parent:after_monitor:22-24',
-      'monitor:shared_fn:12-20',
+      'parent:after_monitor:11-13',
+    ]);
+
+    const monitorFunctions = extractTopLevelFunctions(script, 'monitor');
+    assert.deepEqual(monitorFunctions.map(fn => `${fn.side}:${fn.name}`), [
+      'monitor:shared_fn',
+      'monitor:after_monitor',
     ]);
   });
 
-  it('reports duplicated identical and divergent functions', () => {
-    const script = fixture`
+  it('formats side-aware function locations', () => {
+    const [parentFn] = extractTopLevelFunctions('located() {\n  echo hi\n}\n', 'parent');
+    const [monitorFn] = extractTopLevelFunctions('located() {\n  echo hi\n}\n', 'monitor');
+    assert.equal(formatFunctionLocation(parentFn!), 'shared/lib/wavemill-mill.sh:1-3');
+    assert.equal(formatFunctionLocation(monitorFn!), 'shared/lib/wavemill-monitor.sh:1-3');
+  });
+
+  it('reports duplicated identical and divergent functions across two files', () => {
+    const parentScript = fixture`
 same() {
   echo same
 }
@@ -77,7 +58,8 @@ changed() {
 parent_only() {
   echo parent
 }
-cat <<'MONITOR_EOF'
+`;
+    const monitorScript = fixture`
 same() {
   echo same
 }
@@ -87,10 +69,9 @@ changed() {
 monitor_only() {
   echo monitor
 }
-MONITOR_EOF
 `;
 
-    const report = compareParentMonitor(script);
+    const report = compareParentMonitorFiles(parentScript, monitorScript);
     assert.deepEqual(report.duplicated, ['changed', 'same']);
     assert.deepEqual(report.identical, ['same']);
     assert.deepEqual(report.divergent.map(entry => entry.name), ['changed']);
@@ -98,15 +79,25 @@ MONITOR_EOF
     assert.match(report.divergent[0]!.diff, /monitor changed/);
   });
 
-  it('rejects missing monitor heredocs and unterminated functions', () => {
+  it('reports no duplicates when the sides share no function names', () => {
+    const report = compareParentMonitorFiles(
+      'parent_only() {\n  echo parent\n}\n',
+      'monitor_only() {\n  echo monitor\n}\n',
+    );
+    assert.deepEqual(report.duplicated, []);
+    assert.deepEqual(report.identical, []);
+    assert.deepEqual(report.divergent, []);
+  });
+
+  it('rejects unterminated functions and heredocs', () => {
     assert.throws(
-      () => splitMonitorRegion('only_parent() {\n  echo parent\n}\n'),
-      /No MONITOR_EOF heredoc found/,
+      () => extractTopLevelFunctions('broken() {\n  echo parent\n', 'parent'),
+      (error: unknown) => error instanceof ParentMonitorDriftError && /Unterminated function broken in parent/.test(error.message),
     );
 
     assert.throws(
-      () => extractTopLevelFunctions("broken() {\n  echo parent\ncat <<'MONITOR_EOF'\nMONITOR_EOF\n"),
-      (error: unknown) => error instanceof ParentMonitorDriftError && /Unterminated function broken/.test(error.message),
+      () => extractTopLevelFunctions("broken() {\n  cat <<'INNER'\n}\n", 'monitor'),
+      (error: unknown) => error instanceof ParentMonitorDriftError && /Unterminated heredoc INNER in monitor/.test(error.message),
     );
   });
 });

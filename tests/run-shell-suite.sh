@@ -82,6 +82,7 @@ TESTS=(
   global-model-parity.test.sh
   stage-state.test.sh
   startup-handoff.test.sh
+  monitor-script-byte-identical.test.sh
 )
 
 SHARD_INDEX=1

@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_ROOT/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_ROOT/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -39,7 +39,7 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 
 # Source the function under test in isolation.
 FUNC_FILE="$TEST_TMP/merge_retry_marker_until.sh"
-extract_function "$MILL_SCRIPT" "merge_retry_marker_until" > "$FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "merge_retry_marker_until" > "$FUNC_FILE"
 # shellcheck disable=SC1090
 REPO_DIR="$TEST_TMP/repo"
 mkdir -p "$REPO_DIR/.wavemill/merge-retry"
@@ -69,7 +69,7 @@ check_equals "marker missing until returns empty" "" "$(merge_retry_marker_until
 
 # The tick must source the marker (not the always-null ready artifact field).
 echo "=== HOK-2411: tick wires marker into mergeRetryInProgressUntil ==="
-if grep -q 'merge_retry_in_progress_until "\$(merge_retry_marker_until "\$pr")"' "$MILL_SCRIPT"; then
+if grep -q 'merge_retry_in_progress_until "\$(merge_retry_marker_until "\$pr")"' "$MONITOR_SCRIPT_FILE"; then
   pass "refresh_ready_merge_queue_tick reads merge_retry_marker_until"
 else
   fail "refresh_ready_merge_queue_tick reads merge_retry_marker_until"

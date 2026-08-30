@@ -7,6 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 SESSION="input-reader-burst-$$"
 
@@ -20,11 +21,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-HEREDOC_CONTENT=$(awk '
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-  /^MONITOR_EOF$/ { found=0; next }
-  found { print }
-' "$MILL_SCRIPT")
+HEREDOC_CONTENT=$(cat "$MONITOR_SCRIPT_FILE")
 
 COMMAND_QUEUE=()
 COMMAND_QUEUE_OFFSETS=()

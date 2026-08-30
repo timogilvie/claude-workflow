@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 extract_function() {
   local source_file="$1"
@@ -38,9 +39,9 @@ cleanup_file="$tmp/operator-abort-cleanup.sh"
   printf '\n'
   extract_function "$MILL_SCRIPT" "remove_task_state"
   printf '\n'
-  extract_function "$MILL_SCRIPT" "mark_task_aborted_for_cleanup"
+  extract_function "$MONITOR_SCRIPT_FILE" "mark_task_aborted_for_cleanup"
   printf '\n'
-  extract_function "$MILL_SCRIPT" "cleanup_aborted_challenge_arm"
+  extract_function "$MONITOR_SCRIPT_FILE" "cleanup_aborted_challenge_arm"
 } > "$cleanup_file"
 
 run_operator_abort_case() {

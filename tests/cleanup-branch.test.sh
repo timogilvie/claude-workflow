@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -13,27 +14,23 @@ fail() { echo "  FAIL  $1"; FAIL=$((FAIL + 1)); }
 
 echo "=== Cleanup Branch Regression Guards ==="
 
-if [[ ! -f "$MILL_SCRIPT" ]]; then
-  fail "wavemill-mill.sh not found"
+if [[ ! -f "$MILL_SCRIPT" || ! -f "$MONITOR_SCRIPT_FILE" ]]; then
+  fail "wavemill-mill.sh or wavemill-monitor.sh not found"
   echo ""
   echo "--- Results: $PASS passed, $FAIL failed ---"
   exit 1
 fi
 
-HEREDOC_CONTENT=$(awk '
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-  /^MONITOR_EOF$/ { found=0; next }
-  found { print }
-' "$MILL_SCRIPT")
+HEREDOC_CONTENT=$(cat "$MONITOR_SCRIPT_FILE")
 
-cleanup_defs=$(grep -c '^cleanup_completed_task()' "$MILL_SCRIPT" || true)
+cleanup_defs=$(( $(grep -c '^cleanup_completed_task()' "$MILL_SCRIPT" || true) + $(grep -c '^cleanup_completed_task()' "$MONITOR_SCRIPT_FILE" || true) ))
 if [[ "$cleanup_defs" == "2" ]]; then
   pass "cleanup_completed_task remains patched in both script contexts"
 else
   fail "expected two cleanup_completed_task definitions, found $cleanup_defs"
 fi
 
-remote_cleanup_defs=$(grep -c '^cleanup_remote_task_branch()' "$MILL_SCRIPT" || true)
+remote_cleanup_defs=$(( $(grep -c '^cleanup_remote_task_branch()' "$MILL_SCRIPT" || true) + $(grep -c '^cleanup_remote_task_branch()' "$MONITOR_SCRIPT_FILE" || true) ))
 if [[ "$remote_cleanup_defs" == "2" ]]; then
   pass "cleanup_remote_task_branch exists in both script contexts"
 else
@@ -47,10 +44,10 @@ outer_cleanup=$(awk '
 ' "$MILL_SCRIPT")
 
 monitor_cleanup=$(awk '
-  /^cleanup_completed_task\(\) \{/ { count++; if (count == 2) in_fn=1 }
+  /^cleanup_completed_task\(\) \{/ { count++; if (count == 1) in_fn=1 }
   in_fn { print }
   in_fn && /^}$/ { exit }
-' "$MILL_SCRIPT")
+' "$MONITOR_SCRIPT_FILE")
 
 outer_remote_cleanup=$(awk '
   /^cleanup_remote_task_branch\(\) \{/ { count++; if (count == 1) in_fn=1 }
@@ -59,10 +56,10 @@ outer_remote_cleanup=$(awk '
 ' "$MILL_SCRIPT")
 
 monitor_remote_cleanup=$(awk '
-  /^cleanup_remote_task_branch\(\) \{/ { count++; if (count == 2) in_fn=1 }
+  /^cleanup_remote_task_branch\(\) \{/ { count++; if (count == 1) in_fn=1 }
   in_fn { print }
   in_fn && /^}$/ { exit }
-' "$MILL_SCRIPT")
+' "$MONITOR_SCRIPT_FILE")
 
 if grep -Fq 'cleanup_remote_task_branch "$issue" "$task_branch" "$pr"' <<< "$HEREDOC_CONTENT" \
   && grep -Fq 'cleanup_remote_task_branch "$issue" "$task_branch" "$pr"' <<< "$outer_cleanup"; then
