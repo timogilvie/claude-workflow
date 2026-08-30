@@ -173,11 +173,11 @@ SAVE_STATE_HELPER="$(awk '
   /^save_task_state\(\) \{/ { count++; if (count == 1) capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MONITOR_SCRIPT_FILE")"
+' "$REPO_DIR/shared/lib/wavemill-common.sh")"
 
 if [[ -n "$SAVE_STATE_HELPER" ]]; then
-  check_contains "runtime state saves preserve projected challenge intent" "$SAVE_STATE_HELPER" '(.tasks[$issue].challengeIntent // null) as $old_challenge_intent'
-  check_contains "runtime state writes projected challenge intent back" "$SAVE_STATE_HELPER" 'challengeIntent: $old_challenge_intent'
+  check_contains "canonical state writer merges over the stored task object" "$SAVE_STATE_HELPER" '.tasks[$issue] = ($existing + {'
+  check_contains "canonical state writer is atomic via state_mutate" "$SAVE_STATE_HELPER" 'state_mutate "$STATE_FILE"'
 
   # Exercise the production helper: startup pairing stores this projected
   # contract before either member is expanded, and later state updates must not
@@ -188,7 +188,6 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   source "$REPO_DIR/shared/lib/wavemill-common.sh"
   log_warn() { :; }
   STATE_FILE="$RUNTIME_STATE_FILE"
-  eval "$SAVE_STATE_HELPER"
   save_task_state "HOK-2724_c" "native-review" "task/native-review" "/tmp/native-review" "" "coding" "codex" "HOK-2724_c" "true" "HOK-2724" "challenger" "qwen-3-coder" "bootstrap-planner" "bootstrap-coder" "qwen-3-coder" "light" "medium" "llm" "review"
   if [[ "$(jq -r '.tasks["HOK-2724_c"].challengeIntent.challenger.expectedRoute.reviewer' "$RUNTIME_STATE_FILE")" == "qwen-3-coder" ]]; then
     pass "runtime state update retains challenge intent for native reviewer"
@@ -270,7 +269,7 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   fi
   rm -rf "$RUNTIME_STATE_TMP"
 else
-  fail "could not extract runtime save_task_state helper"
+  fail "could not extract canonical save_task_state helper from wavemill-common.sh"
 fi
 
 DIVERGE_HELPER="$(awk '

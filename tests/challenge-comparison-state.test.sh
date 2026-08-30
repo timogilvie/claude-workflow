@@ -42,9 +42,9 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 FUNCTION_FILE="$TEST_TMP/challenge-comparison-functions.sh"
-extract_function_occurrence "$MONITOR_SCRIPT_FILE" "save_task_state" 1 > "$FUNCTION_FILE"
-printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MONITOR_SCRIPT_FILE" "sanitize_job_token" 1 >> "$FUNCTION_FILE"
+# save_task_state is provided by sourcing wavemill-common.sh below (HOK-2900
+# canonicalization); only monitor-local helpers are extracted here.
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "sanitize_job_token" 1 > "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MONITOR_SCRIPT_FILE" "challenge_job_dir" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
@@ -57,7 +57,7 @@ printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MONITOR_SCRIPT_FILE" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
 
 if [[ ! -s "$FUNCTION_FILE" ]]; then
-  echo "Could not extract monitor save_task_state()"
+  echo "Could not extract monitor challenge comparison helpers"
   exit 1
 fi
 
@@ -172,7 +172,7 @@ bash -lc '
 
 mapfile -t RESULTS < "$TEST_DIR/output.txt"
 
-check_eq "challengeCompared survives monitor save_task_state" "true" "${RESULTS[0]:-}"
+check_eq "challengeCompared survives canonical save_task_state" "true" "${RESULTS[0]:-}"
 check_eq "merge update still sets merged status" "merged" "${RESULTS[1]:-}"
 check_eq "comparison does not relaunch when already compared" "0" "${RESULTS[2]:-}"
 check_eq "active comparison job suppresses duplicate launch" "0" "${RESULTS[3]:-}"

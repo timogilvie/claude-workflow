@@ -710,130 +710,9 @@ trap monitor_err_trap ERR
 # ============================================================================
 # STATE MANAGEMENT FUNCTIONS
 # ============================================================================
-# These functions manage task state in the workflow state file.
-# Defined inline to avoid sourcing dependencies (similar to logging functions).
-
-save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
-  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
-  local challenge_stage="${19:-}"
-  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
-    return 1
-  fi
-
-  # Resolve traceId from feature directory (HOK-2259) — best-effort, never fails
-  local _trace_id_for_state=""
-  for _dir_prefix in features bugs; do
-    local _ctx_candidate="$worktree/$_dir_prefix/$slug/.trace-context.json"
-    if [[ -f "$_ctx_candidate" ]]; then
-      _trace_id_for_state=$(jq -r '.traceId // empty' "$_ctx_candidate" 2>/dev/null || true)
-      break
-    fi
-  done
-
-  if ! state_mutate "$STATE_FILE" \
-     '(.tasks[$issue].agent // "") as $old_agent |
-      (.tasks[$issue].phase // "executing") as $old_phase |
-      (.tasks[$issue].evalCompleted // false) as $old_eval |
-      (.tasks[$issue].evalFailed // false) as $old_eval_failed |
-      (.tasks[$issue].evalHardFailureRetryCount // 0) as $old_eval_hard_failure_retry_count |
-      (.tasks[$issue].challengeCompared // false) as $old_challenge_compared |
-      (.tasks[$issue].challenge // false) as $old_challenge |
-      (.tasks[$issue].challengePairId // "") as $old_challenge_pair |
-      (.tasks[$issue].challengeRole // "") as $old_challenge_role |
-      (.tasks[$issue].challengeModel // "") as $old_challenge_model |
-      (.tasks[$issue].challengeStage // "") as $old_challenge_stage |
-      # challengeIntent is the projected, route-preservation contract created
-      # before either member of a challenge pair is expanded.  Keep it across
-      # status updates so apply_expanded_route_if_present can still protect the
-      # selected arm when a challenger reaches coding first.
-      (.tasks[$issue].challengeIntent // null) as $old_challenge_intent |
-      (.tasks[$issue].challengeExecutionIntent // null) as $old_challenge_execution_intent |
-      # The varied stage model/agent are the launch-time backstop for plan- and
-      # review-stage challenges, mirroring challengeModel for implementation.
-      # A status update must never drop them or the arm loses its last defense.
-      (.tasks[$issue].challengeVariedModel // "") as $old_challenge_varied_model |
-      (.tasks[$issue].challengeVariedAgent // "") as $old_challenge_varied_agent |
-      (.tasks[$issue].evalRunning // null) as $old_eval_running |
-      (.tasks[$issue].comparisonRunning // null) as $old_comparison_running |
-      (.tasks[$issue].comparisonState // null) as $old_comparison_state |
-      (.tasks[$issue].comparisonBlockedReason // null) as $old_comparison_blocked_reason |
-      (.tasks[$issue].comparisonRetryCount // null) as $old_comparison_retry_count |
-      (.tasks[$issue].comparisonRetryMaxAttempts // null) as $old_comparison_retry_max_attempts |
-      (.tasks[$issue].comparisonRetryTargetIssue // null) as $old_comparison_retry_target_issue |
-      (.tasks[$issue].comparisonTimedOutSides // null) as $old_comparison_timed_out_sides |
-      (.tasks[$issue].manualComparisonArtifact // null) as $old_manual_comparison_artifact |
-      (.tasks[$issue].linearIssueId // $issue) as $old_linear_issue |
-      (.tasks[$issue].coderModel // "") as $old_coderModel |
-      (.tasks[$issue].plannerModel // "") as $old_plannerModel |
-      (.tasks[$issue].reviewerModel // "") as $old_reviewerModel |
-      (.tasks[$issue].planDepth // "") as $old_planDepth |
-      (.tasks[$issue].codeDepth // "") as $old_codeDepth |
-      (.tasks[$issue].reviewMode // "") as $old_reviewMode |
-      (.tasks[$issue].traceId // "") as $old_traceId |
-      # Why a launch failed must outlive the status update that follows it.
-      # The monitor marks a failed task "error" a few seconds after
-      # mark_task_needs_user_and_defer records the diagnosis, and this writer
-      # REPLACES the task object rather than merging it — so any field missing
-      # from the literal below is silently dropped. launchFailure was, which is
-      # what made "No PR created" the only surviving trace of a routing failure.
-      # Cleared on the next launch attempt in launch_task.
-      (.tasks[$issue].launchFailure // null) as $old_launch_failure |
-      .tasks[$issue] = {
-        slug: $slug,
-        branch: $branch,
-        worktree: $worktree,
-        pr: $pr,
-        status: $status,
-        linearIssueId: (if $linearIssue != "" then $linearIssue else $old_linear_issue end),
-        agent: (if $agent != "" then $agent else $old_agent end),
-        challenge: (if $challenge != "" then ($challenge == "true") else $old_challenge end),
-        challengePairId: (if $challengePair != "" then $challengePair else $old_challenge_pair end),
-        challengeRole: (if $challengeRole != "" then $challengeRole else $old_challenge_role end),
-        challengeModel: (if $challengeModel != "" then $challengeModel else $old_challenge_model end),
-        challengeStage: (if $challengeStage != "" then $challengeStage else $old_challenge_stage end),
-        challengeIntent: $old_challenge_intent,
-        challengeExecutionIntent: $old_challenge_execution_intent,
-        challengeVariedModel: $old_challenge_varied_model,
-        challengeVariedAgent: $old_challenge_varied_agent,
-        coderModel: (if $coderModel != "" then $coderModel else $old_coderModel end),
-        plannerModel: (if $plannerModel != "" then $plannerModel else $old_plannerModel end),
-        reviewerModel: (if $reviewerModel != "" then $reviewerModel else $old_reviewerModel end),
-        planDepth: (if $planDepth != "" then $planDepth else $old_planDepth end),
-        codeDepth: (if $codeDepth != "" then $codeDepth else $old_codeDepth end),
-        reviewMode: (if $reviewMode != "" then $reviewMode else $old_reviewMode end),
-        traceId: (if $traceId != "" then $traceId else $old_traceId end),
-        phase: $old_phase,
-        evalCompleted: $old_eval,
-        evalFailed: $old_eval_failed,
-        evalHardFailureRetryCount: $old_eval_hard_failure_retry_count,
-        challengeCompared: $old_challenge_compared,
-        evalRunning: $old_eval_running,
-        comparisonRunning: $old_comparison_running,
-        comparisonState: $old_comparison_state,
-        comparisonBlockedReason: $old_comparison_blocked_reason,
-        comparisonRetryCount: $old_comparison_retry_count,
-        comparisonRetryMaxAttempts: $old_comparison_retry_max_attempts,
-        comparisonRetryTargetIssue: $old_comparison_retry_target_issue,
-        comparisonTimedOutSides: $old_comparison_timed_out_sides,
-        manualComparisonArtifact: $old_manual_comparison_artifact,
-        launchFailure: $old_launch_failure,
-        updated: (now | todate)
-      }' \
-     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" \
-     --arg agent "$agent" --arg linearIssue "$linear_issue" --arg challenge "$challenge" \
-     --arg challengePair "$challenge_pair" --arg challengeRole "$challenge_role" \
-     --arg challengeModel "$challenge_model" \
-     --arg challengeStage "$challenge_stage" \
-     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
-     --arg traceId "$_trace_id_for_state"; then
-    log_warn "save_task_state: failed to save $issue"
-  fi
-}
+# These functions manage task state in the workflow state file. The canonical
+# save_task_state writer is provided by wavemill-common.sh (sourced above);
+# only monitor-local state helpers are defined here.
 
 mark_task_needs_user_and_defer() {
   local issue="$1" slug="${2:-}" reason="${3:-launch_failed}" detail="${4:-launch failed}"
@@ -4505,9 +4384,9 @@ emit_challenge_stage_failure_quarantine() {
 # ~21s span) cannot ride out a stall measured in minutes, so the mill relaunches
 # the whole phase instead: fresh session, minutes-scale spacing, bounded budget.
 #
-# The counter lives in the feature dir (not workflow state) because
-# save_task_state replaces task objects with a fixed field literal — any state
-# field not listed there is silently dropped. The file dies with the worktree.
+# The counter lives in the feature dir (not workflow state) so the retry
+# budget dies with the worktree instead of leaking across relaunches of the
+# same issue.
 
 challenger_transient_retry_file() {
   printf '%s\n' "$1/.challenger-transient-retries.json"
