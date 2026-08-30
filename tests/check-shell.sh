@@ -3135,7 +3135,7 @@ else
   fail "hook protocol routing writer is missing"
 fi
 
-if grep -q 'windowId' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" \
+if grep -q 'windowId' "$REPO_DIR/shared/lib/wavemill-common.sh" \
   && grep -q "display-message -p -t \"\\\$SESSION:\\\$win\" '#{window_id}'" "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
   pass "startup persists stable tmux windowId"
 else
