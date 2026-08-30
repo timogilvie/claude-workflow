@@ -782,40 +782,6 @@ init_state_ledger() {
 }
 
 
-save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
-  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
-  local challenge_stage="${19:-}"
-  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
-    return 1
-  fi
-  if ! state_mutate "$STATE_FILE" \
-     '.tasks[$issue] = (.tasks[$issue] // {}) + {slug: $slug, branch: $branch, worktree: $worktree, pr: $pr, status: $status, linearIssueId: $linearIssue, updated: (now | todate)}
-      | if $agent != "" then .tasks[$issue].agent = $agent else . end
-      | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
-      | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
-      | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
-      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
-      | if $challengeStage != "" then .tasks[$issue].challengeStage = $challengeStage else . end
-      | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
-      | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
-      | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
-      | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
-      | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
-      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end' \
-     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
-     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-     --arg challengeStage "$challenge_stage" \
-     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode"; then
-    log_warn "save_task_state: failed to update $issue"
-  fi
-}
-
 mark_challenge_eval_running() {
   local issue="$1" side="$2" pr="$3" phase="${4:-eval}"
   state_mutate "$STATE_FILE" '

@@ -70,8 +70,9 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 
 FUNCTION_FILE="$TEST_TMP/challenge-running-functions.sh"
 : > "$FUNCTION_FILE"
+# save_task_state is provided by sourcing wavemill-common.sh below (HOK-2900
+# canonicalization); only monitor-local helpers are extracted here.
 for fn in \
-  save_task_state:1:monitor \
   mark_challenge_eval_running:1:mill \
   clear_challenge_eval_running:1:mill \
   mark_challenge_comparison_running:1:mill \

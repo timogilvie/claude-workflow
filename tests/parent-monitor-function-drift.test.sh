@@ -7,7 +7,9 @@ CLI="$REPO_DIR/tools/check-parent-monitor-drift.ts"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
-EXPECTED_DIVERGENT=$'_with_timeout\ncleanup_completed_task\ncleanup_remote_task_branch\nget_task_phase\nlinear_is_completed\nlinear_set_state\npr_state\nremove_task_state\nresolve_challenge_pair_hard_failure\nsave_task_state\nvalidate_pr_merge'
+# HOK-2900: the parent/monitor save_task_state pair is gone — the canonical
+# writer lives in shared/lib/wavemill-common.sh and both live scopes source it.
+EXPECTED_DIVERGENT=$'_with_timeout\ncleanup_completed_task\ncleanup_remote_task_branch\nget_task_phase\nlinear_is_completed\nlinear_set_state\npr_state\nremove_task_state\nresolve_challenge_pair_hard_failure\nvalidate_pr_merge'
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wavemill-parent-monitor-drift.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
@@ -49,9 +51,9 @@ identical_count="$(jq '.identical | length' "$baseline_json")"
 divergent_count="$(jq '.divergent | length' "$baseline_json")"
 divergent_names="$(jq -r '.divergent[].name' "$baseline_json" | sort)"
 
-assert_eq "$duplicated_count" "45" "duplicated parent/monitor function count changed"
+assert_eq "$duplicated_count" "44" "duplicated parent/monitor function count changed"
 assert_eq "$identical_count" "34" "byte-identical parent/monitor function count changed"
-assert_eq "$divergent_count" "11" "allowlisted divergent parent/monitor function count changed"
+assert_eq "$divergent_count" "10" "allowlisted divergent parent/monitor function count changed"
 assert_eq "$divergent_names" "$EXPECTED_DIVERGENT" "allowlisted divergent parent/monitor function names changed"
 
 mutated_monitor="$work_dir/mutated-identical-monitor.sh"
@@ -86,6 +88,6 @@ printf '%s' "$probe_function" >> "$new_duplicate_monitor"
 new_duplicate_json="$work_dir/new-duplicate.json"
 run_json "$new_duplicate_parent" "$new_duplicate_monitor" > "$new_duplicate_json"
 new_duplicate_count="$(jq '.duplicated | length' "$new_duplicate_json")"
-assert_eq "$new_duplicate_count" "46" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
+assert_eq "$new_duplicate_count" "45" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
 
 echo "parent-monitor-function-drift: ok"
