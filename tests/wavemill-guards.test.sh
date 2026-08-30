@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -34,10 +34,10 @@ extract_function() {
   ' "$source_file"
 }
 
-eval "$(extract_function "$MILL_SCRIPT" coding_output_dirty_paths)"
-eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_feature_artifact_path)"
-eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_dirty_path)"
-eval "$(extract_function "$MILL_SCRIPT" blocked_completion_auto_allowed_dirty_path)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" coding_output_dirty_paths)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" wavemill_owned_feature_artifact_path)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" wavemill_owned_dirty_path)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" blocked_completion_auto_allowed_dirty_path)"
 
 allowed_by() {
   local fn="$1" path="$2" slug="${3:-guard-task}"

@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 extract_function() {
   local source_file="$1"
@@ -33,8 +33,8 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 helper_file="$tmp/primary-merge-helper.sh"
-extract_function "$MILL_SCRIPT" "resolve_pair_on_primary_merge" > "$helper_file"
-extract_function "$MILL_SCRIPT" "cleanup_merged_primary_challenge_task" >> "$helper_file"
+extract_function "$MONITOR_SCRIPT_FILE" "resolve_pair_on_primary_merge" > "$helper_file"
+extract_function "$MONITOR_SCRIPT_FILE" "cleanup_merged_primary_challenge_task" >> "$helper_file"
 
 case_dir="$tmp/case"
 mkdir -p "$case_dir/repo/.wavemill/evals"

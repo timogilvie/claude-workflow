@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -91,9 +91,9 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_task.sh"
-extract_function "$MILL_SCRIPT" "launch_task" > "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "launch_task" > "$LAUNCH_FUNC_FILE"
 CLEANUP_FUNC_FILE="$TEST_TMP/cleanup_completed_task.sh"
-extract_nth_function "$MILL_SCRIPT" "cleanup_completed_task" 2 > "$CLEANUP_FUNC_FILE"
+extract_nth_function "$MONITOR_SCRIPT_FILE" "cleanup_completed_task" 1 > "$CLEANUP_FUNC_FILE"
 
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
   echo "Could not extract launch_task()"

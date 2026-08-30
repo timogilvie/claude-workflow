@@ -8,11 +8,6 @@ export interface ShellFunction {
   bodyText: string;
 }
 
-export interface MonitorRegion {
-  parentRanges: Array<[number, number]>;
-  monitorRange: [number, number];
-}
-
 export interface DivergentEntry {
   name: string;
   parent: ShellFunction;
@@ -31,15 +26,15 @@ interface Heredoc {
   allowLeadingTabs: boolean;
 }
 
-interface MonitorHeredocRange {
-  openerLine: number;
-  terminatorLine: number;
-}
-
 const FUNCTION_START_PATTERNS = [
   /^([A-Za-z_][A-Za-z0-9_]*)\(\)[ \t]*\{[ \t]*$/,
   /^function[ \t]+([A-Za-z_][A-Za-z0-9_]*)(?:\(\))?[ \t]*\{[ \t]*$/,
 ];
+
+const SIDE_PATHS: Record<FunctionSide, string> = {
+  parent: 'shared/lib/wavemill-mill.sh',
+  monitor: 'shared/lib/wavemill-monitor.sh',
+};
 
 export class ParentMonitorDriftError extends Error {
   constructor(message: string) {
@@ -153,57 +148,7 @@ function renderLineDiff(parent: ShellFunction, monitor: ShellFunction): string {
 }
 
 export function formatFunctionLocation(fn: ShellFunction): string {
-  return `shared/lib/wavemill-mill.sh:${fn.startLine}-${fn.endLine}`;
-}
-
-export function splitMonitorRegion(scriptText: string): MonitorRegion {
-  const lines = splitLines(scriptText);
-  let active: Heredoc | null = null;
-  let activeOpenerLine = -1;
-  const ranges: MonitorHeredocRange[] = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!;
-
-    if (active) {
-      if (isHeredocTerminator(line, active)) {
-        if (active.tag === 'MONITOR_EOF') {
-          ranges.push({ openerLine: activeOpenerLine, terminatorLine: index });
-        }
-        active = null;
-      }
-      continue;
-    }
-
-    const [heredoc] = parseHeredocOpener(line);
-    if (heredoc) {
-      active = heredoc;
-      activeOpenerLine = index;
-    }
-  }
-
-  if (active) {
-    throw new ParentMonitorDriftError(`Unterminated heredoc ${active.tag} while locating MONITOR_EOF.`);
-  }
-  if (ranges.length === 0) {
-    throw new ParentMonitorDriftError(
-      'No MONITOR_EOF heredoc found. Delete the parent/monitor drift tests when the monitor is extracted.',
-    );
-  }
-  if (ranges.length > 1) {
-    throw new ParentMonitorDriftError(
-      `Expected one MONITOR_EOF heredoc, found ${ranges.length}. Update parent/monitor drift tests explicitly for the new structure.`,
-    );
-  }
-
-  const monitor = ranges[0]!;
-  return {
-    parentRanges: [
-      [0, monitor.openerLine],
-      [monitor.terminatorLine + 1, lines.length],
-    ],
-    monitorRange: [monitor.openerLine + 1, monitor.terminatorLine],
-  };
+  return `${SIDE_PATHS[fn.side]}:${fn.startLine}-${fn.endLine}`;
 }
 
 function extractFunctionsFromRange(
@@ -275,21 +220,16 @@ function extractFunctionsFromRange(
   return functions;
 }
 
-export function extractTopLevelFunctions(scriptText: string): ShellFunction[] {
+export function extractTopLevelFunctions(scriptText: string, side: FunctionSide): ShellFunction[] {
   const lines = splitLines(scriptText);
-  const regions = splitMonitorRegion(scriptText);
-  const functions: ShellFunction[] = [];
-
-  for (const [startIndex, endIndex] of regions.parentRanges) {
-    functions.push(...extractFunctionsFromRange(lines, startIndex, endIndex, 'parent'));
-  }
-  functions.push(...extractFunctionsFromRange(lines, regions.monitorRange[0], regions.monitorRange[1], 'monitor'));
-
-  return functions;
+  return extractFunctionsFromRange(lines, 0, lines.length, side);
 }
 
-export function compareParentMonitor(scriptText: string): DriftReport {
-  const functions = extractTopLevelFunctions(scriptText);
+export function compareParentMonitorFiles(parentText: string, monitorText: string): DriftReport {
+  const functions = [
+    ...extractTopLevelFunctions(parentText, 'parent'),
+    ...extractTopLevelFunctions(monitorText, 'monitor'),
+  ];
   const byName = new Map<string, Partial<Record<FunctionSide, ShellFunction>>>();
 
   for (const fn of functions) {

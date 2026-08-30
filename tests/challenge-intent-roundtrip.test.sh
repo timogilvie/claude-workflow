@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 source "$REPO_DIR/shared/lib/wavemill-common.sh"
 
@@ -49,7 +49,7 @@ eval "$(awk '
   /^persist_challenge_execution_intent\(\) \{/ { capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if ! declare -F persist_challenge_execution_intent >/dev/null 2>&1; then
   echo "  FAIL  could not load persist_challenge_execution_intent from the mill" >&2

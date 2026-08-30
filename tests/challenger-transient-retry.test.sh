@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -42,7 +42,7 @@ extract_function() {
       depth += brace_delta($0)
       if (depth == 0) exit
     }
-  ' "$MILL_SCRIPT"
+  ' "$MONITOR_SCRIPT_FILE"
 }
 
 for fn in \
