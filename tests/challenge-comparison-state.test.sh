@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -42,7 +43,7 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 FUNCTION_FILE="$TEST_TMP/challenge-comparison-functions.sh"
-extract_function_occurrence "$MONITOR_SCRIPT_FILE" "save_task_state" 1 > "$FUNCTION_FILE"
+extract_function_occurrence "$COMMON_SCRIPT_FILE" "save_task_state" 1 > "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MONITOR_SCRIPT_FILE" "sanitize_job_token" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
@@ -57,7 +58,7 @@ printf '\n' >> "$FUNCTION_FILE"
 extract_function_occurrence "$MONITOR_SCRIPT_FILE" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
 
 if [[ ! -s "$FUNCTION_FILE" ]]; then
-  echo "Could not extract monitor save_task_state()"
+  echo "Could not extract save_task_state() from wavemill-common.sh"
   exit 1
 fi
 

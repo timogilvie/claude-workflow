@@ -61,6 +61,7 @@ TESTS=(
   control-layout.test.sh
   challenge-comparison-state.test.sh
   challenge-running-state.test.sh
+  save-task-state.test.sh
   challenge-eval-hard-failure.test.sh
   challenge-job-monitor-loop.test.sh
   task-selection-renderer.test.sh

@@ -127,6 +127,7 @@ for f in \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
+  "$REPO_DIR"/tests/save-task-state.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
   "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \

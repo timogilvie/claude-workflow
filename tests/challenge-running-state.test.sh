@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -71,7 +72,7 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 FUNCTION_FILE="$TEST_TMP/challenge-running-functions.sh"
 : > "$FUNCTION_FILE"
 for fn in \
-  save_task_state:1:monitor \
+  save_task_state:1:common \
   mark_challenge_eval_running:1:mill \
   clear_challenge_eval_running:1:mill \
   mark_challenge_comparison_running:1:mill \
@@ -89,6 +90,7 @@ do
   IFS=: read -r name occurrence source <<<"$fn"
   source_file="$MILL_SCRIPT"
   [[ "$source" == "monitor" ]] && source_file="$MONITOR_SCRIPT_FILE"
+  [[ "$source" == "common" ]] && source_file="$COMMON_SCRIPT_FILE"
   extract_function_occurrence "$source_file" "$name" "$occurrence" >> "$FUNCTION_FILE"
   printf '\n' >> "$FUNCTION_FILE"
 done

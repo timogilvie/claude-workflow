@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-common.sh"
 FIXTURE="$REPO_DIR/tests/fixtures/challenge-task-packet.md"
 
 PASS=0
@@ -173,7 +174,7 @@ SAVE_STATE_HELPER="$(awk '
   /^save_task_state\(\) \{/ { count++; if (count == 1) capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MONITOR_SCRIPT_FILE")"
+' "$COMMON_SCRIPT_FILE")"
 
 if [[ -n "$SAVE_STATE_HELPER" ]]; then
   check_contains "runtime state saves preserve projected challenge intent" "$SAVE_STATE_HELPER" '(.tasks[$issue].challengeIntent // null) as $old_challenge_intent'
