@@ -17,6 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 RUNNER_SCRIPT="$REPO_DIR/shared/lib/wavemill-startup-runner.sh"
 
 PASS=0
@@ -29,14 +30,10 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 HEREDOC_FILE="$TMP/monitor-heredoc.sh"
-awk '
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-  /^MONITOR_EOF$/ { found=0; next }
-  found { print }
-' "$MILL_SCRIPT" > "$HEREDOC_FILE"
+cp "$MONITOR_SCRIPT_FILE" "$HEREDOC_FILE"
 
 if [[ ! -s "$HEREDOC_FILE" ]]; then
-  echo "FATAL: Could not extract monitor heredoc from $MILL_SCRIPT"
+  echo "FATAL: Could not read monitor script from $MONITOR_SCRIPT_FILE"
   exit 1
 fi
 

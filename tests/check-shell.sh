@@ -128,6 +128,7 @@ for f in \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
+  "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
@@ -403,19 +404,14 @@ echo "=== Heredoc Function Availability (wavemill-mill.sh monitor script) ==="
 
 MILL_SCRIPT="$LIB_DIR/wavemill-mill.sh"
 
-if [[ ! -f "$MILL_SCRIPT" ]]; then
-  fail "wavemill-mill.sh not found"
+if [[ ! -f "$MILL_SCRIPT" || ! -f "$LIB_DIR/wavemill-monitor.sh" ]]; then
+  fail "wavemill-mill.sh or wavemill-monitor.sh not found"
 else
-  # Extract heredoc content (between <<'MONITOR_EOF' and ^MONITOR_EOF)
-  # Use awk to extract just the content (excluding the cat line and closing marker)
-  HEREDOC_CONTENT=$(awk '
-    /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-    /^MONITOR_EOF$/ { found=0; next }
-    found { print }
-  ' "$MILL_SCRIPT")
+  # Read the committed monitor script (formerly embedded as a MONITOR_EOF heredoc)
+  HEREDOC_CONTENT=$(cat "$LIB_DIR/wavemill-monitor.sh")
 
   if [[ -z "$HEREDOC_CONTENT" ]]; then
-    fail "Could not extract MONITOR_EOF heredoc from wavemill-mill.sh"
+    fail "Could not read monitor content from wavemill-monitor.sh"
   else
     # Use the same bash as the generated script shebang, but fall back for CI/non-macOS systems.
     MONITOR_BASH="/opt/homebrew/bin/bash"

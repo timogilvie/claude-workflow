@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 TMP_DIR="$(mktemp -d)"
@@ -72,11 +73,7 @@ rm -f "$COMMAND_FILE"
 
 source "$COMMON_SCRIPT"
 
-HEREDOC_CONTENT="$(awk '
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-  /^MONITOR_EOF$/ { found=0; next }
-  found { print }
-' "$MILL_SCRIPT")"
+HEREDOC_CONTENT="$(cat "$MONITOR_SCRIPT_FILE")"
 
 FUNCS_FILE="$TMP_DIR/monitor-funcs.sh"
 : > "$FUNCS_FILE"
@@ -115,7 +112,7 @@ source "$FUNCS_FILE"
 WATCHDOG_FUNCS_FILE="$TMP_DIR/watchdog-funcs.sh"
 : > "$WATCHDOG_FUNCS_FILE"
 for fn in ready_watchdog_config_json run_ready_watchdog_tick; do
-  extracted="$(extract_function "$MILL_SCRIPT" "$fn")"
+  extracted="$(extract_function "$MONITOR_SCRIPT_FILE" "$fn")"
   if [[ -z "$extracted" ]]; then
     echo "FAIL: missing extracted function $fn"
     exit 1
