@@ -27,7 +27,10 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   isRevisionAwareArtifact,
   phaseSatisfies,
+  allScenariosPassed,
+  isCertificationFresh,
   type CertificationPhase,
+  type NativeCertificationArtifact,
 } from './native-agent/certification/schema.ts';
 import { readCertification } from './native-agent/certification/store.ts';
 import {
@@ -73,6 +76,9 @@ export interface ModelTransitionSpec {
 
 export type PromotionMode = 'dry-run' | 'apply' | 'rollback';
 export type PromotionStatus = 'planned' | 'applied' | 'already_applied' | 'rolled_back';
+export type ActivationMode = 'dry-run' | 'apply';
+export type ActivationStatus = 'activated' | 'already_activated' | 'refused';
+export type ActivationOutcome = 'activated' | 'already_activated' | 'refused';
 export type CorpusKind = 'catalog' | 'json' | 'jsonl';
 
 export interface PromotionFileManifest {
@@ -144,6 +150,38 @@ export interface PromotionManifest {
   manifestPath?: string;
 }
 
+export interface ActivationManifest {
+  schemaVersion: '1';
+  activationId: string;
+  promotionId: string;
+  mode: ActivationMode;
+  status: ActivationStatus;
+  repoDir: string;
+  createdAt: string;
+  final: ModelTransitionSpec['final'];
+  target: {
+    modelId: string;
+    catalogPath: string;
+    beforeHash: string;
+    afterHash: string;
+  };
+  certification: {
+    artifactPath: string;
+    provider: string;
+    model: string;
+    suiteVersion: string;
+    phase: CertificationPhase;
+    certifiedAt: string;
+    identityRevision: number;
+    identityFingerprint: string;
+  };
+  outcome: ActivationOutcome;
+  fieldChanges: number;
+  changedFields: string[];
+  diagnostics: string[];
+  manifestPath?: string;
+}
+
 export interface PlanPromotionOptions {
   spec: ModelTransitionSpec;
   repoDir: string;
@@ -152,6 +190,16 @@ export interface PlanPromotionOptions {
 
 export interface ApplyPromotionOptions extends PlanPromotionOptions {
   manifest?: PromotionManifest;
+}
+
+export interface PlanActivationOptions {
+  spec: ModelTransitionSpec;
+  repoDir: string;
+  now?: string;
+}
+
+export interface ApplyActivationOptions extends PlanActivationOptions {
+  manifest?: ActivationManifest;
 }
 
 const TRANSITION_SCHEMA = JSON.parse(
@@ -1383,4 +1431,450 @@ function cleanupTemps(files: PlannedFile[]): void {
 function isAlreadyApplied(spec: ModelTransitionSpec, repoDir: string): boolean {
   const plan = buildPromotionPlan({ spec, repoDir });
   return plan.manifest.status === 'already_applied';
+}
+
+// =============================================================================
+// ACTIVATION LOGIC
+// =============================================================================
+
+function activationDir(repoDir: string, spec: ModelTransitionSpec): string {
+  return join(repoDir, '.wavemill', 'model-promotions', spec.promotionId);
+}
+
+function activationManifestPath(repoDir: string, spec: ModelTransitionSpec): string {
+  return join(activationDir(repoDir, spec), `${spec.promotionId}.activation.manifest.json`);
+}
+
+function activationBackupPathFor(repoDir: string, spec: ModelTransitionSpec, filePath: string): string {
+  const rel = relative(repoDir, filePath);
+  return join(activationDir(repoDir, spec), 'backups', rel);
+}
+
+function activationTempPathFor(path: string, spec: ModelTransitionSpec): string {
+  return join(dirname(path), `.${basename(path)}.${spec.promotionId}.${process.pid}.activation-tmp`);
+}
+
+/**
+ * Validate that a certification artifact exists and is valid for the final model.
+ * Returns the artifact if valid, throws an error otherwise.
+ */
+function validateCertificationForActivation(
+  spec: ModelTransitionSpec,
+  repoDir: string,
+): NativeCertificationArtifact {
+  const catalogPath = resolveCatalogPath(repoDir, spec);
+  if (!catalogPath || !existsSync(catalogPath)) {
+    throw new Error(`Catalog not found for activation: ${catalogPath ?? 'no catalog path'}`);
+  }
+
+  const catalog = loadModelRegistryCatalog(catalogPath);
+  const registry = projectModelRegistryCatalog(catalog);
+  const finalCapabilities = registry.models[spec.final.alias];
+  if (!finalCapabilities) {
+    throw new Error(`Final model ${spec.final.alias} not found in catalog`);
+  }
+
+  // Derive required suite version and phase from the final capabilities
+  const suiteVersion = finalCapabilities.supportedModel?.certificationSuiteVersion
+    ?? finalCapabilities.nativeCapability?.certification?.certificationSuiteVersion;
+  if (!suiteVersion) {
+    throw new Error(`Final model ${spec.final.alias} has no certificationSuiteVersion`);
+  }
+
+  const requiredPhase = highestRequiredPhase(finalCapabilities.supportedModel?.requiredCertificationPhaseByStage)
+    ?? finalCapabilities.nativeCapability?.certification?.maxCertifiedPhase
+    ?? 'read-only';
+
+  // Resolve the expected certification subject
+  const subject = resolveCertificationSubject({
+    provider: finalCapabilities.nativeCapability?.nativeProvider ?? 'openrouter',
+    model: spec.final.alias,
+    registry,
+  }).subject;
+
+  // Discover and validate certification artifacts
+  const certs = discoverCertificationFiles(repoDir);
+  for (const certPath of certs) {
+    const result = readCertification(certPath);
+    if (!result.ok || !isRevisionAwareArtifact(result.artifact)) {
+      continue;
+    }
+    if (
+      result.artifact.schemaVersion === CERTIFICATION_SCHEMA_VERSION
+      && result.artifact.suiteVersion === suiteVersion
+      && phaseSatisfies(result.artifact.phase, requiredPhase)
+      && subjectsEqual(result.artifact.subject, subject)
+      && allScenariosPassed(result.artifact)
+      && isCertificationFresh(result.artifact, new Date())
+    ) {
+      return result.artifact;
+    }
+  }
+
+  throw new Error(
+    `Activation failed: Model ${spec.final.alias} is not certified for the required phase. ` +
+    `Required: suiteVersion=${suiteVersion}, phase=${requiredPhase}, subject.registryKey=${subject.registryKey}`,
+  );
+}
+
+/**
+ * Check if the model is already activated (all five fields are in the activated state).
+ */
+function isAlreadyActivated(spec: ModelTransitionSpec, repoDir: string): boolean {
+  const catalogPath = resolveCatalogPath(repoDir, spec);
+  if (!catalogPath || !existsSync(catalogPath)) {
+    return false;
+  }
+
+  const catalog = loadModelRegistryCatalog(catalogPath);
+  const registry = projectModelRegistryCatalog(catalog);
+  const finalCapabilities = registry.models[spec.final.alias];
+  if (!finalCapabilities) {
+    return false;
+  }
+
+  // Check all five activation fields
+  const nativeCap = finalCapabilities.nativeCapability;
+  const supported = finalCapabilities.supportedModel;
+  const identity = finalCapabilities.identity;
+
+  return (
+    nativeCap?.readOnlyNative === 'certified'
+    && nativeCap?.certification?.certifiedAt !== undefined
+    && supported?.launchEligible === true
+    && supported?.routingEligible === true
+    && identity?.evidencePolicy === 'eligible'
+  );
+}
+
+/**
+ * Build the activation plan without writing any files.
+ */
+function buildActivationPlan(options: PlanActivationOptions): { manifest: ActivationManifest; content: string } {
+  const spec = validateModelTransitionSpec(options.spec);
+  const repoDir = resolve(options.repoDir);
+  const now = options.now ?? new Date().toISOString();
+
+  // First validate certification - this must pass before we even check idempotency
+  let artifact: NativeCertificationArtifact;
+  try {
+    artifact = validateCertificationForActivation(spec, repoDir);
+  } catch (error) {
+    // Return a refused manifest
+    const catalogPath = resolveCatalogPath(repoDir, spec);
+    const beforeHash = catalogPath && existsSync(catalogPath) ? sha256(readFileSync(catalogPath, 'utf-8')) : '';
+    
+    return {
+      manifest: {
+        schemaVersion: '1',
+        activationId: spec.manifestId ?? spec.promotionId,
+        promotionId: spec.promotionId,
+        mode: 'dry-run',
+        status: 'refused',
+        repoDir,
+        createdAt: now,
+        final: spec.final,
+        target: {
+          modelId: spec.final.alias,
+          catalogPath: catalogPath ?? '',
+          beforeHash,
+          afterHash: beforeHash,
+        },
+        certification: {
+          artifactPath: '',
+          provider: '',
+          model: '',
+          suiteVersion: '',
+          phase: 'read-only',
+          certifiedAt: '',
+          identityRevision: 0,
+          identityFingerprint: '',
+        },
+        outcome: 'refused',
+        fieldChanges: 0,
+        changedFields: [],
+        diagnostics: [String(error)],
+        manifestPath: activationManifestPath(repoDir, spec),
+      },
+      content: readFileSync(catalogPath ?? '', 'utf-8'),
+    };
+  }
+
+  const catalogPath = resolveCatalogPath(repoDir, spec);
+  if (!catalogPath || !existsSync(catalogPath)) {
+    throw new Error(`Catalog not found: ${catalogPath ?? 'no catalog path'}`);
+  }
+
+  const beforeContent = readFileSync(catalogPath, 'utf-8');
+  const beforeHash = sha256(beforeContent);
+  const catalog = loadModelRegistryCatalog(catalogPath);
+  const registry = projectModelRegistryCatalog(catalog);
+  const finalCapabilities = registry.models[spec.final.alias];
+  if (!finalCapabilities) {
+    throw new Error(`Final model ${spec.final.alias} not found in catalog`);
+  }
+
+  // Check if already activated
+  if (isAlreadyActivated(spec, repoDir)) {
+    return {
+      manifest: {
+        schemaVersion: '1',
+        activationId: spec.manifestId ?? spec.promotionId,
+        promotionId: spec.promotionId,
+        mode: 'dry-run',
+        status: 'already_activated',
+        repoDir,
+        createdAt: now,
+        final: spec.final,
+        target: {
+          modelId: spec.final.alias,
+          catalogPath,
+          beforeHash,
+          afterHash: beforeHash,
+        },
+        certification: {
+          artifactPath: buildLegacyRepoCertificationPath(repoDir, artifact.provider, artifact.model, artifact.suiteVersion),
+          provider: artifact.provider,
+          model: artifact.model,
+          suiteVersion: artifact.suiteVersion,
+          phase: artifact.phase,
+          certifiedAt: artifact.certifiedAt,
+          identityRevision: artifact.subject.identityRevision,
+          identityFingerprint: artifact.subject.identityFingerprint,
+        },
+        outcome: 'already_activated',
+        fieldChanges: 0,
+        changedFields: [],
+        diagnostics: ['model already activated; no writes planned'],
+        manifestPath: activationManifestPath(repoDir, spec),
+      },
+      content: beforeContent,
+    };
+  }
+
+  // Build the activated catalog entry
+  const activatedCatalog = activateModelEntry(catalog, spec, artifact, now);
+  const afterContent = `${JSON.stringify(activatedCatalog, null, 2)}\n`;
+  const afterHash = sha256(afterContent);
+
+  // Count the changed fields
+  const changedFields = countActivationFieldChanges(finalCapabilities);
+
+  const manifest: ActivationManifest = {
+    schemaVersion: '1',
+    activationId: spec.manifestId ?? spec.promotionId,
+    promotionId: spec.promotionId,
+    mode: 'dry-run',
+    status: 'activated',
+    repoDir,
+    createdAt: now,
+    final: spec.final,
+    target: {
+      modelId: spec.final.alias,
+      catalogPath,
+      beforeHash,
+      afterHash,
+    },
+    certification: {
+      artifactPath: buildLegacyRepoCertificationPath(repoDir, artifact.provider, artifact.model, artifact.suiteVersion),
+      provider: artifact.provider,
+      model: artifact.model,
+      suiteVersion: artifact.suiteVersion,
+      phase: artifact.phase,
+      certifiedAt: artifact.certifiedAt,
+      identityRevision: artifact.subject.identityRevision,
+      identityFingerprint: artifact.subject.identityFingerprint,
+    },
+    outcome: 'activated',
+    fieldChanges: changedFields.length,
+    changedFields,
+    diagnostics: [],
+    manifestPath: activationManifestPath(repoDir, spec),
+  };
+
+  return { manifest, content: afterContent };
+}
+
+/**
+ * Count which activation fields will change.
+ */
+function countActivationFieldChanges(capabilities: ModelCapabilities): string[] {
+  const changes: string[] = [];
+  const nativeCap = capabilities.nativeCapability;
+  const supported = capabilities.supportedModel;
+  const identity = capabilities.identity;
+
+  if (nativeCap?.readOnlyNative !== 'certified') {
+    changes.push('nativeCapability.readOnlyNative');
+  }
+  if (nativeCap?.certification?.certifiedAt === undefined) {
+    changes.push('nativeCapability.certification.certifiedAt');
+  }
+  if (supported?.launchEligible !== true) {
+    changes.push('supportedModel.launchEligible');
+  }
+  if (supported?.routingEligible !== true) {
+    changes.push('supportedModel.routingEligible');
+  }
+  if (identity?.evidencePolicy !== 'eligible') {
+    changes.push('identity.evidencePolicy');
+  }
+
+  return changes;
+}
+
+/**
+ * Activate a single model entry in the catalog.
+ */
+function activateModelEntry(
+  catalog: ModelRegistryCatalog,
+  spec: ModelTransitionSpec,
+  artifact: NativeCertificationArtifact,
+  now: string,
+): ModelRegistryCatalog {
+  const registry = projectModelRegistryCatalog(catalog);
+  const finalCapabilities = registry.models[spec.final.alias];
+  if (!finalCapabilities) {
+    throw new Error(`Final model ${spec.final.alias} not found in catalog`);
+  }
+
+  // Clone the catalog to avoid mutating the original
+  const activatedCatalog = JSON.parse(JSON.stringify(catalog)) as ModelRegistryCatalog;
+  const activatedEntry = activatedCatalog.models.find((entry) => entry.id === spec.final.alias);
+  if (!activatedEntry) {
+    throw new Error(`Final model ${spec.final.alias} not found in catalog models array`);
+  }
+
+  // Ensure we have the structures we need
+  if (!activatedEntry.capabilities.nativeCapability) {
+    activatedEntry.capabilities.nativeCapability = {};
+  }
+  if (!activatedEntry.capabilities.nativeCapability.certification) {
+    activatedEntry.capabilities.nativeCapability.certification = {};
+  }
+  if (!activatedEntry.capabilities.supportedModel) {
+    activatedEntry.capabilities.supportedModel = {};
+  }
+  if (!activatedEntry.capabilities.identity) {
+    activatedEntry.capabilities.identity = {};
+  }
+
+  // Apply the five activation field changes
+  activatedEntry.capabilities.nativeCapability.readOnlyNative = 'certified';
+  activatedEntry.capabilities.nativeCapability.certification.certifiedAt = artifact.certifiedAt;
+  activatedEntry.capabilities.supportedModel.launchEligible = true;
+  activatedEntry.capabilities.supportedModel.routingEligible = true;
+  activatedEntry.capabilities.identity.evidencePolicy = 'eligible';
+
+  return activatedCatalog;
+}
+
+/**
+ * Legacy path builder for certification artifacts (compatibility with existing store).
+ */
+function buildLegacyRepoCertificationPath(
+  repoDir: string,
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): string {
+  return join(repoDir, '.wavemill', 'native-agent-certifications', provider, model, `${suiteVersion}.json`);
+}
+
+export function planModelActivation(options: PlanActivationOptions): ActivationManifest {
+  return buildActivationPlan(options).manifest;
+}
+
+export function applyModelActivation(options: ApplyActivationOptions): ActivationManifest {
+  const repoDir = resolve(options.repoDir);
+  const manifestPath = activationManifestPath(repoDir, options.spec);
+  
+  // Check if already activated via existing manifest
+  if (existsSync(manifestPath)) {
+    const existing = JSON.parse(readFileSync(manifestPath, 'utf-8')) as ActivationManifest;
+    if (existing.status === 'activated' || existing.status === 'already_activated') {
+      if (isAlreadyActivated(options.spec, repoDir)) {
+        return {
+          ...existing,
+          mode: 'apply',
+          status: 'already_activated',
+          diagnostics: [...existing.diagnostics, 'activation already applied; no writes performed'],
+        };
+      }
+    }
+  }
+
+  const plan = options.manifest
+    ? rebuildActivationPlanFromManifest(options, options.manifest)
+    : buildActivationPlan({ ...options, repoDir });
+  
+  if (plan.manifest.status === 'already_activated' || plan.manifest.outcome === 'already_activated') {
+    return plan.manifest;
+  }
+
+  if (plan.manifest.outcome === 'refused') {
+    // Write the refusal manifest but don't modify the catalog
+    mkdirSync(activationDir(repoDir, options.spec), { recursive: true });
+    const manifest: ActivationManifest = {
+      ...plan.manifest,
+      mode: 'apply',
+      status: 'refused',
+    };
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+    return manifest;
+  }
+
+  // Apply the activation with safe write pattern
+  const catalogPath = resolveCatalogPath(repoDir, options.spec);
+  if (!catalogPath) {
+    throw new Error('No catalog path for activation');
+  }
+
+  const currentHash = sha256(readFileSync(catalogPath, 'utf-8'));
+  if (currentHash !== plan.manifest.target.beforeHash) {
+    throw new Error(`Refusing to apply stale activation plan; hash changed for ${plan.manifest.target.catalogPath}`);
+  }
+
+  // Create backup
+  const backupPath = activationBackupPathFor(repoDir, options.spec, catalogPath);
+  mkdirSync(dirname(backupPath), { recursive: true });
+  if (!existsSync(backupPath)) {
+    copyFileSync(catalogPath, backupPath);
+  }
+
+  // Write temp file
+  const tempPath = activationTempPathFor(catalogPath, options.spec);
+  writeFileSync(tempPath, plan.content, 'utf-8');
+  const stagedHash = sha256(readFileSync(tempPath, 'utf-8'));
+  if (stagedHash !== plan.manifest.target.afterHash) {
+    unlinkSync(tempPath);
+    throw new Error(`Internal error: staged hash mismatch for ${catalogPath}`);
+  }
+
+  // Atomic rename
+  renameSync(tempPath, catalogPath);
+
+  // Write activation manifest
+  mkdirSync(activationDir(repoDir, options.spec), { recursive: true });
+  const appliedManifest: ActivationManifest = {
+    ...plan.manifest,
+    mode: 'apply',
+    status: 'activated',
+    manifestPath,
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(appliedManifest, null, 2)}\n`, 'utf-8');
+  
+  return appliedManifest;
+}
+
+function rebuildActivationPlanFromManifest(
+  options: ApplyActivationOptions,
+  manifest: ActivationManifest,
+): { manifest: ActivationManifest; content: string } {
+  const fresh = buildActivationPlan(options);
+  if (fresh.manifest.target.beforeHash !== manifest.target.beforeHash
+      || fresh.manifest.target.afterHash !== manifest.target.afterHash) {
+    throw new Error(`Supplied manifest no longer matches ${manifest.target.catalogPath}`);
+  }
+  return fresh;
 }

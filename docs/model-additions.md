@@ -147,8 +147,19 @@ under `.wavemill/model-promotions/<promotionId>/`. Land the final entry
 conservatively (`evidencePolicy: "held"`, launch/routing false,
 `readOnlyNative: "partial"`), then live-smoke and freshly certify the final
 subject — the old certificate can never match the new subject fingerprint —
-and only then flip certification metadata, launch/routing eligibility, and
-`evidencePolicy: "eligible"` in a separate explicit catalog change.
+and only then run the activation step:
+
+```bash
+npx tsx tools/promote-provisional-model.ts --spec transitions/<old>-to-<new>.json --repo-dir . --activate
+```
+
+The `--activate` command verifies the existence of a valid certification artifact
+for the final model, then updates `readOnlyNative: "certified"`, sets
+`certifiedAt` from the artifact, enables `launchEligible` and `routingEligible`,
+and sets `evidencePolicy: "eligible"`. It writes an activation manifest under
+`.wavemill/model-promotions/<promotionId>/` and is idempotent on re-run.
+
+**Manual registry edits remain forbidden.** The `--apply` → certification/reconciliation → `--activate` sequence is the prescribed workflow.
 
 **Ox Alpha → GLM 5.3 Flash (2026-08-27).** OpenRouter disclosed `ox-alpha`
 (`stealth/ox-alpha`) as **GLM 5.3 Flash** (`z-ai/glm-5.3-flash`, family
