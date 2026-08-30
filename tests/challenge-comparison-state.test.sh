@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -42,19 +42,19 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 FUNCTION_FILE="$TEST_TMP/challenge-comparison-functions.sh"
-extract_function_occurrence "$MILL_SCRIPT" "save_task_state" 2 > "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "save_task_state" 1 > "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "sanitize_job_token" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "sanitize_job_token" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "challenge_job_dir" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "challenge_job_dir" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "build_comparison_job_id" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "build_comparison_job_id" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "read_job_state_value" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "read_job_state_value" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "launch_tracked_job" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "launch_tracked_job" 1 >> "$FUNCTION_FILE"
 printf '\n' >> "$FUNCTION_FILE"
-extract_function_occurrence "$MILL_SCRIPT" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
+extract_function_occurrence "$MONITOR_SCRIPT_FILE" "maybe_run_challenge_comparison" 1 >> "$FUNCTION_FILE"
 
 if [[ ! -s "$FUNCTION_FILE" ]]; then
   echo "Could not extract monitor save_task_state()"
