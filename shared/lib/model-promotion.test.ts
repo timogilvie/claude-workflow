@@ -543,29 +543,234 @@ describe('model promotion', () => {
   });
 
   // ===========================================================================
-  // ACTIVATION TESTS
+  // ACTIVATION TESTS (REQ-F6)
   // ===========================================================================
 
   describe('model activation', () => {
-    it('dry-runs activation and reports a complete manifest for a certified model', () => {
-      // This test would require setting up a pre-certified catalog and certification artifact
-      // For now, we'll skip the complex setup and focus on the core logic
-      assert.ok(true, 'Activation tests placeholder - implementation verified via CLI');
+    it('refuses activation when no certification artifact exists (before certification)', () => {
+      const repoDir = makeActivatableRepo();
+      try {
+        const manifest = planModelActivation({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
+        assert.equal(manifest.status, 'refused');
+        assert.equal(manifest.outcome, 'refused');
+        assert.equal(manifest.fieldChanges, 0);
+        assert.ok(
+          manifest.diagnostics.some((line) => /not certified for the required phase/i.test(line)),
+          `expected refusal diagnostic, got: ${JSON.stringify(manifest.diagnostics)}`,
+        );
+      } finally {
+        cleanup(repoDir);
+      }
     });
 
-    it('applies activation and updates the five target fields', () => {
-      // Test implementation verified via CLI
-      assert.ok(true, 'Activation apply tests placeholder - implementation verified via CLI');
+    it('applyModelActivation on an uncertified model writes a refusal manifest and does not mutate the catalog', () => {
+      const repoDir = makeActivatableRepo();
+      try {
+        const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+        const before = readFileSync(catalogPath, 'utf-8');
+        const manifest = applyModelActivation({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
+        assert.equal(manifest.status, 'refused');
+        assert.equal(readFileSync(catalogPath, 'utf-8'), before, 'catalog must be unchanged after refusal');
+        assert.ok(existsSync(manifest.manifestPath!), 'refusal manifest must be written for audit');
+      } finally {
+        cleanup(repoDir);
+      }
     });
 
-    it('is idempotent - re-running activation reports already_activated', () => {
-      // Test implementation verified via CLI
-      assert.ok(true, 'Activation idempotency tests placeholder - implementation verified via CLI');
+    it('activates after certification and flips all five target fields, then is idempotent on re-run', () => {
+      const repoDir = makeActivatableRepo();
+      try {
+        writeCertArtifact(repoDir);
+        const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+
+        const first = applyModelActivation({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
+        assert.equal(first.status, 'activated', `first-run diagnostics: ${JSON.stringify(first.diagnostics)}`);
+        assert.equal(first.outcome, 'activated');
+        assert.equal(first.fieldChanges, 5);
+        assert.deepEqual(
+          [...first.changedFields].sort(),
+          [
+            'identity.evidencePolicy',
+            'nativeCapability.certification.certifiedAt',
+            'nativeCapability.readOnlyNative',
+            'supportedModel.launchEligible',
+            'supportedModel.routingEligible',
+          ],
+        );
+
+        const activatedCatalog = JSON.parse(readFileSync(catalogPath, 'utf-8'));
+        const entry = activatedCatalog.models.find((m: { id: string }) => m.id === 'gpt-9-test');
+        assert.equal(entry.capabilities.nativeCapability.readOnlyNative, 'certified');
+        assert.equal(entry.capabilities.nativeCapability.certification.certifiedAt, CERT_CERTIFIED_AT);
+        assert.equal(entry.capabilities.supportedModel.launchEligible, true);
+        assert.equal(entry.capabilities.supportedModel.routingEligible, true);
+        assert.equal(entry.capabilities.identity.evidencePolicy, 'eligible');
+
+        // Re-run: idempotent, no writes, already_activated status. A fresh
+        // planModelActivation against the activated catalog reports zero
+        // remaining changes; applyModelActivation short-circuits without
+        // rewriting the catalog.
+        const contentAfterFirst = readFileSync(catalogPath, 'utf-8');
+        const replan = planModelActivation({ spec: spec(), repoDir, now: '2026-08-24T03:00:00.000Z' });
+        assert.equal(replan.status, 'already_activated');
+        assert.equal(replan.fieldChanges, 0);
+        assert.deepEqual(replan.changedFields, []);
+        const second = applyModelActivation({ spec: spec(), repoDir, now: '2026-08-24T03:00:00.000Z' });
+        assert.equal(second.status, 'already_activated');
+        assert.equal(readFileSync(catalogPath, 'utf-8'), contentAfterFirst, 'idempotent re-run must not rewrite catalog');
+      } finally {
+        cleanup(repoDir);
+      }
     });
 
-    it('refuses activation when no valid certification artifact exists', () => {
-      // Test implementation verified via CLI
-      assert.ok(true, 'Activation refusal tests placeholder - implementation verified via CLI');
+    it('planModelActivation dry-run does not mutate the catalog when certification is present', () => {
+      const repoDir = makeActivatableRepo();
+      try {
+        writeCertArtifact(repoDir);
+        const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+        const before = readFileSync(catalogPath, 'utf-8');
+        const plan = planModelActivation({ spec: spec(), repoDir, now: '2026-08-24T02:00:00.000Z' });
+        assert.equal(plan.status, 'activated');
+        assert.equal(plan.mode, 'dry-run');
+        assert.equal(plan.fieldChanges, 5);
+        assert.equal(readFileSync(catalogPath, 'utf-8'), before, 'dry-run must not write');
+      } finally {
+        cleanup(repoDir);
+      }
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Activation-test fixtures
+// ---------------------------------------------------------------------------
+
+const CERT_SUITE_VERSION = 'v3';
+const CERT_CERTIFIED_AT = '2026-08-24T00:30:00.000Z';
+const CERT_CATALOG_HASH = 'test-catalog-hash';
+const CERT_IDENTITY_REVISION = 2;
+
+function finalFingerprint(): string {
+  return computeIdentityFingerprint({
+    alias: 'gpt-9-test',
+    providerNativeId: 'openai/gpt-9-test',
+    provider: 'openrouter',
+    revision: CERT_IDENTITY_REVISION,
+  });
+}
+
+function makeActivatableCatalog() {
+  return {
+    schemaVersion: '1',
+    models: [
+      {
+        id: 'gpt-9-test',
+        capabilities: {
+          vendor: 'openai',
+          class: 'strong_generalist',
+          strengths: ['test'],
+          weaknesses: [],
+          qualityScores: { routing: 10, planning: 10, coding: 10, review: 10, classify: 10 },
+          pricing: {
+            inputCostPerMTok: 2,
+            outputCostPerMTok: 10,
+            cacheWriteCostPerMTok: 3,
+            cacheReadCostPerMTok: 0.5,
+          },
+          defaultLadderEligible: false,
+          contextWindowTokens: 128000,
+          toolSupport: 'full',
+          multimodal: { text: true, image: false },
+          latencyTier: 'standard',
+          reasoningTier: 'advanced',
+          costPerMillionInputTokensUsd: 2,
+          costPerMillionOutputTokensUsd: 10,
+          nativeCapability: {
+            nativeProvider: 'openrouter',
+            piTransportKind: 'openai-completions',
+            readOnlyNative: 'partial',
+            certification: {
+              certificationSuiteVersion: CERT_SUITE_VERSION,
+              maxCertifiedPhase: 'read-only',
+            },
+          },
+          supportedModel: {
+            wavemillAlias: 'gpt-9-test',
+            providerNativeId: 'openai/gpt-9-test',
+            provider: 'openrouter',
+            certificationSuiteVersion: CERT_SUITE_VERSION,
+            launchEligible: false,
+            routingEligible: false,
+          },
+          identity: {
+            status: 'verified',
+            revision: CERT_IDENTITY_REVISION,
+            fingerprint: finalFingerprint(),
+            displayName: 'GPT 9 Test',
+            family: 'gpt',
+            evidencePolicy: 'held',
+            verification: {
+              source: 'fixture',
+              observedAt: '2026-08-24T00:00:00.000Z',
+              catalogHash: CERT_CATALOG_HASH,
+            },
+          },
+        },
+      },
+    ],
+    ladders: {
+      routing: [],
+      planning: [],
+      coding: [],
+      review: [],
+      classify: [],
+    },
+    openrouterMappings: [
+      {
+        wavemillAlias: 'gpt-9-test',
+        openrouterId: 'openai/gpt-9-test',
+        family: 'gpt',
+        status: 'active',
+        priorityTier: 3,
+        roleEligibility: ['planning', 'coding', 'review'],
+      },
+    ],
+  };
+}
+
+function makeActivatableRepo(): string {
+  const repoDir = mkdtempSync(join(tmpdir(), 'model-activation-test-'));
+  mkdirSync(join(repoDir, 'shared', 'fixtures'), { recursive: true });
+  writeFileSync(
+    join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json'),
+    `${JSON.stringify(makeActivatableCatalog(), null, 2)}\n`,
+  );
+  return repoDir;
+}
+
+function writeCertArtifact(repoDir: string): string {
+  const certDir = join(repoDir, '.wavemill', 'native-agent-certifications', 'openai', 'gpt-9-test');
+  mkdirSync(certDir, { recursive: true });
+  const certPath = join(certDir, `${CERT_SUITE_VERSION}.json`);
+  const artifact = {
+    schemaVersion: 3,
+    subject: {
+      registryKey: 'gpt-9-test',
+      nativeProvider: 'openrouter',
+      providerId: 'openai',
+      providerModelId: 'gpt-9-test',
+      providerNativeId: 'openai/gpt-9-test',
+      identityRevision: CERT_IDENTITY_REVISION,
+      identityFingerprint: finalFingerprint(),
+      catalogHash: CERT_CATALOG_HASH,
+    },
+    provider: 'openai',
+    model: 'gpt-9-test',
+    phase: 'read-only',
+    suiteVersion: CERT_SUITE_VERSION,
+    certifiedAt: CERT_CERTIFIED_AT,
+    scenarios: [{ scenarioId: 'smoke', passed: true }],
+  };
+  writeFileSync(certPath, `${JSON.stringify(artifact, null, 2)}\n`);
+  return certPath;
+}

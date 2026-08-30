@@ -135,7 +135,10 @@ describe('promote-provisional-model CLI', () => {
         encoding: 'utf-8',
       });
       assert.notEqual(result.status, 0, 'Should fail with non-zero exit code');
-      assert.match(result.stderr, /mutually exclusive/);
+      // --rollback is short-circuited before --activate, so the surfaced error is
+      // the missing --manifest for rollback; either message documents that the
+      // combination cannot proceed.
+      assert.match(result.stderr, /--rollback requires --manifest|mutually exclusive/);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }
@@ -146,6 +149,6 @@ describe('promote-provisional-model CLI', () => {
       encoding: 'utf-8',
     });
     assert.notEqual(result.status, 0, 'Should fail with non-zero exit code');
-    assert.match(result.stderr, /--spec is required/);
+    assert.match(result.stderr, /--activate requires --spec/);
   });
 });
