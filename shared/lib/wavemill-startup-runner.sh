@@ -1106,6 +1106,11 @@ $details_context"
     return 1
   fi
 
+  if [[ -n "$challenge_stage" ]]; then
+    wavemill_lock_run "state" state_mutate "$STATE_FILE" '.tasks[$issue].challengeStage = $stage' \
+      --arg issue "$issue" --arg stage "$challenge_stage" >/dev/null 2>&1 || true
+  fi
+
   if ! wavemill_lock_run "state" set_task_phase_local "$issue" "$persisted_phase"; then
     wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
