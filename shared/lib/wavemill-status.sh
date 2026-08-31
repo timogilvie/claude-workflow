@@ -1698,6 +1698,33 @@ queue_health_dashboard_warning() {
   return 0
 }
 
+# Surface state entries that carry challenge metadata but no slug.
+# gather_tasks requires a slug so the ordinary row renderer never runs without
+# task identity; a bare challenge stub would otherwise vanish from the
+# dashboard while its arm keeps running.  HOK-2926: the primary's save was
+# rejected, and the follow-up challengerLaunched / challengeExecutionIntent /
+# challengeStage writes created an object holding only those keys — so the
+# detector must not depend on challengePairId, which the rejected save owns.
+# Returns 0 and prints a one-line warning if any such entry exists, 1 otherwise.
+slugless_challenge_entries_warning() {
+  local state_file="${1:-}" entries
+  [[ -n "$state_file" && -r "$state_file" ]] || return 1
+  entries="$(jq -r '
+    [ .tasks // {} | to_entries[]
+      | select(.key != "" and ((.value.slug // "") == ""))
+      | select(
+          ((.value.challengePairId // "") != "")
+          or ((.value.challengeExecutionIntent.pairId // "") != "")
+          or (.value.challengerLaunched == true)
+          or ((.value.challengeStage // "") != "")
+          or ((.value.challengeRole // "") != ""))
+      | "\(.key) (pair \(.value.challengePairId // .value.challengeExecutionIntent.pairId // .key))" ]
+    | join(", ")' "$state_file" 2>/dev/null || true)"
+  [[ -n "$entries" ]] || return 1
+  printf 'challenge entry without slug (arm hidden; repair state): %s' "$entries"
+  return 0
+}
+
 format_backstage_service_status() {
   local status="${1:-unknown}"
   case "$status" in
@@ -1785,6 +1812,7 @@ backstage_health_dashboard_line() {
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
   local win agent_state classification task_data free_slots usage_tip openrouter_warning backstage_health_line
+  local queue_health_warning slugless_challenge_warning
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1803,6 +1831,9 @@ render_dashboard() {
   fi
   if queue_health_warning="$(queue_health_dashboard_warning "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
+  fi
+  if slugless_challenge_warning="$(slugless_challenge_entries_warning "$STATE_FILE" 2>/dev/null)"; then
+    printf "${D}├─ WARN: %s${N}${EL}\n" "$slugless_challenge_warning" >> "$FRAME"
   fi
   if backstage_health_line="$(backstage_health_dashboard_line "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ %b${N}${EL}\n" "$backstage_health_line" >> "$FRAME"

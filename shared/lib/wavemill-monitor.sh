@@ -10861,6 +10861,12 @@ EOF
     if [[ "$challenge_mode" == "challenge" ]]; then
       challenge_enabled_for_launch="true"
       challenge_pair="$issue"
+      # The role was seeded from state before this task had an entry, so it is
+      # empty here.  save_task_state fails closed on an empty role for a
+      # challenge write (HOK-2876), which left the primary with no state entry
+      # and therefore invisible to the dashboard (HOK-2926).  The challenger
+      # write below passes its role literally; the primary must too.
+      challenge_role="primary"
       challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
       challenge_execution_intent=$(echo "$challenge_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || true)
       task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)

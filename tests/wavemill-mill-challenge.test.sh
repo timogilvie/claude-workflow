@@ -97,6 +97,34 @@ else
   fail "could not extract runtime state save block"
 fi
 
+# HOK-2926: the in-launch (bootstrap) pairing path forms the pair inside
+# launch_task, after challenge_role was seeded from a state entry that does not
+# exist yet.  The primary write must carry an explicit role or the canonical
+# writer's empty-role guard (HOK-2876) drops the entry and the arm goes
+# invisible.  The pre-launch batch path was never affected; cover this one.
+BOOTSTRAP_PAIR_BLOCK="$(awk '
+  /if \[\[ "\$challenge_mode" == "challenge" \]\]; then/ { capture=1 }
+  capture { print }
+  /# Verify agent was saved correctly/ && capture { exit }
+' "$MONITOR_SCRIPT_FILE")"
+
+if [[ -n "$BOOTSTRAP_PAIR_BLOCK" ]]; then
+  check_contains "bootstrap pairing enables challenge for launch" "$BOOTSTRAP_PAIR_BLOCK" 'challenge_enabled_for_launch="true"'
+  check_contains "bootstrap pairing assigns the primary role" "$BOOTSTRAP_PAIR_BLOCK" 'challenge_role="primary"'
+  check_contains "bootstrap primary write passes the assigned role" "$BOOTSTRAP_PAIR_BLOCK" '"$challenge_pair" "${challenge_role:-}"'
+  check_contains "bootstrap challenger write passes the literal role" "$BOOTSTRAP_PAIR_BLOCK" '"$challenge_pair" "challenger"'
+
+  role_line="$(grep -n 'challenge_role="primary"' <<<"$BOOTSTRAP_PAIR_BLOCK" | head -1 | cut -d: -f1)"
+  primary_save_line="$(grep -n 'save_task_state "\$issue"' <<<"$BOOTSTRAP_PAIR_BLOCK" | head -1 | cut -d: -f1)"
+  if [[ -n "$role_line" && -n "$primary_save_line" ]] && (( role_line < primary_save_line )); then
+    pass "bootstrap pairing assigns the primary role before the primary state write"
+  else
+    fail "bootstrap pairing must assign the primary role before the primary state write"
+  fi
+else
+  fail "could not extract bootstrap pairing block"
+fi
+
 CODING_HANDOFF_BLOCK="$(awk '
   /if ! coder_agent="\$\(agent_resolve_from_model "\$coder_launch_model" "coding"\)"; then/ { capture=1 }
   capture { print }
@@ -219,6 +247,38 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     fail "runtime state should reject blank challenger challenge role"
   else
     pass "runtime state rejects blank challenger challenge role with error"
+  fi
+
+  # Replay the bootstrap primary write exactly as launch_task issues it: the
+  # role assignment the pairing block makes, then the production call line.
+  # Before HOK-2926 the role was empty here and the guard above rejected the
+  # write, leaving the primary with no slug and therefore no dashboard row.
+  if [[ -n "$BOOTSTRAP_PAIR_BLOCK" ]]; then
+    bootstrap_role_assignment="$(grep -m1 'challenge_role="primary"' <<<"$BOOTSTRAP_PAIR_BLOCK" || true)"
+    bootstrap_primary_save="$(grep -m1 'save_task_state "\$issue"' <<<"$BOOTSTRAP_PAIR_BLOCK" || true)"
+    if [[ -n "$bootstrap_role_assignment" && -n "$bootstrap_primary_save" ]]; then
+      (
+        issue="HOK-2926" slug="bootstrap-primary" branch="task/bootstrap-primary" wt_dir="/tmp/bootstrap-primary"
+        planner_agent="claude" task_agent_cmd="claude" linear_issue="HOK-2926"
+        challenge_enabled_for_launch="true" challenge_pair="$issue" challenge_stage="implementation"
+        challenge_role=$(jq -r '.tasks["HOK-2926"].challengeRole // empty' "$RUNTIME_STATE_FILE")
+        task_model="claude-fable-5" planner_model="claude-fable-5" reviewer_model="claude-fable-5"
+        plan_depth="medium" code_depth="medium" review_mode="llm"
+        effective_challenge="$challenge_enabled_for_launch"
+        eval "$bootstrap_role_assignment"
+        eval "$bootstrap_primary_save"
+      ) 2>/dev/null
+      if [[ "$(jq -r '.tasks["HOK-2926"].slug // empty' "$RUNTIME_STATE_FILE")" == "bootstrap-primary" ]] \
+        && [[ "$(jq -r '.tasks["HOK-2926"].challengeRole // empty' "$RUNTIME_STATE_FILE")" == "primary" ]] \
+        && [[ "$(jq -r '.tasks["HOK-2926"].challengePairId // empty' "$RUNTIME_STATE_FILE")" == "HOK-2926" ]] \
+        && [[ "$(jq -r '.tasks["HOK-2926"].challenge' "$RUNTIME_STATE_FILE")" == "true" ]]; then
+        pass "bootstrap primary write lands a complete entry with challengeRole=primary"
+      else
+        fail "bootstrap primary write did not produce a complete primary entry"
+      fi
+    else
+      fail "could not extract bootstrap primary role assignment or save line"
+    fi
   fi
 
   # challenge_varied_stage_model must only speak up for the stage the pair varies.

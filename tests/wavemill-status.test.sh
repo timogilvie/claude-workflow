@@ -2542,6 +2542,75 @@ else
 fi
 
 echo ""
+echo "=== slug-less challenge stub warning ==="
+
+# HOK-2926: a challenge primary whose save was rejected leaves a bare object
+# holding only challenge metadata.  gather_tasks drops slug-less entries, so
+# the running arm vanished from the dashboard.  The renderer must call it out.
+mkdir -p "$WORKTREES_DIR/stub-peer-task/features/stub-peer-task"
+stub_state="$TMP_DIR/stub-state.json"
+stub_behavior="$TMP_DIR/stub-behavior.json"
+stub_output="$TMP_DIR/stub-output.txt"
+rm -f "$TMP_DIR/backstage-health.json" "$TMP_DIR/queue-health.json"
+cat > "$stub_state" <<EOF
+{
+  "tasks": {
+    "HOK-2918_c": {
+      "slug": "stub-peer-task",
+      "branch": "task/stub-peer-task",
+      "worktree": "$WORKTREES_DIR/stub-peer-task",
+      "status": "active",
+      "phase": "executing",
+      "pr": "",
+      "challenge": true,
+      "challengePairId": "HOK-2918",
+      "challengeRole": "challenger"
+    },
+    "HOK-2918": {
+      "_comment": "exactly the bare stub the rejected save leaves behind: no slug, no challengePairId",
+      "challengerLaunched": true,
+      "challengeStage": "implementation",
+      "challengeExecutionIntent": {"pairId": "HOK-2918"},
+      "phase": "planning"
+    }
+  }
+}
+EOF
+cat > "$stub_behavior" <<'EOF'
+{"pane":{"HOK-2918_c-stub-peer-task":"5"}}
+EOF
+run_render "$stub_state" "$WORKTREES_DIR" "$stub_behavior" "$stub_output"
+stub_render="$(cat "$stub_output")"
+if [[ "$stub_render" == *"WARN: challenge entry without slug"* && "$stub_render" == *"HOK-2918 (pair HOK-2918)"* ]]; then
+  pass "slug-less challenge stub is surfaced as a dashboard warning"
+else
+  fail "slug-less challenge stub was silently dropped from the dashboard"
+fi
+if [[ "$stub_render" == *"HOK-2918_c"* ]]; then
+  pass "sibling task with a slug still renders alongside the stub warning"
+else
+  fail "sibling task with a slug did not render alongside the stub warning"
+fi
+
+jq '.tasks["HOK-2918"] = {"challengePairId": "HOK-2918"}' "$stub_state" > "$stub_state.tmp" && mv "$stub_state.tmp" "$stub_state"
+run_render "$stub_state" "$WORKTREES_DIR" "$stub_behavior" "$stub_output"
+stub_render="$(cat "$stub_output")"
+if [[ "$stub_render" == *"HOK-2918 (pair HOK-2918)"* ]]; then
+  pass "slug-less entry carrying only challengePairId is also surfaced"
+else
+  fail "slug-less entry carrying only challengePairId was not surfaced"
+fi
+
+jq 'del(.tasks["HOK-2918"])' "$stub_state" > "$stub_state.tmp" && mv "$stub_state.tmp" "$stub_state"
+run_render "$stub_state" "$WORKTREES_DIR" "$stub_behavior" "$stub_output"
+stub_render="$(cat "$stub_output")"
+if [[ "$stub_render" != *"challenge entry without slug"* ]]; then
+  pass "no stub warning when every challenge entry has a slug"
+else
+  fail "stub warning rendered without a slug-less challenge entry"
+fi
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
 if (( FAIL > 0 )); then
