@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
+  activateModelPromotion,
   applyModelPromotion,
   planModelPromotion,
   rollbackModelPromotion,
@@ -11,6 +12,8 @@ import {
 } from './model-promotion.ts';
 import { assertRegistryConsistency, computeIdentityFingerprint } from './model-registry.ts';
 import { projectModelRegistryCatalog } from './model-registry-loader.ts';
+import { writeScopedCertification } from './native-agent/certification/store.ts';
+import type { NativeCertificationArtifact } from './native-agent/certification/schema.ts';
 
 function makeRepo(): string {
   const repoDir = mkdtempSync(join(tmpdir(), 'model-promotion-test-'));
@@ -536,6 +539,193 @@ describe('model promotion', () => {
       assert.equal(readFileSync(backfilledPath, 'utf-8'), staleBackfilledBefore);
     } finally {
       cleanup(repoDir);
+    }
+  });
+});
+
+// The activation half of a promotion needs a final entry with native metadata
+// (apply lands it conservative) and a matching artifact in the store.
+function activationSpec(): ModelTransitionSpec {
+  const base = spec();
+  return {
+    ...base,
+    final: {
+      ...base.final,
+      capabilities: {
+        ...base.final.capabilities,
+        nativeCapability: {
+          nativeProvider: 'openrouter',
+          piTransportKind: 'openai-completions',
+          readOnlyNative: 'partial',
+          compatFlags: { thinkingFormat: 'openrouter' },
+        },
+        supportedModel: {
+          certificationSuiteVersion: 'v3',
+          requiredCertificationPhaseByStage: {
+            planning: 'workflow',
+            coding: 'workflow',
+            review: 'workflow',
+          },
+          canonicalArtifactIdentity: { provider: 'openai', model: 'gpt-9-test', suiteVersion: 'v3' },
+          launchEligible: false,
+          routingEligible: false,
+        },
+      },
+    },
+  };
+}
+
+function writeActivationCertification(
+  certRoot: string,
+  overrides: Partial<NativeCertificationArtifact> = {},
+): string {
+  const record: NativeCertificationArtifact = {
+    schemaVersion: 3,
+    subject: {
+      registryKey: 'gpt-9-test',
+      nativeProvider: 'openrouter',
+      providerId: 'openai',
+      providerModelId: 'gpt-9-test',
+      providerNativeId: 'openai/gpt-9-test',
+      identityRevision: 2,
+      identityFingerprint: computeIdentityFingerprint({
+        alias: 'gpt-9-test',
+        providerNativeId: 'openai/gpt-9-test',
+        provider: 'openrouter',
+        revision: 2,
+      }),
+      catalogHash: 'fixture-hash',
+    },
+    provider: 'openai',
+    model: 'gpt-9-test',
+    phase: 'workflow',
+    suiteVersion: 'v3',
+    certifiedAt: '2026-08-28T12:00:00.000Z',
+    scenarios: [{ scenarioId: 'smoke', passed: true }],
+    ...overrides,
+  };
+  return writeScopedCertification(record, { root: certRoot });
+}
+
+describe('model promotion activation', () => {
+  it('refuses to activate a model that has not been promoted', () => {
+    const repoDir = makeRepo();
+    const certRoot = mkdtempSync(join(tmpdir(), 'model-promotion-certs-'));
+    try {
+      writeActivationCertification(certRoot);
+      assert.throws(
+        () => activateModelPromotion({ spec: activationSpec(), repoDir, certificationRoot: certRoot }),
+        /--apply before --activate/,
+      );
+    } finally {
+      cleanup(repoDir);
+      cleanup(certRoot);
+    }
+  });
+
+  it('refuses activation before certification and leaves the catalog byte-for-byte unchanged', () => {
+    const repoDir = makeRepo();
+    const certRoot = mkdtempSync(join(tmpdir(), 'model-promotion-certs-'));
+    try {
+      applyModelPromotion({ spec: activationSpec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+      const before = readFileSync(catalogPath, 'utf-8');
+      assert.throws(
+        () => activateModelPromotion({ spec: activationSpec(), repoDir, certificationRoot: certRoot }),
+        /No certification artifact/,
+      );
+      assert.equal(readFileSync(catalogPath, 'utf-8'), before);
+      assert.equal(
+        existsSync(join(repoDir, '.wavemill', 'model-promotions', 'hok-2863-test', 'hok-2863-test.activation.manifest.json')),
+        false,
+      );
+    } finally {
+      cleanup(repoDir);
+      cleanup(certRoot);
+    }
+  });
+
+  it('refuses activation when the artifact does not satisfy the required phase', () => {
+    const repoDir = makeRepo();
+    const certRoot = mkdtempSync(join(tmpdir(), 'model-promotion-certs-'));
+    try {
+      applyModelPromotion({ spec: activationSpec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      writeActivationCertification(certRoot, { phase: 'read-only' });
+      const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+      const before = readFileSync(catalogPath, 'utf-8');
+      assert.throws(
+        () => activateModelPromotion({ spec: activationSpec(), repoDir, certificationRoot: certRoot }),
+        /No certification artifact/,
+      );
+      assert.equal(readFileSync(catalogPath, 'utf-8'), before);
+    } finally {
+      cleanup(repoDir);
+      cleanup(certRoot);
+    }
+  });
+
+  it('activates after certification with the artifact timestamp, then repeat is already_activated', () => {
+    const repoDir = makeRepo();
+    const certRoot = mkdtempSync(join(tmpdir(), 'model-promotion-certs-'));
+    try {
+      applyModelPromotion({ spec: activationSpec(), repoDir, now: '2026-08-24T01:00:00.000Z' });
+      const catalogPath = join(repoDir, 'shared', 'fixtures', 'model-registry.v1.json');
+      const readEntry = () => JSON.parse(readFileSync(catalogPath, 'utf-8'))
+        .models.find((entry: { id: string }) => entry.id === 'gpt-9-test');
+
+      // Apply lands the conservative pre-certification state.
+      const conservative = readEntry();
+      assert.equal(conservative.capabilities.nativeCapability.readOnlyNative, 'partial');
+      assert.equal(conservative.capabilities.supportedModel.launchEligible, false);
+      assert.equal(conservative.capabilities.supportedModel.routingEligible, false);
+      assert.equal(conservative.capabilities.identity.evidencePolicy, 'held');
+
+      const certPath = writeActivationCertification(certRoot);
+      const activated = activateModelPromotion({
+        spec: activationSpec(),
+        repoDir,
+        now: '2026-08-28T13:00:00.000Z',
+        certificationRoot: certRoot,
+      });
+      assert.equal(activated.status, 'activated');
+      assert.equal(activated.certification.path, certPath);
+      assert.deepEqual(activated.fieldChanges, [
+        'nativeCapability.readOnlyNative=certified',
+        'nativeCapability.certification.certifiedAt=2026-08-28T12:00:00.000Z',
+        'supportedModel.launchEligible=true',
+        'supportedModel.routingEligible=true',
+        'identity.evidencePolicy=eligible',
+      ]);
+      assert.ok(existsSync(activated.manifestPath));
+      assert.ok(existsSync(activated.registry.backupPath!));
+
+      const entry = readEntry();
+      assert.equal(entry.capabilities.nativeCapability.readOnlyNative, 'certified');
+      assert.equal(entry.capabilities.nativeCapability.certification.certifiedAt, '2026-08-28T12:00:00.000Z');
+      assert.equal(entry.capabilities.nativeCapability.certification.maxCertifiedPhase, 'workflow');
+      assert.equal(entry.capabilities.nativeCapability.certification.certificationSuiteVersion, 'v3');
+      assert.equal(entry.capabilities.supportedModel.launchEligible, true);
+      assert.equal(entry.capabilities.supportedModel.routingEligible, true);
+      assert.equal(entry.capabilities.identity.evidencePolicy, 'eligible');
+      // Unrelated capability metadata survives activation.
+      assert.equal(entry.capabilities.nativeCapability.compatFlags.thinkingFormat, 'openrouter');
+      assert.equal(entry.capabilities.supportedModel.certificationSuiteVersion, 'v3');
+      const catalog = JSON.parse(readFileSync(catalogPath, 'utf-8'));
+      assert.doesNotThrow(() => assertRegistryConsistency(projectModelRegistryCatalog(catalog)));
+
+      const beforeRepeat = readFileSync(catalogPath, 'utf-8');
+      const second = activateModelPromotion({
+        spec: activationSpec(),
+        repoDir,
+        now: '2026-08-28T14:00:00.000Z',
+        certificationRoot: certRoot,
+      });
+      assert.equal(second.status, 'already_activated');
+      assert.deepEqual(second.fieldChanges, []);
+      assert.equal(readFileSync(catalogPath, 'utf-8'), beforeRepeat);
+    } finally {
+      cleanup(repoDir);
+      cleanup(certRoot);
     }
   });
 });
