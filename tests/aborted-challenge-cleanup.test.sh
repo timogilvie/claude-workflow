@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 extract_function() {
   local source_file="$1"
@@ -35,7 +36,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 cleanup_file="$tmp/aborted-cleanup.sh"
 {
-  extract_function "$MILL_SCRIPT" "remove_task_state"
+  extract_function "$COMMON_SCRIPT" "remove_task_state"
   printf '\n'
   extract_function "$MONITOR_SCRIPT_FILE" "mark_task_aborted_for_cleanup"
   printf '\n'

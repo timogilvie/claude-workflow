@@ -121,6 +121,7 @@ for f in \
   "$REPO_DIR"/tests/challenger-transient-retry.test.sh \
   "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
   "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \
+  "$REPO_DIR"/tests/task-phase-canonicalization.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
@@ -966,15 +967,18 @@ else
     fail "monitor is missing read_state_value helper"
   fi
 
+  # The canonical get_task_phase lives in wavemill-common.sh (HOK-2903) with
+  # the read_state_value guard inlined; assert the guard survived the move.
   GET_TASK_PHASE_BLOCK=$(awk '
     /^get_task_phase\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' <<< "$HEREDOC_CONTENT")
-  if grep -q 'read_state_value "executing"' <<< "$GET_TASK_PHASE_BLOCK"; then
-    pass "monitor get_task_phase defaults safely when state reads fail"
+  ' "$LIB_DIR/wavemill-common.sh")
+  if grep -q '! -r "\$STATE_FILE" || ! -s "\$STATE_FILE"' <<< "$GET_TASK_PHASE_BLOCK" \
+    && grep -Fq "printf 'executing\n'" <<< "$GET_TASK_PHASE_BLOCK"; then
+    pass "canonical get_task_phase defaults safely when state reads fail"
   else
-    fail "monitor get_task_phase is not using read_state_value"
+    fail "canonical get_task_phase is missing the inlined state-read guard"
   fi
 
   if grep -Fq 'current_agent=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK" \
