@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { mutateJsonState } from '../../state-mutex.ts';
 import {
@@ -28,6 +28,7 @@ export interface AutoRemediationOptions {
   log?: (line: string) => void;
   certifyFn?: typeof certifySelectedNativeAgents;
   attemptCachePath?: string;
+  processToken?: string;
 }
 
 export interface AutoRemediationResult {
@@ -45,11 +46,13 @@ interface AttemptCache {
     at: string;
     outcome: 'success' | 'failed-once' | 'blocked';
     failedModels: string[];
+    processToken?: string;
   }>;
 }
 
 const EMPTY_ATTEMPT_CACHE: AttemptCache = { attempts: {} };
 const ZERO_CATALOG_HASH = '0'.repeat(64);
+const PROCESS_TOKEN = `${process.pid}:${randomUUID()}`;
 
 export async function runCertificationAutoRemediation(
   opts: AutoRemediationOptions,
@@ -59,6 +62,7 @@ export async function runCertificationAutoRemediation(
   const targets = selectTargets(registry, opts.coverage, mode);
   const targetKeys = targets.map((target) => target.model).sort();
   const attemptKey = buildAttemptKey(opts.coverage.requiredSuiteVersion, targetKeys, opts.log);
+  const processToken = opts.processToken ?? PROCESS_TOKEN;
 
   if (mode === 'noop' || targets.length === 0) {
     opts.log?.(`[certify-auto] coverage=${opts.coverage.status} reason=no-targets targets=0`);
@@ -67,7 +71,7 @@ export async function runCertificationAutoRemediation(
 
   const cachePath = opts.attemptCachePath
     ?? join(resolveCertificationStorage({ scope: 'global', root: opts.root }).root, '.auto-remediation-attempts.json');
-  let existing: AttemptCache['attempts'][string]['outcome'] | undefined;
+  let existing: AttemptCache['attempts'][string] | undefined;
   try {
     existing = await readAttempt(cachePath, attemptKey);
   } catch (err) {
@@ -82,16 +86,16 @@ export async function runCertificationAutoRemediation(
       })),
     };
   }
-  if (existing === 'success') {
-    // Successful attempts must not become a permanent suppression key. The
-    // same catalog/suite/target set can legitimately need certification again
-    // after TTL renewal or local artifact deletion. Only a prior failure is a
-    // loop-guard signal.
-    opts.log?.(`[certify-auto] coverage=${opts.coverage.status} reason=previous-success-retrying targets=${targets.length}`);
+  if (existing?.processToken === processToken && existing.outcome === 'success') {
+    opts.log?.(`[certify-auto] coverage=${opts.coverage.status} reason=already-succeeded-this-process targets=${targets.length}`);
+    return emptyResult('noop', targetKeys, attemptKey);
   }
-  if (existing === 'failed-once' || existing === 'blocked') {
+  if (
+    existing?.processToken === processToken
+    && (existing.outcome === 'failed-once' || existing.outcome === 'blocked')
+  ) {
     opts.log?.(`[certify-auto] BLOCKED by loop guard for key ${attemptKey} - models: ${targetKeys.join(',')}`);
-    await safeMarkAttempt(cachePath, attemptKey, 'blocked', targetKeys, opts.now, opts.log);
+    await safeMarkAttempt(cachePath, attemptKey, 'blocked', targetKeys, processToken, opts.now, opts.log);
     return {
       ...emptyResult('blocked-by-loop-guard', targetKeys, attemptKey),
       failed: targets.map((target) => ({
@@ -117,7 +121,7 @@ export async function runCertificationAutoRemediation(
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    await safeMarkAttempt(cachePath, attemptKey, 'failed-once', targetKeys, opts.now, opts.log);
+    await safeMarkAttempt(cachePath, attemptKey, 'failed-once', targetKeys, processToken, opts.now, opts.log);
     opts.log?.(`[certify-auto] published=0 failed=${targets.length} skipped=0`);
     return {
       attempted: true,
@@ -136,6 +140,7 @@ export async function runCertificationAutoRemediation(
     attemptKey,
     result.failed.length > 0 ? 'failed-once' : 'success',
     failedModels,
+    processToken,
     opts.now,
     opts.log,
   );
@@ -220,17 +225,17 @@ function buildAttemptKey(
     .digest('hex');
 }
 
-async function readAttempt(cachePath: string, attemptKey: string): Promise<AttemptCache['attempts'][string]['outcome'] | undefined> {
-  let outcome: AttemptCache['attempts'][string]['outcome'] | undefined;
+async function readAttempt(cachePath: string, attemptKey: string): Promise<AttemptCache['attempts'][string] | undefined> {
+  let attempt: AttemptCache['attempts'][string] | undefined;
   await mutateJsonState<AttemptCache>(
     cachePath,
     (cache) => {
-      outcome = cache.attempts[attemptKey]?.outcome;
+      attempt = cache.attempts[attemptKey];
       return cache;
     },
     { createIfMissing: true, initial: EMPTY_ATTEMPT_CACHE },
   );
-  return outcome;
+  return attempt;
 }
 
 async function markAttempt(
@@ -238,6 +243,7 @@ async function markAttempt(
   attemptKey: string,
   outcome: AttemptCache['attempts'][string]['outcome'],
   failedModels: string[],
+  processToken: string,
   now?: () => Date,
 ): Promise<void> {
   await mutateJsonState<AttemptCache>(
@@ -249,6 +255,7 @@ async function markAttempt(
           at: (now ?? (() => new Date()))().toISOString(),
           outcome,
           failedModels,
+          processToken,
         },
       },
     }),
@@ -261,11 +268,12 @@ async function safeMarkAttempt(
   attemptKey: string,
   outcome: AttemptCache['attempts'][string]['outcome'],
   failedModels: string[],
+  processToken: string,
   now: (() => Date) | undefined,
   log: ((line: string) => void) | undefined,
 ): Promise<void> {
   try {
-    await markAttempt(cachePath, attemptKey, outcome, failedModels, now);
+    await markAttempt(cachePath, attemptKey, outcome, failedModels, processToken, now);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     log?.(`[certify-auto] attempt cache update failed: ${message}`);

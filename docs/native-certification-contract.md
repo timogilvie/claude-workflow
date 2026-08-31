@@ -142,7 +142,7 @@ Artifacts that are still fresh but will expire inside the renewal window are ren
 
 Automatic remediation runs only the deterministic certification harness. Provisional models that require `OPENROUTER_LIVE_SMOKE=1` are excluded from automatic target selection, and the remediation call strips `OPENROUTER_LIVE_SMOKE` from its scoped environment.
 
-The remediation loop guard records one attempt per current catalog hash, required suite version, and target set under the global certification root. A second preflight for the same failing identity blocks with the manual certification command instead of repeatedly re-running the matrix.
+The remediation loop guard records one attempt per current catalog hash, required suite version, target set, and process under the global certification root. A second preflight for the same failing identity in that process blocks with the manual certification command instead of repeatedly re-running the matrix. A later process may try again, so an old failure cannot permanently suppress TTL renewal or recovery after artifacts are replaced.
 
 Operators can disable only the automatic repair behavior while keeping the guard active:
 

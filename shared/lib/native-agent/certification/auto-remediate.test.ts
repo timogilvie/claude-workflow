@@ -142,6 +142,7 @@ describe('runCertificationAutoRemediation', () => {
         coverage: coverage(),
         attemptCachePath: cachePath,
         certifyFn,
+        processToken: 'process-one',
       });
       const second = await runCertificationAutoRemediation({
         registry: registry(),
@@ -149,12 +150,48 @@ describe('runCertificationAutoRemediation', () => {
         coverage: coverage(),
         attemptCachePath: cachePath,
         certifyFn,
+        processToken: 'process-two',
       });
 
       assert.equal(first.attempted, true);
       assert.equal(second.attempted, true);
       assert.equal(second.mode, 'republish-matrix');
       assert.equal(calls, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not repeat a successful remediation in the same process', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'native-cert-auto-same-process-success-'));
+    try {
+      const cachePath = join(dir, 'attempts.json');
+      let calls = 0;
+      const certifyFn = async (opts: CertifySelectedOptions): Promise<CertifyAllResult> => {
+        calls += 1;
+        return makeCertifyResult({ targets: opts.targets });
+      };
+
+      await runCertificationAutoRemediation({
+        registry: registry(),
+        repoDir: process.cwd(),
+        coverage: coverage(),
+        attemptCachePath: cachePath,
+        certifyFn,
+        processToken: 'same-process',
+      });
+      const second = await runCertificationAutoRemediation({
+        registry: registry(),
+        repoDir: process.cwd(),
+        coverage: coverage(),
+        attemptCachePath: cachePath,
+        certifyFn,
+        processToken: 'same-process',
+      });
+
+      assert.equal(calls, 1);
+      assert.equal(second.attempted, false);
+      assert.equal(second.mode, 'noop');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
