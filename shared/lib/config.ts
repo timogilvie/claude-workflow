@@ -396,6 +396,11 @@ export interface NativePatchCodingConfig {
   enabled?: boolean;
 }
 
+export interface NativeCertificationConfig {
+  autoRemediate?: boolean;
+  renewalWindowDays?: number;
+}
+
 export interface NativeContextManagementConfig {
   compactionThreshold?: number;
   safetyMarginPct?: number;
@@ -422,6 +427,7 @@ export interface NativeAgentConfig {
   };
   planning?: NativePlanningConfig;
   patchCoding?: NativePatchCodingConfig;
+  certification?: NativeCertificationConfig;
   contextManagement?: NativeContextManagementConfig;
   providers?: NativeAgentProvidersConfig;
 }

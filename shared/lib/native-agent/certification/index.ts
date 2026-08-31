@@ -64,10 +64,12 @@ export { evaluateSuiteCoverage } from './coverage.ts';
 export type { ReadResult, StoreError, StoreErrorCode } from './store.ts';
 
 export {
+  deleteGlobalCertification,
   listCertifications,
   listGlobalCertificationSuiteVersions,
   listGlobalCertifications,
   listScopedCertifications,
+  parseCertificationArtifactPath,
   readCertification,
   serializeCertification,
   validateCertificationForWrite,

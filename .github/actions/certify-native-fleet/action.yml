@@ -1,0 +1,13 @@
+name: Certify Native Fleet
+description: Publish deterministic native certification artifacts for this CI job.
+
+runs:
+  using: composite
+  steps:
+    - name: Scope native certification store
+      shell: bash
+      run: echo "WAVEMILL_NATIVE_CERTIFICATION_ROOT=${RUNNER_TEMP}/wavemill-certs" >> "$GITHUB_ENV"
+
+    - name: Publish native certification matrix
+      shell: bash
+      run: npx tsx tools/native-agent-certify.ts --all --phase workflow

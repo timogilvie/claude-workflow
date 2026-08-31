@@ -1297,6 +1297,23 @@
                     },
                     "additionalProperties": false
                 },
+                "certification": {
+                    "type": "object",
+                    "description": "Native certification maintenance behavior used by mill startup preflight.",
+                    "properties": {
+                        "autoRemediate": {
+                            "type": "boolean",
+                            "default": true
+                        },
+                        "renewalWindowDays": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 30,
+                            "default": 7
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "contextManagement": {
                     "type": "object",
                     "description": "In-session native-agent context tracking, compaction, and packet budgeting controls.",
