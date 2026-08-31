@@ -10920,6 +10920,14 @@ EOF
     if [[ "$challenge_mode" == "challenge" ]]; then
       challenge_enabled_for_launch="true"
       challenge_pair="$issue"
+      # HOK-2926: this task is the pair's primary. challenge_role was seeded
+      # from state above, but a bootstrap pair is formed before the task has
+      # any state entry, so it is empty here. The canonical save_task_state
+      # fails closed on an empty role for a challenge entry (HOK-2876), which
+      # would drop the primary's ledger write entirely — the arm then runs
+      # with no slug and is invisible to the dashboard. The pre-launch batch
+      # path already stamps "primary"; mirror it here.
+      challenge_role="primary"
       challenge_stage=$(echo "$challenge_plan" | jq -r '.challengeStage // "implementation"' 2>/dev/null || echo "implementation")
       challenge_execution_intent=$(echo "$challenge_plan" | jq -c '.challengeExecutionIntent // empty' 2>/dev/null || true)
       task_model=$(echo "$challenge_plan" | jq -r '.entries[0].model // empty' 2>/dev/null)

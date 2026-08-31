@@ -1672,6 +1672,45 @@ cached_openrouter_warning() {
   return 1
 }
 
+# Render a warning for challenge-pair task entries that carry no slug.
+#
+# HOK-2926: when a primary's ledger write is rejected (empty challengeRole,
+# see the fail-closed guard in save_task_state), the follow-up
+# `.tasks[$issue].challengerLaunched = true` mutation still creates a bare
+# object holding only challenge metadata — challengePairId, challengeStage,
+# challengeExecutionIntent — with no slug/branch/worktree. gather_tasks filters
+# on a non-empty slug, so such an arm never renders even though its tmux window
+# and agent keep running and its plan gate is waiting on an operator. Surface
+# the stub as a dashboard warning so the failure can never be silent.
+#
+# Diagnostic only: this never mutates state and never infers the missing
+# fields. Non-challenge entries without a slug are deliberately ignored so the
+# existing slug filter keeps its current fallback semantics for them.
+# Returns 0 and prints one warning line if any stub exists, 1 otherwise.
+malformed_challenge_state_warning() {
+  local state_file="${1:-}" summary count keys
+  [[ -n "$state_file" && -r "$state_file" ]] || return 1
+  summary="$(jq -r '
+    [ (.tasks // {}) | to_entries[]
+      | select((.value | type) == "object")
+      | select(.key != ""
+               and ((.value.challengePairId // "") != "")
+               and ((.value.slug // "") == ""))
+      | .key ]
+    | "\(length)|\(join(", "))"' "$state_file" 2>/dev/null || echo "")"
+  [[ -n "$summary" ]] || return 1
+  count="${summary%%|*}"
+  keys="${summary#*|}"
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  (( count > 0 )) || return 1
+  if (( count == 1 )); then
+    printf 'challenge pair entry %s has no slug: arm is hidden but may still be running; repair state (HOK-2926)' "$keys"
+  else
+    printf '%d challenge pair entries have no slug (%s): arms are hidden but may still be running; repair state (HOK-2926)' "$count" "$keys"
+  fi
+  return 0
+}
+
 # Render queue-health degradation warning if active.
 # Returns 0 and prints warning if degraded, 1 if healthy/missing.
 queue_health_dashboard_warning() {
@@ -1784,7 +1823,7 @@ backstage_health_dashboard_line() {
 
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots usage_tip openrouter_warning backstage_health_line
+  local win agent_state classification task_data free_slots usage_tip openrouter_warning backstage_health_line malformed_challenge_warning
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1803,6 +1842,11 @@ render_dashboard() {
   fi
   if queue_health_warning="$(queue_health_dashboard_warning "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$queue_health_warning" >> "$FRAME"
+  fi
+  # HOK-2926: a challenge arm whose state entry lost its slug is filtered out
+  # of gather_tasks below; warn here so it is never silently unrenderable.
+  if malformed_challenge_warning="$(malformed_challenge_state_warning "$STATE_FILE" 2>/dev/null)"; then
+    printf "${D}├─ WARN: %s${N}${EL}\n" "$malformed_challenge_warning" >> "$FRAME"
   fi
   if backstage_health_line="$(backstage_health_dashboard_line "$STATE_FILE" 2>/dev/null)"; then
     printf "${D}├─ %b${N}${EL}\n" "$backstage_health_line" >> "$FRAME"
