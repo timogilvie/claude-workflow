@@ -83,8 +83,11 @@ export async function runCertificationAutoRemediation(
     };
   }
   if (existing === 'success') {
-    opts.log?.(`[certify-auto] coverage=${opts.coverage.status} reason=already-succeeded targets=${targets.length}`);
-    return emptyResult('noop', targetKeys, attemptKey);
+    // Successful attempts must not become a permanent suppression key. The
+    // same catalog/suite/target set can legitimately need certification again
+    // after TTL renewal or local artifact deletion. Only a prior failure is a
+    // loop-guard signal.
+    opts.log?.(`[certify-auto] coverage=${opts.coverage.status} reason=previous-success-retrying targets=${targets.length}`);
   }
   if (existing === 'failed-once' || existing === 'blocked') {
     opts.log?.(`[certify-auto] BLOCKED by loop guard for key ${attemptKey} - models: ${targetKeys.join(',')}`);

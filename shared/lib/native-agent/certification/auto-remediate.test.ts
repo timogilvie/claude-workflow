@@ -126,6 +126,40 @@ describe('runCertificationAutoRemediation', () => {
     }
   });
 
+  it('does not let a prior success suppress a later required remediation', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'native-cert-auto-repeat-success-'));
+    try {
+      const cachePath = join(dir, 'attempts.json');
+      let calls = 0;
+      const certifyFn = async (opts: CertifySelectedOptions): Promise<CertifyAllResult> => {
+        calls += 1;
+        return makeCertifyResult({ targets: opts.targets });
+      };
+
+      const first = await runCertificationAutoRemediation({
+        registry: registry(),
+        repoDir: process.cwd(),
+        coverage: coverage(),
+        attemptCachePath: cachePath,
+        certifyFn,
+      });
+      const second = await runCertificationAutoRemediation({
+        registry: registry(),
+        repoDir: process.cwd(),
+        coverage: coverage(),
+        attemptCachePath: cachePath,
+        certifyFn,
+      });
+
+      assert.equal(first.attempted, true);
+      assert.equal(second.attempted, true);
+      assert.equal(second.mode, 'republish-matrix');
+      assert.equal(calls, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('records one failure and blocks the next matching attempt', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'native-cert-auto-loop-'));
     try {
