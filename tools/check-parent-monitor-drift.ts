@@ -2,24 +2,33 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { compareParentMonitor, formatDriftReport } from '../shared/lib/parent-monitor-drift.ts';
+import { compareParentMonitorFiles, formatDriftReport } from '../shared/lib/parent-monitor-drift.ts';
 
 interface CliOptions {
-  file: string;
+  parent: string;
+  monitor: string;
   json: boolean;
 }
 
 function usage(): string {
   return [
-    'Usage: npx tsx tools/check-parent-monitor-drift.ts [--file PATH] [--json]',
+    'Usage: npx tsx tools/check-parent-monitor-drift.ts [--parent PATH] [--monitor PATH] [--json]',
     '',
-    'Analyzes duplicated shell functions in shared/lib/wavemill-mill.sh parent and MONITOR_EOF regions.',
+    'Analyzes shell functions duplicated between the parent mill script',
+    '(shared/lib/wavemill-mill.sh) and the committed monitor script',
+    '(shared/lib/wavemill-monitor.sh).',
+    '',
+    '  --parent PATH   parent script (default: shared/lib/wavemill-mill.sh)',
+    '  --monitor PATH  monitor script (default: shared/lib/wavemill-monitor.sh)',
+    '  --file PATH     backwards-compatible alias for --parent',
+    '  --json          emit the report as JSON',
   ].join('\n');
 }
 
 function parseArgs(argv: readonly string[]): CliOptions {
   const options: CliOptions = {
-    file: resolve(process.cwd(), 'shared/lib/wavemill-mill.sh'),
+    parent: resolve(process.cwd(), 'shared/lib/wavemill-mill.sh'),
+    monitor: resolve(process.cwd(), 'shared/lib/wavemill-monitor.sh'),
     json: false,
   };
 
@@ -27,10 +36,15 @@ function parseArgs(argv: readonly string[]): CliOptions {
     const arg = argv[index]!;
     if (arg === '--json') {
       options.json = true;
-    } else if (arg === '--file') {
+    } else if (arg === '--parent' || arg === '--file') {
       const value = argv[index + 1];
-      if (!value) throw new Error('--file requires a path');
-      options.file = resolve(process.cwd(), value);
+      if (!value) throw new Error(`${arg} requires a path`);
+      options.parent = resolve(process.cwd(), value);
+      index += 1;
+    } else if (arg === '--monitor') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--monitor requires a path');
+      options.monitor = resolve(process.cwd(), value);
       index += 1;
     } else if (arg === '--help' || arg === '-h') {
       console.log(usage());
@@ -46,7 +60,10 @@ function parseArgs(argv: readonly string[]): CliOptions {
 function main(): void {
   try {
     const options = parseArgs(process.argv.slice(2));
-    const report = compareParentMonitor(readFileSync(options.file, 'utf8'));
+    const report = compareParentMonitorFiles(
+      readFileSync(options.parent, 'utf8'),
+      readFileSync(options.monitor, 'utf8'),
+    );
 
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));

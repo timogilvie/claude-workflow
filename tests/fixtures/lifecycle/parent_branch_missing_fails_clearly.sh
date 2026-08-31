@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 COMMON_LIB="$REPO_DIR/shared/lib/wavemill-common.sh"
-MILL_LIB="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_LIB="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -70,7 +70,7 @@ JSON
 # shellcheck source=/dev/null
 source "$COMMON_LIB"
 
-extract_function "$MILL_LIB" "dispatch_queued_children_for_parent" >> "$FUNCTION_FILE"
+extract_function "$MONITOR_LIB" "dispatch_queued_children_for_parent" >> "$FUNCTION_FILE"
 
 log_warn() {
   printf 'WARN:%s\n' "$*" >> "$LOG_FILE"

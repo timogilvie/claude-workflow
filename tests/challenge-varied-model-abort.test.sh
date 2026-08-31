@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -17,14 +17,14 @@ extract_function() {
     $0 ~ "^" name "\\(\\) \\{" { capture=1 }
     capture { print }
     /^}/ && capture { exit }
-  ' "$MILL_SCRIPT"
+  ' "$MONITOR_SCRIPT_FILE"
 }
 
 HELPERS="$(awk '
   /^challenge_varied_stage_model\(\) \{/ { capture=1 }
   /^challenge_plan_stage_requires_effective_route\(\) \{/ && capture { exit }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 eval "$HELPERS"
 eval "$(extract_function resolve_phase_model)"
 eval "$(extract_function resolve_stage_result_model)"

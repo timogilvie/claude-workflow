@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
@@ -46,8 +46,8 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 HELPER_FILE="$TEST_TMP/ready_helpers.sh"
-extract_function "$MILL_SCRIPT" "log_ready_failure_result" > "$HELPER_FILE"
-extract_function "$MILL_SCRIPT" "log_ready_unparseable_result" >> "$HELPER_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "log_ready_failure_result" > "$HELPER_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "log_ready_unparseable_result" >> "$HELPER_FILE"
 
 if [[ ! -s "$HELPER_FILE" ]]; then
   echo "Could not extract ready logging helpers"

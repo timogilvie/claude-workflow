@@ -16,7 +16,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_REPO_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 RUNNER="$SOURCE_REPO_DIR/shared/lib/wavemill-startup-runner.sh"
-MILL="$SOURCE_REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_LIB="$SOURCE_REPO_DIR/shared/lib/wavemill-monitor.sh"
 TMP_DIR="$(mktemp -d /tmp/wavemill-integration-observer-recover.XXXXXX)"
 SESSION="wavemill-integration-observer-recover-$$"
 export SESSION
@@ -104,14 +104,14 @@ log() { shift || true; printf '%s\n' "$*" >> "$STATUS_LOG_FILE"; }
 
 source "$SOURCE_REPO_DIR/shared/lib/wavemill-common.sh"
 eval "$(extract_function "$RUNNER" spawn_integration_window)"
-eval "$(extract_function "$MILL" backstage_health_enabled)"
-eval "$(extract_function "$MILL" probe_backstage_panes)"
-eval "$(extract_function "$MILL" read_backstage_health_field)"
-eval "$(extract_function "$MILL" read_backstage_service_health_field)"
-eval "$(extract_function "$MILL" observer_health_enabled)"
-eval "$(extract_function "$MILL" classify_backstage_observer_health)"
-eval "$(extract_function "$MILL" restart_backstage_observer_loop)"
-eval "$(extract_function "$MILL" check_backstage_observer_health)"
+eval "$(extract_function "$MONITOR_LIB" backstage_health_enabled)"
+eval "$(extract_function "$MONITOR_LIB" probe_backstage_panes)"
+eval "$(extract_function "$MONITOR_LIB" read_backstage_health_field)"
+eval "$(extract_function "$MONITOR_LIB" read_backstage_service_health_field)"
+eval "$(extract_function "$MONITOR_LIB" observer_health_enabled)"
+eval "$(extract_function "$MONITOR_LIB" classify_backstage_observer_health)"
+eval "$(extract_function "$MONITOR_LIB" restart_backstage_observer_loop)"
+eval "$(extract_function "$MONITOR_LIB" check_backstage_observer_health)"
 
 tmux new-session -d -s "$SESSION" -n mill -x 220 -y 50 -c "$TEST_REPO" 'sleep 300'
 spawn_integration_window

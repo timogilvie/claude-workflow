@@ -3054,6 +3054,112 @@ state_mutate() {
   return "$mutate_status"
 }
 
+# ============================================================================
+# TASK STATE LEDGER
+# ============================================================================
+
+# Canonical task-state writer (HOK-2900). Before canonicalization the parent
+# mill, the startup runner, and the extracted monitor each carried a private
+# copy whose semantics had drifted: the parent copy defaulted an omitted
+# status to "" and never resolved a traceId (and had no production call site
+# left after the monitor extraction), while the monitor copy defaulted to
+# "active" and resolved traceId but rebuilt the task object from a fixed
+# field literal, silently dropping any stored field missing from its
+# allowlist (windowId among them). The startup copy instead collided on
+# positional argument 19 (phase there, challengeStage in the monitor). One
+# implementation lives here, sourced by all three scopes, so the live startup
+# launch writes and monitor runtime writes cannot drift apart again.
+#
+# Usage:
+#   save_task_state <issue> <slug> <branch> <worktree> [pr] [status] [agent]
+#     [linearIssue] [challenge] [challengePair] [challengeRole]
+#     [challengeModel] [plannerModel] [coderModel] [reviewerModel]
+#     [planDepth] [codeDepth] [reviewMode] [challengeStage] [phase]
+#     [windowId]
+#
+# Canonical positional tail: challengeStage (19), phase (20), windowId (21).
+# The monitor passes challengeStage at 19; startup callers pass phase and
+# windowId at 20/21 so both live layouts are unambiguous.
+#
+# Merge contract: the write is a single atomic state_mutate that overlays only
+# the supplied core fields onto the existing task object; every key the writer
+# does not understand (phase/window, challenge intent and varied routing,
+# retry/evaluation/comparison state, execution metadata, unknown future
+# fields) is retained. Blank optional arguments mean "leave the stored value
+# unchanged"; pr and status are always written.
+#
+# Status default: a blank or omitted status argument saves "active" — the
+# monitor's live default — instead of an accidental empty status. An explicit
+# non-empty status (including terminal and error states) always wins.
+#
+# traceId is resolved best-effort from the worktree's
+# features/<slug>/.trace-context.json, then bugs/<slug>/.trace-context.json
+# (HOK-2259); an absent or malformed context never fails the write and never
+# erases a traceId already stored in the ledger.
+save_task_state() {
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
+  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
+  local challenge_stage="${19:-}" phase="${20:-}" window_id="${21:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
+
+  # Resolve traceId from the worktree's feature (then bug) directory —
+  # best-effort, never fails the state write.
+  local _trace_id_for_state="" _dir_prefix _ctx_candidate
+  for _dir_prefix in features bugs; do
+    _ctx_candidate="$worktree/$_dir_prefix/$slug/.trace-context.json"
+    if [[ -f "$_ctx_candidate" ]]; then
+      _trace_id_for_state=$(jq -r '.traceId // empty' "$_ctx_candidate" 2>/dev/null || true)
+      break
+    fi
+  done
+
+  if ! state_mutate "$STATE_FILE" \
+     '(.tasks[$issue] // {}) as $existing |
+      .tasks[$issue] = ($existing + {
+        slug: $slug,
+        branch: $branch,
+        worktree: $worktree,
+        pr: $pr,
+        status: $status,
+        linearIssueId: (if $linearIssue != "" then $linearIssue else ($existing.linearIssueId // $issue) end),
+        updated: (now | todate)
+      })
+      | if $agent != "" then .tasks[$issue].agent = $agent else . end
+      | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
+      | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
+      | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
+      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
+      | if $challengeStage != "" then .tasks[$issue].challengeStage = $challengeStage else . end
+      | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
+      | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
+      | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
+      | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
+      | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
+      | if $phase != "" then .tasks[$issue].phase = $phase else . end
+      | if $windowId != "" then .tasks[$issue].windowId = $windowId else . end
+      | if $traceId != "" then .tasks[$issue].traceId = $traceId else . end' \
+     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     --arg challengeStage "$challenge_stage" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
+     --arg phase "$phase" --arg windowId "$window_id" \
+     --arg traceId "$_trace_id_for_state"; then
+    # log_warn is caller-provided (the mill and monitor define it; the startup
+    # runner intentionally surfaces the failure through wavemill_lock_run).
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "save_task_state: failed to save $issue"
+    fi
+  fi
+}
+
 cleanup_background_jobs_startup() {
   # Keep only jobs created by the current session; older or pre-session jobs
   # are stale once a new session starts.

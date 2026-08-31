@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 extract_function() {
   local source_file="$1"
@@ -33,7 +33,7 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 archive_fn="$tmp/archive_stage_artifacts.sh"
-extract_function "$MILL_SCRIPT" "archive_stage_artifacts" > "$archive_fn"
+extract_function "$MONITOR_SCRIPT_FILE" "archive_stage_artifacts" > "$archive_fn"
 
 REPO_DIR="$tmp/repo"
 WORKTREE_ROOT="$REPO_DIR/worktrees"

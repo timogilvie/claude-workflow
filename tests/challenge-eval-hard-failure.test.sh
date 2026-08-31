@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -69,26 +70,28 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 FUNCTION_FILE="$TEST_TMP/challenge-hard-failure-functions.sh"
 : > "$FUNCTION_FILE"
 for fn in \
-  mark_challenge_eval_running:1 \
-  challenge_eval_hard_failure_max_retries:1 \
-  challenge_pair_hard_failure_reason:1 \
-  challenge_pair_records_file:1 \
-  challenge_pr_url_from_number:1 \
-  challenge_pair_record_exists:1 \
-  challenge_pr_number_from_url:1 \
-  cleanup_forfeit_loser_from_resolution:1 \
-  mark_challenge_compared:1 \
-  resolve_challenge_pair_hard_failure:1 \
-  sanitize_job_token:1 \
-  challenge_job_dir:1 \
-  build_eval_job_id:1 \
-  read_job_state_value:1 \
-  launch_tracked_job:1 \
-  post_merge_eval_timeout_seconds:1 \
-  maybe_run_challenge_eval:1
+  mark_challenge_eval_running:1:mill \
+  challenge_eval_hard_failure_max_retries:1:mill \
+  challenge_pair_hard_failure_reason:1:mill \
+  challenge_pair_records_file:1:mill \
+  challenge_pr_url_from_number:1:mill \
+  challenge_pair_record_exists:1:mill \
+  challenge_pr_number_from_url:1:mill \
+  cleanup_forfeit_loser_from_resolution:1:mill \
+  mark_challenge_compared:1:monitor \
+  resolve_challenge_pair_hard_failure:1:mill \
+  sanitize_job_token:1:monitor \
+  challenge_job_dir:1:monitor \
+  build_eval_job_id:1:monitor \
+  read_job_state_value:1:monitor \
+  launch_tracked_job:1:monitor \
+  post_merge_eval_timeout_seconds:1:monitor \
+  maybe_run_challenge_eval:1:monitor
 do
-  IFS=: read -r name occurrence <<<"$fn"
-  extract_function_occurrence "$MILL_SCRIPT" "$name" "$occurrence" >> "$FUNCTION_FILE"
+  IFS=: read -r name occurrence source <<<"$fn"
+  source_file="$MILL_SCRIPT"
+  [[ "$source" == "monitor" ]] && source_file="$MONITOR_SCRIPT_FILE"
+  extract_function_occurrence "$source_file" "$name" "$occurrence" >> "$FUNCTION_FILE"
   printf '\n' >> "$FUNCTION_FILE"
 done
 
