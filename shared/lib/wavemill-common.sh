@@ -93,6 +93,360 @@ wavemill_pane_area() {
   printf '%s\n' "$(( width * height ))"
 }
 
+_tmux_window_target_exists() {
+  local session="$1" target="$2" expected_path="${3:-}"
+  local target_session target_path expected_real target_real pane_dead
+
+  [[ -n "$session" && -n "$target" ]] || return 1
+  target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
+  [[ "$target_session" == "$session" ]] || return 1
+  if [[ -n "$expected_path" ]]; then
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    if [[ -z "$target_path" ]]; then
+      pane_dead="$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+      [[ "$pane_dead" == "1" ]] && return 0
+      return 1
+    fi
+    expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    [[ "$target_real" == "$expected_real" ]] || return 1
+  fi
+  return 0
+}
+
+_tmux_target_join() {
+  local session="$1" target="$2"
+  [[ -n "$target" ]] || return 1
+  case "$target" in
+    @*|*:*) printf '%s\n' "$target" ;;
+    *) printf '%s:%s\n' "$session" "$target" ;;
+  esac
+}
+
+_tmux_task_window_target() {
+  local session="$1" issue="$2" slug="$3" state_file="${4:-${STATE_FILE:-}}" wt_dir="${5:-}"
+  local stored_target="" canonical target issue_number renamed_target
+
+  if [[ -n "$state_file" && -f "$state_file" ]]; then
+    stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$state_file" 2>/dev/null || true)"
+  fi
+  if _tmux_window_target_exists "$session" "$stored_target" "$wt_dir"; then
+    printf '%s\n' "$stored_target"
+    return 0
+  fi
+
+  issue_number="${issue##*-}"
+  renamed_target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v issue="$issue" -v issue_number="$issue_number" -v slug="$slug" '
+        index($2, issue_number " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue_number " · " slug) == 1 { print $1; exit }
+        index($2, issue " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue " · " slug) == 1 { print $1; exit }
+      ')"
+  if _tmux_window_target_exists "$session" "$renamed_target" "$wt_dir"; then
+    printf '%s\n' "$renamed_target"
+    return 0
+  fi
+
+  canonical="${issue}-${slug}"
+  target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
+  if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+
+  if [[ -n "$wt_dir" ]]; then
+    while IFS='|' read -r target _name; do
+      [[ -n "$target" ]] || continue
+      if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+        printf '%s\n' "$target"
+        return 0
+      fi
+    done < <(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null || true)
+  fi
+
+  return 1
+}
+
+retry_state_file() {
+  local session="$1"
+  local issue="$2"
+  printf '/tmp/wavemill-%s-%s.retry\n' "$session" "$issue"
+}
+
+reset_retry_count() {
+  local retry_file
+  retry_file="$(retry_state_file "$1" "$2")"
+  rm -f "$retry_file" 2>/dev/null || true
+}
+
+wavemill_cleanup_run() {
+  if command -v execute >/dev/null 2>&1; then
+    execute "$@"
+  else
+    "$@"
+  fi
+}
+
+_wavemill_archive_copy() {
+  local src="$1" dest="$2"
+  [[ -f "$src" ]] || return 0
+  mkdir -p "$(dirname "$dest")" 2>/dev/null || {
+    log_warn "  Failed to create artifact archive directory: $(dirname "$dest")"
+    return 1
+  }
+  if cp "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  log_warn "  Failed to archive artifact: $src"
+  return 1
+}
+
+_wavemill_archive_json_copy() {
+  local src="$1" dest="$2" label="${3:-artifact}"
+  [[ -f "$src" ]] || return 0
+  if jq -e . "$src" >/dev/null 2>&1; then
+    _wavemill_archive_copy "$src" "$dest"
+    return $?
+  fi
+  log_warn "  Skipping invalid ${label} archive: $src"
+  return 0
+}
+
+# Archive stage artifacts from worktree before cleanup.
+# Cleanup treats an archive copy failure as retryable and stops before removing
+# the window, worktree, branches, retry state, or task state.
+archive_stage_artifacts() {
+  local issue="$1" slug="$2"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local archive_dir="${REPO_DIR}/.wavemill/evals/artifacts/${issue}"
+  local feature_dir="" dir status=0
+
+  [[ -d "$wt_dir" ]] || return 0
+  mkdir -p "$archive_dir" 2>/dev/null || {
+    log_warn "  Failed to create artifact archive directory: $archive_dir"
+    return 1
+  }
+
+  for dir in features bugs; do
+    if [[ -d "$wt_dir/$dir/$slug" ]]; then
+      feature_dir="$wt_dir/$dir/$slug"
+      break
+    fi
+  done
+
+  if [[ -n "$feature_dir" ]]; then
+    _wavemill_archive_copy "$feature_dir/plan.md" "$archive_dir/plan.md" || status=1
+    if [[ -f "$feature_dir/task-packet.md" ]]; then
+      _wavemill_archive_copy "$feature_dir/task-packet.md" "$archive_dir/task-packet.md" || status=1
+    elif [[ -f "$feature_dir/task-packet-header.md" ]]; then
+      _wavemill_archive_copy "$feature_dir/task-packet-header.md" "$archive_dir/task-packet-header.md" || status=1
+      _wavemill_archive_copy "$feature_dir/task-packet-details.md" "$archive_dir/task-packet-details.md" || status=1
+    fi
+
+    _wavemill_archive_json_copy "$feature_dir/.routing-complete" "$archive_dir/routing-complete.json" "route artifact" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.initial-route.json" "$archive_dir/initial-route.json" "route artifact" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.post-expansion-route.json" "$archive_dir/post-expansion-route.json" "route artifact" || status=1
+    _wavemill_archive_copy "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" || status=1
+    _wavemill_archive_copy "$feature_dir/.coding-uncommitted-output.resolved.jsonl" "$archive_dir/coding-uncommitted-output.resolved.jsonl" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.operator-intervention.json" "$archive_dir/operator-intervention.json" "operator intervention" || status=1
+
+    local stage result_file sidecar sidecar_name
+    for stage in planning coding review; do
+      result_file="$feature_dir/.${stage}-result.json"
+      _wavemill_archive_json_copy "$result_file" "$archive_dir/${stage}-result.json" "stage result" || status=1
+
+      for sidecar in "$feature_dir/.${stage}-result.attempt-"*-failed.json; do
+        [[ -f "$sidecar" ]] || continue
+        sidecar_name="$(basename "$sidecar")"
+        sidecar_name="${sidecar_name#.}"
+        _wavemill_archive_json_copy "$sidecar" "$archive_dir/$sidecar_name" "failed attempt" || status=1
+      done
+    done
+
+    local evidence_file evidence_name
+    for evidence_name in ".challenge-aborted.json" ".coding-failure-handoff.json"; do
+      evidence_file="$feature_dir/$evidence_name"
+      _wavemill_archive_json_copy "$evidence_file" "$archive_dir/$evidence_name" "failure evidence" || status=1
+    done
+
+    if [[ -d "$feature_dir/.stale-artifacts" ]]; then
+      local stale_file stale_rel stale_dest
+      while IFS= read -r stale_file; do
+        [[ -f "$stale_file" ]] || continue
+        stale_rel="${stale_file#$feature_dir/.stale-artifacts/}"
+        stale_dest="$archive_dir/stale-artifacts/$stale_rel"
+        _wavemill_archive_copy "$stale_file" "$stale_dest" || status=1
+      done < <(find "$feature_dir/.stale-artifacts" -type f \( -name '.challenge-aborted.json' -o -name '.coding-failure-handoff.json' -o -name '*.jsonl' \) 2>/dev/null)
+    fi
+
+    local json_file jsonl_ref jsonl_path jsonl_dest jsonl_base
+    while IFS= read -r json_file; do
+      [[ -f "$json_file" ]] || continue
+      while IFS= read -r jsonl_ref; do
+        [[ -n "$jsonl_ref" ]] || continue
+        jsonl_path=""
+        if [[ "$jsonl_ref" = /* && -f "$jsonl_ref" ]]; then
+          jsonl_path="$jsonl_ref"
+        elif [[ -f "$feature_dir/$jsonl_ref" ]]; then
+          jsonl_path="$feature_dir/$jsonl_ref"
+        elif [[ -f "$wt_dir/$jsonl_ref" ]]; then
+          jsonl_path="$wt_dir/$jsonl_ref"
+        fi
+        [[ -n "$jsonl_path" ]] || continue
+        jsonl_base="$(basename "$jsonl_path")"
+        jsonl_dest="$archive_dir/native-sessions/$jsonl_base"
+        _wavemill_archive_copy "$jsonl_path" "$jsonl_dest" || status=1
+      done < <(jq -r '.. | select(type == "string" and test("\\.jsonl$"))' "$json_file" 2>/dev/null || true)
+    done < <(find "$feature_dir" -maxdepth 3 -type f \( -name '*.json' -o -name '.*.json' \) 2>/dev/null)
+
+    _wavemill_archive_copy "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" || status=1
+
+    local _tid _iid _sl
+    _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
+    if [[ -n "$_tid" ]]; then
+      _iid=$(jq -r '.issueId // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      _sl=$(jq -r '.slug // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      if [[ -n "$_iid" && -n "$_sl" ]]; then
+        trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "cleanup" "cleanup_archived" "ok" "" "" \
+          "$(jq -cn --arg dir "$archive_dir" '{meta:{archiveDir:$dir}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
+        _wavemill_archive_copy "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" || status=1
+      fi
+    fi
+  fi
+
+  local count
+  count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$count" -gt 0 ]]; then
+    log "debug" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+  fi
+  return "$status"
+}
+
+cleanup_remote_task_branch() {
+  local issue="$1" task_branch="$2" pr="${3:-}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+    return 0
+  fi
+  case "$task_branch" in
+    task/*) ;;
+    *) log "debug" "$issue: retaining non-task remote branch $task_branch"; return 0 ;;
+  esac
+
+  if [[ -z "$pr" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (no PR recorded)"
+    return 0
+  fi
+
+  local state
+  state=$(pr_state "$pr")
+  if [[ "$state" != "MERGED" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (PR #$pr state=${state:-unknown}, not merged)"
+    return 0
+  fi
+
+  local ls_remote_rc
+  if _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" ls-remote --exit-code --heads origin "refs/heads/$task_branch" >/dev/null 2>&1; then
+    ls_remote_rc=0
+  else
+    ls_remote_rc=$?
+  fi
+  if [[ "$ls_remote_rc" == "2" ]]; then
+    log "debug" "$issue: remote branch already absent: $task_branch"
+    return 0
+  elif [[ "$ls_remote_rc" != "0" ]]; then
+    log_warn "  Remote branch cleanup could not verify branch (retained): $task_branch"
+    return 1
+  fi
+
+  if wavemill_cleanup_run _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>&1; then
+    log "debug" "Deleted remote branch: $task_branch"
+  else
+    log_warn "  Remote branch cleanup failed (retained): $task_branch"
+    return 1
+  fi
+}
+
+# Canonical completed-task cleanup order:
+# 1. archive artifacts, 2. close pane/window, 3. remove worktree,
+# 4. remove local branch, 5. remove eligible remote branch,
+# 6. prune hooks/worktrees, 7. reset retry state and remove task state.
+cleanup_completed_task() {
+  local issue="$1"
+  local slug="$2"
+  local completion_reason="${3:-}"
+  local win="$issue-$slug"
+  local target=""
+  local target_gone="false"
+  local pr=""
+
+  pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [[ -z "$pr" ]] && declare -p PR_BY_ISSUE >/dev/null 2>&1; then
+    pr="${PR_BY_ISSUE[$issue]:-}"
+  fi
+
+  if ! archive_stage_artifacts "$issue" "$slug"; then
+    log_warn "  $issue cleanup could not archive stage artifacts; keeping task state"
+    return 1
+  fi
+
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+    target_gone="true"
+  else
+    wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+      target_gone="true"
+    fi
+  fi
+
+  if [[ "$target_gone" != "true" ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue cleanup could not close tmux window; keeping task state"
+    return 1
+  fi
+
+  log "debug" "Closed window: $win"
+
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  if [[ -d "$wt_dir" ]]; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Removed worktree: $wt_dir"
+    else
+      log_warn "  Worktree cleanup failed: $wt_dir"
+      return 1
+    fi
+  fi
+
+  local task_branch="task/${slug}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Deleted local branch: $task_branch"
+    else
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
+      return 1
+    fi
+  fi
+
+  cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+
+  wavemill_cleanup_run git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  remove_task_state "$issue"
+  CLEANED["$issue"]=1
+
+  if [[ -n "$completion_reason" ]]; then
+    log "$issue: Complete ($completion_reason)"
+  else
+    log "$issue: Complete"
+  fi
+}
+
 # The observer's findings are the highest-signal output in the backstage window,
 # while the tend loop prints a single repeated status line. Give the observer the
 # larger pane.

@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -98,7 +99,7 @@ render_backlog_case() {
 
 echo "=== Log Hygiene ==="
 
-source_checks="$(cat "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE")"
+source_checks="$(cat "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE" "$COMMON_SCRIPT")"
 
 check_contains "completion log includes issue-first with reason" "$source_checks" '$issue: Complete ($completion_reason)'
 check_contains "completion log includes issue-first without reason" "$source_checks" '$issue: Complete'

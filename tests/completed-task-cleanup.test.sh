@@ -3,8 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
-MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -58,56 +58,24 @@ extract_function() {
   ' "$source_file"
 }
 
-extract_nth_function() {
-  local source_file="$1"
-  local function_name="$2"
-  local target_count="$3"
-  awk -v name="$function_name" -v target="$target_count" '
-    function brace_delta(line, stripped, opens, closes) {
-      stripped = line
-      gsub(/"([^"\\]|\\.)*"/, "\"\"", stripped)
-      gsub(/\047([^\047\\]|\\.)*\047/, "\047\047", stripped)
-      opens = gsub(/\{/, "{", stripped)
-      closes = gsub(/\}/, "}", stripped)
-      return opens - closes
-    }
-    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" {
-      count++
-      if (count == target) {
-        capture = 1
-        depth = 0
-      }
-    }
-    capture {
-      print
-      depth += brace_delta($0)
-      if (depth == 0) {
-        exit
-      }
-    }
-  ' "$source_file"
-}
-
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 HELPERS_FILE="$TEST_TMP/tmux_helpers.sh"
 {
-  extract_function "$MONITOR_SCRIPT_FILE" "_tmux_window_target_exists"
+  extract_function "$COMMON_SCRIPT" "_tmux_window_target_exists"
   printf '\n'
-  extract_function "$MONITOR_SCRIPT_FILE" "_tmux_target_join"
+  extract_function "$COMMON_SCRIPT" "_tmux_target_join"
   printf '\n'
-  extract_function "$MONITOR_SCRIPT_FILE" "_tmux_task_window_target"
+  extract_function "$COMMON_SCRIPT" "_tmux_task_window_target"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_cleanup_run"
 } > "$HELPERS_FILE"
 
 CLEANUP_FILE="$TEST_TMP/cleanup_completed_task.sh"
-extract_nth_function "$MONITOR_SCRIPT_FILE" "cleanup_completed_task" 1 > "$CLEANUP_FILE"
+extract_function "$COMMON_SCRIPT" "cleanup_completed_task" > "$CLEANUP_FILE"
 REMOTE_CLEANUP_FILE="$TEST_TMP/cleanup_remote_task_branch.sh"
-extract_nth_function "$MONITOR_SCRIPT_FILE" "cleanup_remote_task_branch" 1 > "$REMOTE_CLEANUP_FILE"
-OUTER_CLEANUP_FILE="$TEST_TMP/outer_cleanup_completed_task.sh"
-extract_nth_function "$MILL_SCRIPT" "cleanup_completed_task" 1 > "$OUTER_CLEANUP_FILE"
-OUTER_REMOTE_CLEANUP_FILE="$TEST_TMP/outer_cleanup_remote_task_branch.sh"
-extract_nth_function "$MILL_SCRIPT" "cleanup_remote_task_branch" 1 > "$OUTER_REMOTE_CLEANUP_FILE"
+extract_function "$COMMON_SCRIPT" "cleanup_remote_task_branch" > "$REMOTE_CLEANUP_FILE"
 EXECUTE_FILE="$TEST_TMP/execute.sh"
 extract_function "$MILL_SCRIPT" "execute" > "$EXECUTE_FILE"
 
@@ -198,14 +166,20 @@ EOF
     WARN_OUTPUT=""
     ATTENTION=""
     REMOVE_STATE_CALLS=0
+    RESET_RETRY_CALLS=0
     KILLED=0
     GIT_CALLS=""
+    ORDER=""
 
-    archive_stage_artifacts() { :; }
+    archive_stage_artifacts() {
+      ORDER+="archive;"
+      [[ "$TEST_CASE" != "archive-fails" ]]
+    }
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { WARN_OUTPUT+="$*\n"; }
     set_window_attention_state() { ATTENTION="$2"; }
-    remove_task_state() { REMOVE_STATE_CALLS=$((REMOVE_STATE_CALLS + 1)); }
+    reset_retry_count() { RESET_RETRY_CALLS=$((RESET_RETRY_CALLS + 1)); ORDER+="reset;"; }
+    remove_task_state() { REMOVE_STATE_CALLS=$((REMOVE_STATE_CALLS + 1)); ORDER+="remove-state;"; }
     _with_timeout() { shift; "$@"; }
     pr_state() {
       case "$TEST_CASE" in
@@ -220,13 +194,34 @@ EOF
       fi
       GIT_CALLS+="$*;"
       case "${1:-} ${2:-}" in
+        "worktree remove")
+          ORDER+="worktree-remove;"
+          [[ "$TEST_CASE" != "worktree-fails" ]]
+          return $?
+          ;;
+        "worktree prune")
+          ORDER+="prune;"
+          return 0
+          ;;
+        "branch -D")
+          ORDER+="branch-delete;"
+          [[ "$TEST_CASE" != "local-branch-fails" ]]
+          return $?
+          ;;
+        "show-ref --verify")
+          [[ "$TEST_CASE" != "local-branch-absent" ]]
+          return $?
+          ;;
         "ls-remote --exit-code")
+          ORDER+="ls-remote;"
           [[ "$TEST_CASE" == "merged-remote-absent" ]] && return 2
+          [[ "$TEST_CASE" == "ls-remote-fails" ]] && return 128
           return 0
           ;;
         "push origin")
-          [[ "$TEST_CASE" == "push-fails" ]] && return 1
-          return 0
+          ORDER+="push-delete;"
+          [[ "$TEST_CASE" != "push-fails" ]]
+          return $?
           ;;
       esac
       return 0
@@ -265,6 +260,7 @@ EOF
           return 1
           ;;
         kill-window)
+          ORDER+="tmux-kill;"
           KILLED=1
           return 0
           ;;
@@ -274,22 +270,29 @@ EOF
       esac
     }
 
-    cleanup_completed_task "$ISSUE" "$SLUG" "test cleanup" || true
+    set +e
+    cleanup_completed_task "$ISSUE" "$SLUG" "test cleanup"
+    rc=$?
+    set -e
 
+    printf "rc=%s\n" "$rc"
     printf "remove_state_calls=%s\n" "$REMOVE_STATE_CALLS"
+    printf "reset_retry_calls=%s\n" "$RESET_RETRY_CALLS"
     printf "cleaned=%s\n" "${CLEANED[$ISSUE]:-}"
     printf "attention=%s\n" "$ATTENTION"
     printf "git_calls=%s\n" "$GIT_CALLS"
+    printf "order=%s\n" "$ORDER"
     printf "logs=%s\n" "$(printf "%s" "$LOG_OUTPUT" | tr "\n" ";")"
     printf "warns=%s\n" "$(printf "%s" "$WARN_OUTPUT" | tr "\n" ";")"
   ' 2>&1
 }
 
 run_protected_helper_case() {
-  local case_dir="$TEST_TMP/protected-helper"
+  local branch="$1"
+  local case_dir="$TEST_TMP/protected-helper-$branch"
   mkdir -p "$case_dir/repo"
 
-  CASE_DIR="$case_dir" REMOTE_CLEANUP_FILE="$REMOTE_CLEANUP_FILE" bash -lc '
+  CASE_DIR="$case_dir" REMOTE_CLEANUP_FILE="$REMOTE_CLEANUP_FILE" BRANCH="$branch" bash -lc '
     set -euo pipefail
     source "$REMOTE_CLEANUP_FILE"
     REPO_DIR="$CASE_DIR/repo"
@@ -302,17 +305,17 @@ run_protected_helper_case() {
     _with_timeout() { shift; "$@"; }
     git() { return 0; }
 
-    cleanup_remote_task_branch "HOK-2348" "main" "4242"
+    cleanup_remote_task_branch "HOK-2348" "$BRANCH" "4242" || true
     printf "logs=%s\n" "$(printf "%s" "$LOG_OUTPUT" | tr "\n" ";")"
     printf "warns=%s\n" "$(printf "%s" "$WARN_OUTPUT" | tr "\n" ";")"
   ' 2>&1
 }
 
-run_outer_dry_run_case() {
-  local case_dir="$TEST_TMP/outer-dry-run"
+run_common_dry_run_case() {
+  local case_dir="$TEST_TMP/common-dry-run"
   mkdir -p "$case_dir/repo" "$case_dir/worktrees/task-slug"
 
-  CASE_DIR="$case_dir" HELPERS_FILE="$HELPERS_FILE" CLEANUP_FILE="$OUTER_CLEANUP_FILE" REMOTE_CLEANUP_FILE="$OUTER_REMOTE_CLEANUP_FILE" EXECUTE_FILE="$EXECUTE_FILE" bash -lc '
+  CASE_DIR="$case_dir" HELPERS_FILE="$HELPERS_FILE" CLEANUP_FILE="$CLEANUP_FILE" REMOTE_CLEANUP_FILE="$REMOTE_CLEANUP_FILE" EXECUTE_FILE="$EXECUTE_FILE" bash -lc '
     set -euo pipefail
     source "$HELPERS_FILE"
     source "$EXECUTE_FILE"
@@ -337,24 +340,23 @@ EOF
     declare -Ag CLEANED=()
     declare -Ag PR_BY_ISSUE=()
     REMOVE_STATE_CALLS=0
-    KILLED=0
     LOG_OUTPUT=""
     WARN_OUTPUT=""
 
+    archive_stage_artifacts() { :; }
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { WARN_OUTPUT+="$*\n"; }
     set_window_attention_state() { :; }
     reset_retry_count() { :; }
     remove_task_state() { REMOVE_STATE_CALLS=$((REMOVE_STATE_CALLS + 1)); }
     pr_state() { printf "%s\n" "MERGED"; }
-
+    _with_timeout() { shift; "$@"; }
     git() {
       if [[ "${1:-}" == "-C" ]]; then
         shift 2
       fi
       return 0
     }
-    _with_timeout() { shift; "$@"; }
     tmux() { return 1; }
 
     cleanup_completed_task "$ISSUE" "$SLUG" "test cleanup" || true
@@ -371,42 +373,81 @@ output="$(run_target_resolution_case renamed-title)"
 check_contains "renamed title resolves current window id" "$output" "target=@31"
 
 output="$(run_cleanup_case dead-pane-success)"
+check_contains "cleanup success returns zero" "$output" "rc=0"
+check_contains "cleanup archives before destructive cleanup" "$output" "order=archive;tmux-kill;worktree-remove;branch-delete;ls-remote;push-delete;prune;reset;remove-state;"
+check_contains "cleanup success resets retry state" "$output" "reset_retry_calls=1"
 check_contains "cleanup success removes task state" "$output" "remove_state_calls=1"
 check_contains "cleanup success marks issue cleaned" "$output" "cleaned=1"
 check_contains "cleanup success keeps attention clear" "$output" "attention="
 check_not_contains "cleanup success avoids warnings" "$output" "keeping task state"
 
+output="$(run_cleanup_case local-branch-absent)"
+check_contains "missing local branch still completes" "$output" "rc=0"
+check_contains "missing local branch skips branch deletion" "$output" "order=archive;tmux-kill;worktree-remove;ls-remote;push-delete;prune;reset;remove-state;"
+
 output="$(run_cleanup_case merged-remote-present)"
 check_contains "merged PR deletes remote branch" "$output" "push origin --delete task/task-slug"
 check_contains "merged PR logs remote deletion" "$output" "Deleted remote branch: task/task-slug"
-check_contains "merged PR cleanup still removes state" "$output" "remove_state_calls=1"
+check_contains "merged PR cleanup removes state" "$output" "remove_state_calls=1"
 
 output="$(run_cleanup_case merged-remote-absent)"
 check_not_contains "absent remote avoids delete push" "$output" "push origin --delete task/task-slug"
 check_contains "absent remote logs no-op" "$output" "remote branch already absent: task/task-slug"
 check_contains "absent remote produces no warning" "$output" "warns="
+check_contains "absent remote still completes" "$output" "rc=0"
 
 output="$(run_cleanup_case closed-unmerged)"
 check_not_contains "closed unmerged retains remote branch" "$output" "push origin --delete task/task-slug"
 check_contains "closed unmerged logs retention" "$output" "retaining remote branch task/task-slug (PR #4242 state=CLOSED"
+check_contains "closed unmerged completes" "$output" "rc=0"
 
 output="$(run_cleanup_case no-pr)"
 check_not_contains "missing PR avoids remote delete" "$output" "push origin --delete task/task-slug"
 check_contains "missing PR logs retention" "$output" "retaining remote branch task/task-slug (no PR recorded)"
+check_contains "missing PR completes" "$output" "rc=0"
+
+output="$(run_cleanup_case archive-fails)"
+check_contains "archive failure returns non-zero" "$output" "rc=1"
+check_contains "archive failure stops before tmux/git" "$output" "order=archive;"
+check_contains "archive failure preserves state" "$output" "remove_state_calls=0"
+check_contains "archive failure warns" "$output" "could not archive stage artifacts"
+
+output="$(run_cleanup_case worktree-fails)"
+check_contains "worktree failure returns non-zero" "$output" "rc=1"
+check_contains "worktree failure preserves state" "$output" "remove_state_calls=0"
+check_contains "worktree failure preserves retry state" "$output" "reset_retry_calls=0"
+check_not_contains "worktree failure skips branch deletion" "$output" "branch -D"
+
+output="$(run_cleanup_case local-branch-fails)"
+check_contains "local branch failure returns non-zero" "$output" "rc=1"
+check_contains "local branch failure preserves state" "$output" "remove_state_calls=0"
+check_contains "local branch failure warns" "$output" "Local branch cleanup failed after worktree removal: task/task-slug"
+check_not_contains "local branch failure skips remote cleanup" "$output" "push origin --delete"
 
 output="$(run_cleanup_case push-fails)"
+check_contains "push failure returns non-zero" "$output" "rc=1"
 check_contains "push failure warns" "$output" "Remote branch cleanup failed (retained): task/task-slug"
-check_contains "push failure still marks cleaned" "$output" "cleaned=1"
-check_contains "push failure still removes state" "$output" "remove_state_calls=1"
+check_contains "push failure preserves state" "$output" "remove_state_calls=0"
+check_contains "push failure preserves retry state" "$output" "reset_retry_calls=0"
 
-output="$(run_protected_helper_case)"
+output="$(run_cleanup_case ls-remote-fails)"
+check_contains "ls-remote failure returns non-zero" "$output" "rc=1"
+check_contains "ls-remote failure warns" "$output" "Remote branch cleanup could not verify branch (retained): task/task-slug"
+check_contains "ls-remote failure preserves state" "$output" "remove_state_calls=0"
+
+output="$(run_protected_helper_case main)"
 check_contains "helper refuses protected branch" "$output" "Refusing to delete protected branch: main"
 
-output="$(run_outer_dry_run_case)"
-check_contains "outer dry run reports remote delete" "$output" "[DRY-RUN] _with_timeout 5 git -C"
-check_contains "outer dry run includes push delete" "$output" "push origin --delete task/task-slug"
+output="$(run_protected_helper_case feature/demo)"
+check_contains "helper retains non-task branch" "$output" "retaining non-task remote branch feature/demo"
+
+output="$(run_common_dry_run_case)"
+check_contains "common dry run reports worktree remove" "$output" "[DRY-RUN] git -C"
+check_contains "common dry run reports remote delete" "$output" "[DRY-RUN] _with_timeout 5 git -C"
+check_contains "common dry run includes push delete" "$output" "push origin --delete task/task-slug"
 
 output="$(run_cleanup_case kill-persistent)"
+check_contains "cleanup failure returns non-zero" "$output" "rc=1"
 check_contains "cleanup failure preserves task state" "$output" "remove_state_calls=0"
 check_contains "cleanup failure does not mark issue cleaned" "$output" "cleaned="
 check_contains "cleanup failure requests attention" "$output" "attention=needs-user"
