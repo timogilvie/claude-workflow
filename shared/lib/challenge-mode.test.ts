@@ -37,6 +37,7 @@ import {
   resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
 import { clearConfigCache } from './config.ts';
+import { listEffectiveModelsForStage } from './effective-models.ts';
 import { computeIdentityFingerprint, getEffectiveRegistry } from './model-registry.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
@@ -1375,6 +1376,40 @@ test('pickChallengeModels selects the least-used zero-record implementation chal
   assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
   assert.equal(selection.pair!.selectionReason, 'least-used-zero-record');
   assert.equal(selection.pair!.challengerCoverageCount, 0);
+});
+
+test('pickChallengeModels filters offered challengers through the implementation effective projection', () => {
+  assert.equal(
+    listEffectiveModelsForStage('coding').models.includes('ox-alpha'),
+    false,
+    'fixture must remain absent from the launch preflight coding projection',
+  );
+
+  const selection = pickChallengeModelsWithReason(
+    ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'ox-alpha'],
+    {
+      pairId: 'HOK-2920',
+      issueId: 'HOK-2920',
+      slug: 'projection-filtered-implementation',
+      primaryModel: 'claude-opus-4-6',
+      forcedChallengerModel: 'ox-alpha',
+      recommendedChallengerModel: 'ox-alpha',
+      coverage: makeCoverage({
+        implementation: {
+          'ox-alpha': 0,
+          'claude-sonnet-4-5-20250929': 4,
+        },
+      }),
+      rotationSeed: 'HOK-2920|implementation',
+      randomFn: () => {
+        throw new Error('random fallback should not run');
+      },
+    },
+  );
+
+  assert.ok(selection.pair);
+  assert.equal(selection.pair!.challenger.model, 'claude-sonnet-4-5-20250929');
+  assert.notEqual(selection.pair!.challenger.model, 'ox-alpha');
 });
 
 test('preserved challenger pins the varied model past coverage selection', () => {

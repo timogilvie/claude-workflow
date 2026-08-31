@@ -29,6 +29,7 @@ eval "$HELPERS"
 eval "$(extract_function resolve_phase_model)"
 eval "$(extract_function resolve_stage_result_model)"
 eval "$(extract_function challenge_cancel_challenger_arm)"
+eval "$(extract_function handle_phase_launch_result)"
 
 TMP_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TMP_ROOT"' EXIT
@@ -42,11 +43,17 @@ MILL_LOG_FILE="$TMP_ROOT/mill.log"
 ATTENTION_FILE="$TMP_ROOT/attention.txt"
 LIFECYCLE_FILE="$TMP_ROOT/lifecycle.txt"
 
+log() { printf '[%s] %s\n' "$1" "$2" >> "$MILL_LOG_FILE"; }
 log_error() { :; }
 log_warn() { :; }
 log_route_lifecycle() { printf '%s\n' "$*" >> "$LIFECYCLE_FILE"; }
+agent_is_native_cmd() { [[ "${1:-}" == native-* ]]; }
 agent_model_looks_like_depth_tag() { [[ "${1:-}" == light || "${1:-}" == medium || "${1:-}" == deep ]]; }
 agent_validate_model() { [[ "${1:-}" != "bad-model" ]]; }
+clear_stage_result() { rm -f "$1/.$2-result.json"; }
+set_task_phase() {
+  state_mutate "$STATE_FILE" '.tasks[$issue].phase = $phase' --arg issue "$1" --arg phase "$2"
+}
 set_window_attention_state() { printf '%s=%s\n' "$1" "$2" >> "$ATTENTION_FILE"; }
 _tmux_task_window_target() { return 1; }
 _tmux_target_join() { printf '%s:%s\n' "$1" "$2"; }
@@ -134,6 +141,28 @@ if ! challenge_guard_varied_model_resolvable "HOK-1" "$feature_dir" "HOK-1-slug"
   fi
 else
   fail "coding guard did not reject invalid varied model"
+fi
+
+seed_state "implementation"
+feature_dir="$TMP_ROOT/native-preflight"
+mkdir -p "$feature_dir"
+: > "$MILL_LOG_FILE"
+AGENT_NATIVE_LAUNCH_LAST_JSON='{"ok":false,"model":"bad-model","wavemillAlias":"bad-model","code":"global-projection-missing","surface":"globalEffectiveModels.coding","reason":"coding projection rejected bad-model","remediation":"Choose a model present in the coding effective projection."}'
+if ! handle_phase_launch_result "HOK-1" "$feature_dir" "coding" "planning" 1 "HOK-1-slug" "native-openrouter" "bad-model"; then
+  if [[ "$(jq -r '.tasks["HOK-1"].challengeAborted' "$STATE_FILE")" == "varied_model_unresolvable" ]] \
+    && [[ "$(jq -r '.tasks["HOK-1_c"].challengeAborted' "$STATE_FILE")" == "varied_model_unresolvable" ]] \
+    && [[ "$(jq -r '.status' "$feature_dir/.coding-result.json")" == "failed" ]] \
+    && [[ "$(jq -r '.tasks["HOK-1"].phase // empty' "$STATE_FILE")" == "" ]] \
+    && grep -q 'global-projection-missing' "$MILL_LOG_FILE" \
+    && grep -q 'globalEffectiveModels.coding' "$MILL_LOG_FILE" \
+    && grep -q 'coding projection rejected bad-model' "$MILL_LOG_FILE" \
+    && grep -q 'Choose a model present in the coding effective projection' "$MILL_LOG_FILE"; then
+    pass "native preflight failure aborts varied model once and logs diagnostics"
+  else
+    fail "native preflight abort or diagnostics were incomplete" "$(cat "$MILL_LOG_FILE")"
+  fi
+else
+  fail "native preflight launch failure was treated as success"
 fi
 
 seed_state "review"

@@ -1108,6 +1108,61 @@ challenge_guard_varied_model_resolvable() {
   return 1
 }
 
+native_launch_preflight_failed_json() {
+  local json="${AGENT_NATIVE_LAUNCH_LAST_JSON:-}"
+  [[ -n "$json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  printf '%s' "$json" | jq -e '.ok == false' >/dev/null 2>&1
+}
+
+format_native_launch_preflight_detail() {
+  local json="${AGENT_NATIVE_LAUNCH_LAST_JSON:-}"
+  [[ -n "$json" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  printf '%s' "$json" | jq -r '
+    [
+      (if (.code // "") != "" then "code=" + .code else empty end),
+      (if (.surface // "") != "" then "surface=" + .surface else empty end),
+      (if (.reason // "") != "" then "reason=" + .reason else empty end),
+      (if (.remediation // "") != "" then "remediation=" + .remediation else empty end)
+    ] | join("; ")
+  ' 2>/dev/null
+}
+
+log_native_launch_preflight_detail() {
+  local issue="$1" stage="$2" agent="$3" model="$4"
+  local json="${AGENT_NATIVE_LAUNCH_LAST_JSON:-}" detail
+  native_launch_preflight_failed_json || return 1
+  detail="$(printf '%s' "$json" | jq -c \
+    --arg route "$issue" \
+    --arg stage "$stage" \
+    --arg agent "$agent" \
+    --arg model "$model" \
+    '{route:$route, stage:$stage, agent:$agent, model:$model,
+      code:(.code // ""), surface:(.surface // ""), reason:(.reason // ""),
+      remediation:(.remediation // "")}' 2>/dev/null)" || return 1
+  log "warn" "native launch preflight detail: $detail"
+}
+
+challenge_abort_for_native_preflight_varied_model() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" agent="$5" model="$6"
+  local selected_model json_model json_alias diagnostic
+  [[ -n "$issue" && -n "$feature_dir" && -n "$stage" && -n "$model" ]] || return 1
+  native_launch_preflight_failed_json || return 1
+  if declare -F agent_is_native_cmd >/dev/null 2>&1; then
+    agent_is_native_cmd "$agent" || return 1
+  fi
+
+  selected_model="$(challenge_varied_stage_model "$issue" "$stage" 2>/dev/null || true)"
+  [[ -n "$selected_model" ]] || return 1
+  json_model="$(printf '%s' "${AGENT_NATIVE_LAUNCH_LAST_JSON:-}" | jq -r '.model // empty' 2>/dev/null || true)"
+  json_alias="$(printf '%s' "${AGENT_NATIVE_LAUNCH_LAST_JSON:-}" | jq -r '.wavemillAlias // empty' 2>/dev/null || true)"
+  [[ "$model" == "$selected_model" || "$json_model" == "$selected_model" || "$json_alias" == "$selected_model" ]] || return 1
+
+  diagnostic="$(format_native_launch_preflight_detail 2>/dev/null || true)"
+  challenge_abort_for_unresolvable_varied_model "$issue" "$feature_dir" "$win" "$stage" "$selected_model" "$diagnostic"
+}
+
 challenge_plan_stage_requires_effective_route() {
   local challenge_plan="$1"
   local challenge_mode challenge_stage decision_source
@@ -4734,6 +4789,10 @@ handle_phase_launch_result() {
   fi
 
   if [[ "$launch_rc" -ne 0 ]]; then
+    log_native_launch_preflight_detail "$issue" "$launched_phase" "$agent" "$model" || true
+    if challenge_abort_for_native_preflight_varied_model "$issue" "$feature_dir" "$win" "$launched_phase" "$agent" "$model"; then
+      return 1
+    fi
     clear_stage_result "$feature_dir" "$launched_phase"
     set_task_phase "$issue" "$retry_phase"
     set_window_attention_state "$win" "needs-user"

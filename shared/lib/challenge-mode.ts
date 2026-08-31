@@ -7,7 +7,7 @@ import {
 import { loadWavemillConfig, type ChallengeConfig, type RouterConfig } from './config.ts';
 import { isDeepSeekModel } from './deepseek-provider.ts';
 import { filterDisabledModels, isDisabledModel } from './disabled-models.ts';
-import { getGlobalModelRegistry, listChallengerEligibleModelsForStage, listEffectiveModelsForStage } from './effective-models.ts';
+import { getGlobalModelRegistry, listEffectiveModelsForStage } from './effective-models.ts';
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { resolveAgent, tryResolveAgent, type AgentResolutionPhase } from './model-router.ts';
 import { filterOpenRouterModels } from './openrouter-provider.ts';
@@ -436,7 +436,7 @@ function filterEligibleChallengeCandidates(
   nativeCertificationRuntime?: { apiKeyPresent?: boolean; apiKeyEnv?: string },
 ): { models: string[]; rejections: ChallengeNativeRejection[]; exclusions: ModelExclusionDiagnostic[] } {
   const registry = getGlobalModelRegistry();
-  const exclusionFiltered = applyModelExclusions(pool, stage, repoDir);
+  const exclusionFiltered = applyModelExclusions(uniqueNonEmpty(pool), stage, repoDir);
   const { models: nativeEligible, rejections } = filterNativeChallengeCandidates(
     exclusionFiltered.models,
     stage,
@@ -450,7 +450,14 @@ function filterEligibleChallengeCandidates(
   const openRouterEligible = repoDir
     ? filterOpenRouterModels(implementationLaunchable.models, repoDir, STAGE_TO_ROLE[stage]).models
     : implementationLaunchable.models;
-  const agentEligible = uniqueNonEmpty(openRouterEligible).filter((modelId) => resolveModelAgent({
+  const effectiveStageModels = new Set(listEffectiveModelsForStage(STAGE_TO_AGENT_PHASE[stage], { repoDir }).models);
+  const projectionEligible = uniqueNonEmpty(openRouterEligible).filter((modelId) => {
+    if (!registry.models[modelId]) {
+      return true;
+    }
+    return effectiveStageModels.has(modelId);
+  });
+  const agentEligible = projectionEligible.filter((modelId) => resolveModelAgent({
     model: modelId,
     phase: STAGE_TO_AGENT_PHASE[stage],
     repoDir: repoDir ?? process.cwd(),
@@ -597,11 +604,10 @@ export function filterDeepSeekChallengeModels(
 
 export function getChallengeModelPoolFromConfig(repoDir?: string): string[] {
   const config = loadWavemillConfig(repoDir);
-  // Challenger pool, not the routing pool: provisional identities are permitted
-  // here so an unproven model can be evaluated by the mechanism built for it.
-  // Primaries still come from listEffectiveModelsForStage and exclude them.
+  // Challenge arms must use the same effective projection enforced by launch
+  // preflight; routing-ineligible identities cannot be auto-selected here.
   return filterDisabledModels(filterDeepSeekChallengeModels(
-    listChallengerEligibleModelsForStage('coding', { repoDir }).models,
+    listEffectiveModelsForStage('coding', { repoDir }).models,
     config.challenge,
   ).models);
 }
@@ -612,7 +618,7 @@ export function getChallengeModelPool(
 ): string[] {
   // Disabled models must never enter the challenge pool; the disable set is
   // authoritative over the global effective-model projection.
-  const source = listChallengerEligibleModelsForStage('coding').models;
+  const source = listEffectiveModelsForStage('coding').models;
   return filterDisabledModels(filterDeepSeekChallengeModels(source, challengeConfig).models);
 }
 
