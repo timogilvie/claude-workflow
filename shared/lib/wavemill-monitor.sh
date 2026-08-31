@@ -1571,14 +1571,8 @@ update_free_slots_state() {
   fi
 }
 
-remove_task_state() {
-  local issue="$1"
-  if ! state_mutate "$STATE_FILE" \
-     'del(.tasks[$issue]) | .updated = (now | todate)' \
-     --arg issue "$issue"; then
-    log_warn "remove_task_state: failed to remove $issue"
-  fi
-}
+# remove_task_state() is provided by wavemill-common.sh (HOK-2903), sourced
+# above; the canonical copy preserves this scope's semantics byte-for-byte.
 
 set_task_phase() {
   local issue="$1" phase="$2"
@@ -1619,10 +1613,9 @@ save_migration_reservation() {
     --arg issue "$issue" --argjson num "$num" >/dev/null || true
 }
 
-get_task_phase() {
-  local issue="$1"
-  read_state_value "executing" --arg issue "$issue" '.tasks[$issue].phase // "executing"'
-}
+# get_task_phase() is provided by wavemill-common.sh (HOK-2903), sourced
+# above; the canonical copy inlines the read_state_value "executing" guard
+# this scope previously applied.
 
 mark_eval_completed() {
   local issue="$1"

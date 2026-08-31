@@ -82,7 +82,6 @@ FUNCS_FILE="$TMP_DIR/advance-monitor-funcs.sh"
 : > "$FUNCS_FILE"
 for fn in \
   read_state_value \
-  get_task_phase \
   read_stage_result \
   read_stage_status \
   check_stage_complete \

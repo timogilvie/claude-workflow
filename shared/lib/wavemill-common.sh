@@ -3059,6 +3059,36 @@ set_task_phase() {
     --arg issue "$issue" --arg phase "$phase"
 }
 
+# Canonical task-phase reader (HOK-2903). Before canonicalization the parent
+# mill and the extracted monitor each carried a private copy: the parent's raw
+# `jq -r ... 2>/dev/null` silently returned an empty string when $STATE_FILE
+# was missing, unreadable, or malformed — making downstream comparisons like
+# [[ "$phase" == "planning" ]] read as "some other phase" instead of "state is
+# gone" — while the monitor wrapped the read in read_state_value so every
+# failure mode fell back to "executing". The monitor was the only scope with
+# live callers, so its semantics are canonical:
+#   - $STATE_FILE missing, zero-byte, or unreadable  -> "executing"
+#   - jq parse error                                 -> "executing"
+#   - task absent, or task present without a .phase  -> "executing"
+#   - otherwise                                      -> .tasks[$issue].phase
+# The read_state_value guard is inlined here (rather than moving that helper
+# out of the monitor, which has 74 other callers) so this stays self-contained
+# while remaining byte-equivalent to the monitor's pre-change behavior.
+get_task_phase() {
+  local issue="$1"
+  local value
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf 'executing\n'
+    return 0
+  fi
+  if value=$(jq -r --arg issue "$issue" \
+      '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null); then
+    printf '%s\n' "$value"
+  else
+    printf 'executing\n'
+  fi
+}
+
 # ============================================================================
 # Hook Configuration
 # ============================================================================
@@ -3510,6 +3540,36 @@ save_task_state() {
     # runner intentionally surfaces the failure through wavemill_lock_run).
     if declare -F log_warn >/dev/null 2>&1; then
       log_warn "save_task_state: failed to save $issue"
+    fi
+  fi
+}
+
+# Canonical task-state remover (HOK-2903). Before canonicalization three
+# private copies had drifted: the parent mill's jq body only deleted the task
+# (leaving the top-level .updated timestamp stale after a removal), while the
+# monitor and startup-runner copies also stamped .updated; the startup-runner
+# copy additionally skipped log_warn and propagated state_mutate's exit code
+# (though all four of its call sites discarded it via `|| true`). Canonical
+# semantics adopt the monitor's live behavior:
+#   - Atomic state_mutate on $STATE_FILE.
+#   - Always refresh the top-level .updated timestamp so observers and
+#     dashboards see the state churn, whether or not the task existed.
+#   - Idempotent when the task is absent: del(.tasks["missing"]) is a jq
+#     no-op that succeeds and still refreshes .updated.
+#   - On state_mutate failure, warn via log_warn when the caller defines it
+#     (the mill and monitor do; common-sourced test harnesses may not) and
+#     always return 0 so cleanup paths under set -e never abort.
+# Deliberately untouched bookkeeping: .migrationReservations[$issue] is
+# preserved — reservation numbers are intentionally sticky so they can be
+# re-associated with retry worktrees; changing that is a lifecycle decision
+# outside this helper's contract.
+remove_task_state() {
+  local issue="$1"
+  if ! state_mutate "$STATE_FILE" \
+     'del(.tasks[$issue]) | .updated = (now | todate)' \
+     --arg issue "$issue"; then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "remove_task_state: failed to remove $issue"
     fi
   fi
 }

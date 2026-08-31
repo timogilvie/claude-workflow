@@ -1265,13 +1265,8 @@ save_next_migration_num() {
 }
 
 
-remove_task_state() {
-  local issue="$1"
-  if ! state_mutate "$STATE_FILE" 'del(.tasks[$issue])' --arg issue "$issue"; then
-    log_warn "remove_task_state: failed to remove $issue"
-  fi
-}
-
+# remove_task_state() is provided by wavemill-common.sh (HOK-2903); the
+# canonical copy also stamps the top-level .updated timestamp on removal.
 
 set_task_phase() {
   local issue="$1" phase="$2"
@@ -1284,11 +1279,9 @@ set_task_phase() {
   fi
 }
 
-get_task_phase() {
-  local issue="$1"
-  jq -r --arg issue "$issue" '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null
-}
-
+# get_task_phase() is provided by wavemill-common.sh (HOK-2903); the canonical
+# copy falls back to "executing" on a missing/unreadable/malformed state file
+# instead of this scope's former silent empty string.
 
 check_routing_complete() {
   local slug="$1"
