@@ -112,9 +112,9 @@ Available in `~/.claude/commands/`:
 - `/validate-plan` - Validate implementation against plan
 
 ### Native Certification CLI
-`wavemill native-agent certifications` subcommands: `list`, `inspect`, `verify`, `report`, `certify`, `re-certify`, `reidentify`, `invalidate`, `migrate`.
+`wavemill native-agent certifications` subcommands: `list`, `inspect`, `verify`, `report`, `certify`, `re-certify`, `reidentify`, `invalidate`, `migrate`, `prune`.
 
-Use `wavemill native-agent certify --provider <provider> --model <model> --phase <phase>` for one model, or `wavemill native-agent certify --all --phase workflow` to publish the full current-suite matrix. The mill startup preflight fails when the registry requires a suite version but the global store contains only older-suite artifacts; set `WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1` only for a targeted operator override.
+Use `wavemill native-agent certify --provider <provider> --model <model> --phase <phase>` for one model, or `wavemill native-agent certify --all --phase workflow` to publish the full current-suite matrix. The mill startup preflight auto-remediates deterministic current-suite gaps, identity drift, stale artifacts, and near-TTL renewal by default. Set `WAVEMILL_SKIP_CERTIFICATION_AUTO_REMEDIATE=1` to keep the guard active but require manual certification; set `WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1` only for a targeted operator override. Use `wavemill native-agent certifications prune` to report orphan artifacts and `--yes` to remove them.
 
 ## Test Registration
 

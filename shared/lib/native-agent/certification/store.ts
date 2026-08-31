@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -367,6 +368,29 @@ export function listGlobalCertificationSuiteVersions(
     counts[parsed.suiteVersion] = (counts[parsed.suiteVersion] ?? 0) + 1;
   }
   return counts;
+}
+
+export function deleteGlobalCertification(
+  input: { provider: string; model: string; suiteVersion: string; root?: string },
+): void {
+  const storage = resolveCertificationStorage({ scope: 'global', root: input.root });
+  const filePath = buildCertificationPathFromRoot(
+    storage.root,
+    input.provider,
+    input.model,
+    input.suiteVersion,
+  );
+  unlinkSync(filePath);
+  try { rmdirSync(dirname(filePath)); } catch { /* non-empty or already gone */ }
+  try { rmdirSync(dirname(dirname(filePath))); } catch { /* non-empty or already gone */ }
+}
+
+export function parseCertificationArtifactPath(
+  root: string,
+  filePath: string,
+): { provider: string; model: string; suiteVersion: string; path: string } | undefined {
+  const parsed = parseCertificationPathUnderRoot(root, filePath);
+  return parsed ? { ...parsed, path: filePath } : undefined;
 }
 
 function listCertificationFilesUnderRoot(baseDir: string): string[] {
