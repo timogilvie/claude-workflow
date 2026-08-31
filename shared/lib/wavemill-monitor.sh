@@ -9279,36 +9279,7 @@ validate_pr_merge() {
 # LINEAR API FUNCTIONS
 # ============================================================================
 # Functions for updating Linear issue states.
-
-linear_set_state() {
-  local issue="$1" state="$2"
-  local stderr_file rc
-  stderr_file=$(mktemp) || { log_warn "Failed to update Linear state for $issue to $state (mktemp failed)"; return 0; }
-
-  if _with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>"$stderr_file"; then
-    rm -f "$stderr_file"
-    return 0
-  fi
-
-  rc=$?
-  if [[ -s "$stderr_file" ]]; then
-    local err_line
-    err_line=$(tail -n 1 "$stderr_file")
-    log_warn "Failed to update Linear state for $issue to $state (exit $rc): $err_line"
-  else
-    log_warn "Failed to update Linear state for $issue to $state (exit $rc)"
-  fi
-  rm -f "$stderr_file"
-  return 0
-}
-
-linear_is_completed() {
-  local issue="$1"
-  local raw_json issue_state
-  raw_json=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue.ts" "$issue" --json 2>/dev/null || echo "{}")
-  issue_state=$(echo "$raw_json" | jq -r '.state.name // ""' 2>/dev/null)
-  [[ "$issue_state" == "Done" || "$issue_state" == "Completed" || "$issue_state" == "Canceled" ]]
-}
+# Note: linear_set_state() and linear_is_completed() now provided by wavemill-common.sh (HOK-2901)
 
 prepare_route_input_for_issue() {
   local issue="$1" slug="$2" title="$3"

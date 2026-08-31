@@ -120,6 +120,7 @@ for f in \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/challenger-transient-retry.test.sh \
   "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
+  "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
@@ -711,7 +712,10 @@ else
     fail "monitor does not set Linear issue to Done on completion"
   fi
 
-  if grep -q 'set-issue-state.ts' <<< "$HEREDOC_CONTENT"; then
+  # HOK-2901: linear_set_state is inherited from wavemill-common.sh, so the
+  # tool reference lives there rather than in the monitor script.
+  if grep -q 'set-issue-state.ts' <<< "$HEREDOC_CONTENT" \
+    || grep -q 'set-issue-state.ts' "$LIB_DIR/wavemill-common.sh"; then
     pass "monitor linear_set_state uses set-issue-state.ts"
   else
     fail "monitor linear_set_state is not calling set-issue-state.ts"
@@ -742,12 +746,16 @@ else
     pass "monitor does not reference update-linear-state.ts"
   fi
 
+  # HOK-2901: the canonical body lives in wavemill-common.sh; check it there
+  # (and any monitor-local override, should one reappear).
   LINEAR_SET_STATE_BLOCK=$(awk '
     /^linear_set_state\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' <<< "$HEREDOC_CONTENT")
-  if grep -q 'return 1' <<< "$LINEAR_SET_STATE_BLOCK"; then
+  ' <<< "$HEREDOC_CONTENT"$'\n'"$(cat "$LIB_DIR/wavemill-common.sh")")
+  if [[ -z "$LINEAR_SET_STATE_BLOCK" ]]; then
+    fail "linear_set_state definition not found in monitor scope or wavemill-common.sh"
+  elif grep -q 'return 1' <<< "$LINEAR_SET_STATE_BLOCK"; then
     fail "monitor linear_set_state must not return 1 (would exit under set -e)"
   else
     pass "monitor linear_set_state failures are non-fatal"

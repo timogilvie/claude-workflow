@@ -1568,20 +1568,7 @@ linear_set_description() {
 }
 
 
-linear_set_state() {
-  local issue="$1" state="$2"
-  [[ "$DRY_RUN" == "true" ]] && { log "[DRY-RUN] Would set $issue → $state"; return 0; }
-  retry npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>&1 || log_warn "Failed to set $issue → $state in Linear"
-}
-
-
-linear_is_completed() {
-  local issue="$1"
-  local state
-  state=$(_with_timeout "$RETRY_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
-  [[ "$state" == "completed" ]] && return 0
-  return 1
-}
+# Note: linear_set_state() and linear_is_completed() now provided by wavemill-common.sh (HOK-2901)
 
 
 # Note: is_task_packet() and write_task_packet() now provided by wavemill-common.sh

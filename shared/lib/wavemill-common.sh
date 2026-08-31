@@ -3160,6 +3160,85 @@ save_task_state() {
   fi
 }
 
+# ============================================================================
+# CANONICAL LINEAR STATE HELPERS (HOK-2901)
+# ============================================================================
+# Single wall-clock cap for Linear-facing helpers. The monitor already defined
+# this knob (an API call that hangs blocks the monitor loop and the operator
+# cannot type 'q' or select tasks); the mill previously had no equivalent and
+# relied on the generic retry ladder. One default here means one knob controls
+# Linear latency in every scope that sources this file.
+API_TIMEOUT="${API_TIMEOUT:-30}"
+
+# Canonical Linear state writer. Before canonicalization the mill copy went
+# through the generic `retry` helper (up to MAX_RETRIES × RETRY_TIMEOUT plus
+# backoff sleeps — roughly 90 s of blocking work with stderr discarded), while
+# the monitor copy made a single API_TIMEOUT-bounded call and logged the exit
+# code and last stderr line on failure. The canonical helper keeps the monitor
+# semantics: one attempt, hard wall-clock cap, diagnostics retained. Queued
+# retry for transient Linear write failures lives in linear-retry-drain, not
+# here.
+#
+# Contract:
+# - Always non-fatal: returns 0 even when the tool fails (safe under set -e).
+# - Respects DRY_RUN: logs the intended transition and skips the tool call.
+# - Wall-clock: bounded by API_TIMEOUT (default 30 s) via the caller scope's
+#   _with_timeout.
+# - Diagnostics: on failure log_warn carries issue, target state, exit code,
+#   and the last stderr line the tool produced.
+linear_set_state() {
+  local issue="$1" state="$2"
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    declare -F log >/dev/null 2>&1 && log "[DRY-RUN] Would set $issue → $state"
+    return 0
+  fi
+
+  local stderr_file rc=0
+  stderr_file=$(mktemp) || {
+    declare -F log_warn >/dev/null 2>&1 && log_warn "Failed to update Linear state for $issue to $state (mktemp failed)"
+    return 0
+  }
+
+  _with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>"$stderr_file" || rc=$?
+  if (( rc == 0 )); then
+    rm -f "$stderr_file"
+    return 0
+  fi
+
+  if declare -F log_warn >/dev/null 2>&1; then
+    if [[ -s "$stderr_file" ]]; then
+      local err_line
+      err_line=$(tail -n 1 "$stderr_file")
+      log_warn "Failed to update Linear state for $issue to $state (exit $rc): $err_line"
+    else
+      log_warn "Failed to update Linear state for $issue to $state (exit $rc)"
+    fi
+  fi
+  rm -f "$stderr_file"
+  return 0
+}
+
+# Canonical Linear completion check. Before canonicalization the mill copy
+# asked get-issue-state.ts, which reports `completed` from Linear's
+# completedAt/canceledAt timestamps, while the monitor copy asked
+# get-issue.ts --json and matched the display name against a literal list
+# (Done, Completed, Canceled) — silently misclassifying workspaces with
+# renamed workflow states or non-US spellings such as "Cancelled". The
+# canonical helper uses get-issue-state.ts.
+#
+# Uncertainty policy: any lookup failure (Linear error, network failure,
+# API_TIMEOUT expiry, unexpected output) returns non-zero, i.e. "not
+# completed". Callers gate destructive worktree cleanup on this answer and
+# re-check on their next tick, so a transient outage delays cleanup instead of
+# ever wiping an operator's work on a false positive.
+linear_is_completed() {
+  local issue="$1"
+  local state
+  state=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
+  [[ "$state" == "completed" ]] && return 0
+  return 1
+}
+
 cleanup_background_jobs_startup() {
   # Keep only jobs created by the current session; older or pre-session jobs
   # are stale once a new session starts.
