@@ -36,6 +36,7 @@ TESTS=(
   challenger-transient-retry.test.sh
   parent-monitor-function-drift.test.sh
   save-task-state-canonicalization.test.sh
+  linear-state-canonicalization.test.sh
   native-agent-shell-operators.test.sh
   native-coding-commit.test.sh
   hook-write-context-guard.test.sh
