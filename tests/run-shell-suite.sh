@@ -47,6 +47,9 @@ TESTS=(
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh
   launch-ready-phase.test.sh
+  bounded-retry.test.sh
+  handle-phase-launch-result.test.sh
+  challenge-eval-soft-retry.test.sh
   review-scope-baseline-handoff.test.sh
   launch-native-planning-phase.test.sh
   log-hygiene.test.sh

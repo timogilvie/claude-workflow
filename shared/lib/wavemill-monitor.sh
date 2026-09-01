@@ -1582,6 +1582,7 @@ save_migration_reservation() {
 
 mark_eval_completed() {
   local issue="$1"
+  local slug
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue].evalCompleted = true
       | .tasks[$issue].evalFailed = false
@@ -1590,6 +1591,12 @@ mark_eval_completed() {
       | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_completed: failed to update $issue"
+  fi
+  # Successful eval wipes the arm's bounded-retry eval budgets (HOK-2924).
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  if [[ -n "$slug" && -n "${WORKTREE_ROOT:-}" ]]; then
+    bounded_retry_clear "${WORKTREE_ROOT}/${slug}/features/${slug}" "challenge-eval-soft"
+    bounded_retry_clear "${WORKTREE_ROOT}/${slug}/features/${slug}" "challenge-eval-hard"
   fi
 }
 
@@ -1648,30 +1655,8 @@ mark_challenge_comparison_running() {
     --arg challengerPr "$challenger_pr"
 }
 
-challenge_eval_retry_max_attempts() {
-  local max_attempts
-  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
-  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_attempts"
-  else
-    printf '1\n'
-  fi
-}
-
-challenge_eval_hard_failure_max_retries() {
-  local max_retries
-  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
-    return
-  fi
-
-  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
-  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_retries"
-  else
-    printf '2\n'
-  fi
-}
+# challenge_eval_retry_max_attempts() and challenge_eval_hard_failure_max_retries()
+# are provided by wavemill-common.sh (HOK-2924), sourced above.
 
 clear_challenge_pair_state() {
   local pair_id="$1"
@@ -2187,24 +2172,16 @@ ready_conflict_pr_is_clean() {
   return 1
 }
 
+# Source of truth is the bounded-retry bucket (HOK-2924); the JSON
+# remediationAttempts / remediationLaunchHead mirrors in .ready-result.json
+# are still written for dashboards and downstream tools but are no longer
+# read here — the bucket resets on a new head SHA, the JSON does not.
 ready_remediation_attempts() {
-  local feature_dir="$1"
-  local result_file="$feature_dir/.ready-result.json"
-  if [[ -f "$result_file" ]]; then
-    jq -r '.artifacts.remediationAttempts // 0' "$result_file" 2>/dev/null || echo "0"
-  else
-    echo "0"
-  fi
+  bounded_retry_count "$1" "ready-remediation"
 }
 
 ready_remediation_launch_head() {
-  local feature_dir="$1"
-  local result_file="$feature_dir/.ready-result.json"
-  if [[ -f "$result_file" ]]; then
-    jq -r '.artifacts.remediationLaunchHead // empty' "$result_file" 2>/dev/null || echo ""
-  else
-    echo ""
-  fi
+  bounded_retry_head "$1" "ready-remediation"
 }
 
 ready_remediation_config_json() {
@@ -4585,9 +4562,72 @@ check_stage_aborted() {
   return 1
 }
 
+# Resolve the worktree HEAD for a feature dir (…/<wt>/features/<slug>).
+# Empty output means git failed; bounded-retry helpers treat that as
+# "no new information" and never reset on it.
+phase_launch_head() {
+  local feature_dir="$1"
+  local wt_dir="${feature_dir%/features/*}"
+  [[ -n "$wt_dir" && "$wt_dir" != "$feature_dir" ]] || { echo ""; return 0; }
+  git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo ""
+}
+
+# Pre-launch admission for phase relaunches (HOK-2924). The revert-for-retry
+# in handle_phase_launch_result restores exactly the state that re-derives the
+# same launch on the next poll tick, so without this gate a failing launch
+# retries forever at poll cadence (HOK-2921; HOK-2893_c retried 234 times).
+#
+# Usage: phase_launch_gate <issue> <feature_dir> <phase> <win>
+# Returns 0 when the launch may proceed. Returns 1 when the caller must hold
+# the task this cycle: a backoff window is open, or the retry budget is
+# exhausted (the task is terminalized here with a recorded reason).
+phase_launch_gate() {
+  local issue="$1" feature_dir="$2" phase="$3" win="$4"
+  local bucket="phase-launch-$phase"
+  local limit head disposition attempts reason
+
+  limit="${WAVEMILL_PHASE_LAUNCH_MAX_ATTEMPTS:-4}"
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=4
+  head="$(phase_launch_head "$feature_dir")"
+  disposition=$(bounded_retry_gate "$feature_dir" "$bucket" "$head" "$limit")
+
+  case "$disposition" in
+    proceed)
+      return 0
+      ;;
+    backoff)
+      log "debug" "  $issue: holding ${phase} launch retry (backoff)"
+      return 1
+      ;;
+    exhausted)
+      attempts=$(bounded_retry_count "$feature_dir" "$bucket")
+      reason="${phase^} launch retries exhausted after ${attempts} attempt(s) at head ${head:-unknown}"
+      write_stage_result "$feature_dir" "$phase" "failed" "" "" "$reason"
+      if bounded_retry_mark_exhausted "$feature_dir" "$bucket" "$reason"; then
+        log "status" "⛔ $issue → ${phase^} launch retries exhausted after ${attempts} attempt(s) - aborting task"
+      fi
+      set_task_phase "$issue" "aborted"
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$issue" "phase_launch_exhausted" || true
+      fi
+      set_window_attention_state "$win" "needs-user"
+      return 1
+      ;;
+    *)
+      # exhausted-quiet: already terminalized; hold silently until a new
+      # commit clears the bucket.
+      set_window_attention_state "$win" "needs-user"
+      return 1
+      ;;
+  esac
+}
+
 # Normalize launch outcomes after the controller has already advanced phase state.
 # On launch failure, revert the controller phase so the next monitor cycle retries
 # the same transition instead of waiting for artifacts that will never arrive.
+# Each failure counts against the phase-launch-<phase> bounded-retry bucket
+# (HOK-2924); phase_launch_gate enforces the backoff and ceiling before the
+# next launch fires, and a successful launch clears the bucket.
 #
 # Usage:
 #   handle_phase_launch_result <issue> <feature_dir> <launched_phase> <retry_phase> \
@@ -4598,6 +4638,7 @@ check_stage_aborted() {
 handle_phase_launch_result() {
   local issue="$1" feature_dir="$2" launched_phase="$3" retry_phase="$4"
   local launch_rc="$5" win="$6" agent="${7:-}" model="${8:-}"
+  local launch_attempts
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
     log_task "status" "$issue" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
@@ -4613,15 +4654,22 @@ handle_phase_launch_result() {
   if [[ "$launch_rc" -ne 0 ]]; then
     log_native_launch_preflight_detail "$issue" "$launched_phase" "$agent" "$model" || true
     if challenge_abort_for_native_preflight_varied_model "$issue" "$feature_dir" "$win" "$launched_phase" "$agent" "$model"; then
+      # Terminal cause: the varied model can never pass native preflight
+      # (HOK-2920), so record the terminal reason without consuming the
+      # retry budget.
+      bounded_retry_mark_exhausted "$feature_dir" "phase-launch-$launched_phase" \
+        "${launched_phase^} launch aborted: varied model cannot pass native preflight${model:+ ($model)}" || true
       return 1
     fi
+    launch_attempts=$(bounded_retry_increment "$feature_dir" "phase-launch-$launched_phase" "$(phase_launch_head "$feature_dir")")
     clear_stage_result "$feature_dir" "$launched_phase"
     set_task_phase "$issue" "$retry_phase"
     set_window_attention_state "$win" "needs-user"
-    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
+    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc, attempt ${launch_attempts}), reverting to $retry_phase for retry"
     return 1
   fi
 
+  bounded_retry_clear "$feature_dir" "phase-launch-$launched_phase"
   return 0
 }
 
@@ -6524,117 +6572,52 @@ write_transient_ready_attention_file() {
 
 # --- Failed-ready re-check budget (HOK-2893) ---------------------------------
 # The monitor re-launches ready checks whenever the stored status is `failed`.
-# These helpers bound that loop: a per-head attempt counter with exponential
-# backoff, an identical-failure-reason short-circuit, and a one-shot terminal
-# state. A new head SHA (fresh commit) or a ready pass wipes the budget.
-# All state lives in plain files in the ready state dir, mirroring the
-# .transient-mergeability-count idiom. Every helper that is invoked bare or
-# via command substitution returns 0 on all paths (the mill runs under set -e);
-# only mark_failed_ready_recheck_exhausted and failed_ready_recheck_due use
-# their exit status as a signal, and both are always called behind `if`.
+# These helpers bound that loop as thin wrappers around the shared
+# bounded-retry module (HOK-2924, bucket `failed-ready-recheck`), plus the
+# path-specific identical-failure-reason short-circuit. The bucket keeps its
+# pre-HOK-2924 file names (.failed-ready-recheck-*) so in-flight state
+# survives an upgrade. A new head SHA (fresh commit) or a ready pass wipes
+# the budget. Only mark_failed_ready_recheck_exhausted and
+# failed_ready_recheck_due use their exit status as a signal, and both are
+# always called behind `if`.
+
+# Legacy env overrides (READY_FAILED_RECHECK_BACKOFF*) predate the shared
+# helper and stay authoritative for this bucket; they are resolved inline in
+# each wrapper (the launch-ready-phase test extracts these functions one by
+# one, so wrappers must be self-contained). Non-numeric values fall back to
+# the shipped defaults.
 
 failed_ready_recheck_count() {
-  local state_dir="$1"
-  local count_file="$state_dir/.failed-ready-recheck-count"
-
-  if [[ ! -f "$count_file" ]]; then
-    echo "0"
-    return 0
-  fi
-
-  local count
-  count=$(cat "$count_file" 2>/dev/null || echo "0")
-  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
-    echo "0"
-    return 0
-  fi
-
-  echo "$count"
+  bounded_retry_count "$1" "failed-ready-recheck"
 }
 
 clear_failed_ready_recheck_state() {
-  local state_dir="$1"
-  rm -f \
-    "$state_dir/.failed-ready-recheck-count" \
-    "$state_dir/.failed-ready-recheck-head" \
-    "$state_dir/.failed-ready-recheck-last-at" \
-    "$state_dir/.failed-ready-recheck-reason.json" \
-    "$state_dir/.failed-ready-recheck-exhausted"
+  bounded_retry_clear "$1" "failed-ready-recheck"
 }
 
-# A new commit is genuine new information: wipe the budget (and any exhausted
-# terminal state) so the fresh head gets a full set of attempts. An empty
-# current head means git failed — never reset on that.
 failed_ready_recheck_reset_if_new_head() {
-  local state_dir="$1" current_head="$2"
-  local head_file="$state_dir/.failed-ready-recheck-head"
-  local stored_head
-
-  [[ -n "$current_head" ]] || return 0
-  [[ -f "$head_file" ]] || return 0
-  stored_head=$(cat "$head_file" 2>/dev/null || echo "")
-  [[ -n "$stored_head" ]] || return 0
-  if [[ "$stored_head" != "$current_head" ]]; then
-    clear_failed_ready_recheck_state "$state_dir"
-  fi
-  return 0
+  bounded_retry_reset_if_new_head "$1" "failed-ready-recheck" "$2"
 }
 
 increment_failed_ready_recheck_count() {
-  local state_dir="$1" current_head="$2"
-  local count
-  count=$(failed_ready_recheck_count "$state_dir")
-  count=$((count + 1))
-  mkdir -p "$state_dir"
-  printf '%s\n' "$count" > "$state_dir/.failed-ready-recheck-count"
-  # An empty head means git failed; keep any previously recorded head so a
-  # later real commit still triggers the budget reset.
-  if [[ -n "$current_head" ]]; then
-    printf '%s\n' "$current_head" > "$state_dir/.failed-ready-recheck-head"
-  fi
-  printf '%s\n' "$(date +%s)" > "$state_dir/.failed-ready-recheck-last-at"
-  echo "$count"
+  bounded_retry_increment "$1" "failed-ready-recheck" "$2"
 }
 
 # Delay before attempt (count+1): min(base * 2^(count-1), cap).
-# Non-numeric env overrides fall back to the shipped defaults.
 failed_ready_recheck_backoff_seconds() {
-  local count="$1"
   local base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
   local cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
   [[ "$base" =~ ^[0-9]+$ ]] || base=120
   [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
-  [[ "$count" =~ ^[0-9]+$ ]] || count=1
-  (( count >= 1 )) || count=1
-
-  local delay="$base" i
-  for (( i = 1; i < count; i++ )); do
-    delay=$((delay * 2))
-    if (( delay >= cap )); then
-      delay="$cap"
-      break
-    fi
-  done
-  (( delay > cap )) && delay="$cap"
-  echo "$delay"
+  bounded_retry_backoff_seconds "$1" "$base" "$cap"
 }
 
 failed_ready_recheck_due() {
-  local state_dir="$1"
-  local last_at_file="$state_dir/.failed-ready-recheck-last-at"
-  local last_at now delay
-
-  if [[ ! -f "$last_at_file" ]]; then
-    return 0
-  fi
-  last_at=$(cat "$last_at_file" 2>/dev/null || echo "")
-  if [[ ! "$last_at" =~ ^[0-9]+$ ]]; then
-    return 0
-  fi
-
-  delay=$(failed_ready_recheck_backoff_seconds "$(failed_ready_recheck_count "$state_dir")")
-  now=$(date +%s)
-  (( now - last_at >= delay ))
+  local base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
+  local cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
+  [[ "$base" =~ ^[0-9]+$ ]] || base=120
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
+  bounded_retry_due "$1" "failed-ready-recheck" "$base" "$cap"
 }
 
 ready_failure_reason() {
@@ -6710,17 +6693,17 @@ failed_ready_recheck_identical_streak() {
 # watchdog, and eval consumers; a missing result file skips annotation.
 mark_failed_ready_recheck_exhausted() {
   local issue="$1" pr_number="$2" state_dir="$3"
-  local sentinel="$state_dir/.failed-ready-recheck-exhausted"
   local result_file="$state_dir/.ready-result.json"
   local attempts reason tmp
-
-  if [[ -f "$sentinel" ]]; then
-    return 1
-  fi
 
   attempts=$(failed_ready_recheck_count "$state_dir")
   reason=$(ready_failure_reason "$state_dir")
   [[ -n "$reason" ]] || reason="ready checks failed"
+
+  if ! bounded_retry_mark_exhausted "$state_dir" "failed-ready-recheck" \
+      "Failed-ready re-checks exhausted after ${attempts} attempt(s) for PR #$pr_number: $reason"; then
+    return 1
+  fi
 
   if [[ -f "$result_file" ]]; then
     tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || tmp=""
@@ -6740,8 +6723,6 @@ mark_failed_ready_recheck_exhausted() {
   write_ready_attention_file "$state_dir" \
     "Failed-ready re-checks exhausted after ${attempts} attempt(s) for PR #$pr_number: $reason"
   log_error "  Failed-ready re-checks exhausted for $issue after ${attempts} attempt(s) (PR #$pr_number): $reason"
-  mkdir -p "$state_dir"
-  : > "$sentinel"
   return 0
 }
 
@@ -6753,37 +6734,30 @@ mark_failed_ready_recheck_exhausted() {
 #   exhausted-quiet — already terminalized; hold silently until a new commit
 failed_ready_recheck_gate() {
   local state_dir="$1" current_head="$2"
-  local count limit streak identical_limit
-
-  failed_ready_recheck_reset_if_new_head "$state_dir" "$current_head"
-
-  if [[ -f "$state_dir/.failed-ready-recheck-exhausted" ]]; then
-    echo "exhausted-quiet"
-    return 0
-  fi
+  local disposition limit streak identical_limit base cap
 
   limit="${READY_FAILED_RECHECK_MAX_ATTEMPTS:-4}"
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=4
-  count=$(failed_ready_recheck_count "$state_dir")
-  if (( count >= limit )); then
-    echo "exhausted"
-    return 0
+  base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
+  cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
+  [[ "$base" =~ ^[0-9]+$ ]] || base=120
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
+  disposition=$(bounded_retry_gate "$state_dir" "failed-ready-recheck" "$current_head" "$limit" "$base" "$cap")
+
+  # Path-specific short-circuit: a provably deterministic failure (identical
+  # verdicts N times in a row) terminalizes even while a backoff window is
+  # still open — retrying cannot change the outcome.
+  if [[ "$disposition" == "proceed" || "$disposition" == "backoff" ]]; then
+    identical_limit="${READY_FAILED_RECHECK_IDENTICAL_LIMIT:-3}"
+    [[ "$identical_limit" =~ ^[0-9]+$ ]] || identical_limit=3
+    streak=$(failed_ready_recheck_identical_streak "$state_dir")
+    if (( identical_limit > 0 && streak >= identical_limit )); then
+      echo "exhausted"
+      return 0
+    fi
   fi
 
-  identical_limit="${READY_FAILED_RECHECK_IDENTICAL_LIMIT:-3}"
-  [[ "$identical_limit" =~ ^[0-9]+$ ]] || identical_limit=3
-  streak=$(failed_ready_recheck_identical_streak "$state_dir")
-  if (( identical_limit > 0 && streak >= identical_limit )); then
-    echo "exhausted"
-    return 0
-  fi
-
-  if ! failed_ready_recheck_due "$state_dir"; then
-    echo "backoff"
-    return 0
-  fi
-
-  echo "proceed"
+  echo "$disposition"
 }
 # --- end failed-ready re-check budget ----------------------------------------
 
@@ -7071,6 +7045,11 @@ _launch_ready_remediation_attempt() {
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
   local resolved_model
 
+  # Bounded-retry bucket (HOK-2924): every launch attempt counts, keyed to the
+  # head it launched from; the JSON remediationAttempts mirror below stays for
+  # dashboards and downstream tools.
+  bounded_retry_increment "$state_dir" "ready-remediation" "$current_head" >/dev/null
+
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
@@ -7187,9 +7166,23 @@ launch_ready_watchdog_remediation() {
     return 0
   fi
 
+  # Bounded-retry bucket shared with launch_ready_phase (HOK-2924): a fresh
+  # commit restores the budget; the ceiling terminalizes with a recorded
+  # reason; attempts inside the backoff window hold instead of relaunching.
+  bounded_retry_reset_if_new_head "$state_dir" "ready-remediation" "$current_head"
+  remediation_attempts=$(ready_remediation_attempts "$state_dir")
+
   if (( remediation_attempts >= max_attempts )); then
+    bounded_retry_mark_exhausted "$state_dir" "ready-remediation" \
+      "Ready remediation capped at ${remediation_attempts}/${max_attempts} attempts for PR #$pr_number: $failed_check_summary" || true
     jq -cn --arg detail "Ready remediation capped at ${remediation_attempts}/${max_attempts} attempts for PR #$pr_number." --argjson attempt "$remediation_attempts" \
       '{status:"skipped-max-attempts", detail:$detail, attemptNumber:$attempt}'
+    return 0
+  fi
+
+  if ! bounded_retry_due "$state_dir" "ready-remediation"; then
+    jq -cn --arg detail "Ready remediation backoff window open for PR #$pr_number - retry deferred." --argjson attempt "$remediation_attempts" \
+      '{status:"skipped-backoff", detail:$detail, attemptNumber:$attempt}'
     return 0
   fi
 
@@ -7464,6 +7457,8 @@ launch_ready_phase() {
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
     clear_failed_ready_recheck_state "$state_dir"
+    bounded_retry_clear "$state_dir" "ready-remediation"
+    bounded_retry_clear "$state_dir" "pending-ready-recheck"
     log "debug" "  $issue: Canonicalized ready labels for PR #$pr_number"
     log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
@@ -7510,6 +7505,11 @@ launch_ready_phase() {
       return 5
     fi
 
+    # A fresh commit is genuine new information: give the new head a full
+    # remediation budget (HOK-2924).
+    bounded_retry_reset_if_new_head "$state_dir" "ready-remediation" "$current_head"
+    remediation_attempts=$(ready_remediation_attempts "$state_dir")
+
     if (( remediation_attempts >= remediation_max_attempts )); then
       local exhausted_artifacts_json
       exhausted_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
@@ -7519,8 +7519,17 @@ launch_ready_phase() {
         "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
         "$exhausted_artifacts_json"
       write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
+      bounded_retry_mark_exhausted "$state_dir" "ready-remediation" \
+        "Ready remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number (failed checks: ${failed_check_names})" || true
       log_error "  Ready remediation exhausted for $issue (failed checks: ${failed_check_names})"
       return 1
+    fi
+
+    # Never relaunch on the next poll tick: honor the backoff window between
+    # remediation attempts (HOK-2924).
+    if ! bounded_retry_due "$state_dir" "ready-remediation"; then
+      log "debug" "  $issue: holding ready remediation for PR #$pr_number (backoff)"
+      return 5
     fi
 
     failed_check_summary=$(ready_failed_check_summary "$result")
@@ -8063,12 +8072,39 @@ poll_challenge_jobs() {
     fi
     if [[ "$kind" == "eval" && "$reason" == "timed_out" && -n "$issue_id" && -n "$pair_id" ]]; then
       local retry_max retry_count timed_out_sides_csv timeout_reason primary_key challenger_key artifact_path
-      local issue_pr issue_branch issue_slug
+      local issue_pr issue_branch issue_slug soft_retry_state_dir soft_retry_head
       primary_key="$pair_id"
       challenger_key="${pair_id}_c"
       settle_tracked_job "$job_id"
       retry_max=$(challenge_eval_retry_max_attempts)
-      retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].comparisonRetryCount // 0')
+      issue_pr=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].pr // empty')
+      issue_branch=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].branch // empty')
+      issue_slug=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].slug // empty')
+      # Bounded-retry bucket in the arm's feature dir (HOK-2924). Effective
+      # count is max(bucket, comparisonRetryCount mirror) so pre-existing
+      # state keeps its budget; a fresh commit on the arm zeroes both. The
+      # mirror keeps being written for external consumers.
+      soft_retry_state_dir=""
+      soft_retry_head=""
+      local soft_retry_prior_head soft_retry_mirror
+      if [[ -n "$issue_slug" ]]; then
+        soft_retry_state_dir="${WORKTREE_ROOT}/${issue_slug}/features/${issue_slug}"
+        soft_retry_head=$(git -C "${WORKTREE_ROOT}/${issue_slug}" rev-parse HEAD 2>/dev/null || echo "")
+        soft_retry_prior_head=$(bounded_retry_head "$soft_retry_state_dir" "challenge-eval-soft")
+        bounded_retry_reset_if_new_head "$soft_retry_state_dir" "challenge-eval-soft" "$soft_retry_head"
+        if [[ -n "$soft_retry_prior_head" && -n "$soft_retry_head" && "$soft_retry_prior_head" != "$soft_retry_head" ]]; then
+          state_mutate "$STATE_FILE" '
+            .tasks[$issue].comparisonRetryCount = 0
+            | .tasks[$issue].updated = (now | todateiso8601)
+          ' --arg issue "$primary_key" >/dev/null || true
+        fi
+        retry_count=$(bounded_retry_count "$soft_retry_state_dir" "challenge-eval-soft")
+      else
+        retry_count=0
+      fi
+      soft_retry_mirror=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].comparisonRetryCount // 0')
+      [[ "$soft_retry_mirror" =~ ^[0-9]+$ ]] || soft_retry_mirror=0
+      (( soft_retry_mirror > retry_count )) && retry_count="$soft_retry_mirror"
       timed_out_sides_csv=$(challenge_pair_timed_out_sides_csv "$primary_key")
       if [[ -n "$timed_out_sides_csv" ]]; then
         case ",$timed_out_sides_csv," in
@@ -8082,6 +8118,9 @@ poll_challenge_jobs() {
       timeout_reason=$(challenge_pair_timeout_reason "$timed_out_sides_csv")
 
       if (( retry_count < retry_max )); then
+        if [[ -n "$soft_retry_state_dir" ]]; then
+          bounded_retry_increment "$soft_retry_state_dir" "challenge-eval-soft" "$soft_retry_head" >/dev/null
+        fi
         retry_count=$((retry_count + 1))
         write_challenge_pair_state "$pair_id" "retrying_eval" "$timeout_reason" "$retry_count" "$retry_max" "$issue_id" "$timed_out_sides_csv" ""
         state_mutate "$STATE_FILE" '
@@ -8089,9 +8128,6 @@ poll_challenge_jobs() {
           | .tasks[$issue].evalCompleted = false
           | .tasks[$issue].updated = (now | todateiso8601)
         ' --arg issue "$issue_id" >/dev/null || true
-        issue_pr=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].pr // empty')
-        issue_branch=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].branch // empty')
-        issue_slug=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].slug // empty')
         log "status" "challenge comparison retrying for $pair_id: $side eval timed out (attempt $retry_count/$retry_max)"
         if [[ -n "$issue_pr" && -n "$issue_branch" && -n "$issue_slug" ]]; then
           maybe_run_challenge_eval "$issue_id" "$issue_pr" "$issue_branch" "$issue_slug"
@@ -8101,6 +8137,10 @@ poll_challenge_jobs() {
         continue
       fi
 
+      if [[ -n "$soft_retry_state_dir" ]]; then
+        bounded_retry_mark_exhausted "$soft_retry_state_dir" "challenge-eval-soft" \
+          "Challenge eval soft retries exhausted for $issue_id (pair $pair_id): ${timed_out_sides_csv} eval timed out after ${retry_count}/${retry_max} attempt(s) - manual comparison needed" || true
+      fi
       artifact_path=$(write_manual_challenge_comparison_artifact "$pair_id" "$primary_key" "$challenger_key" "$timed_out_sides_csv" "$retry_count" "$retry_max" || true)
       write_challenge_pair_state "$pair_id" "manual_comparison_needed" "$timeout_reason" "$retry_count" "$retry_max" "" "$timed_out_sides_csv" "$artifact_path"
       log_warn "challenge comparison blocked for $pair_id: ${timed_out_sides_csv} eval timed out. manual comparison needed${artifact_path:+ ($artifact_path)}"
@@ -8144,9 +8184,37 @@ maybe_run_challenge_eval() {
   fi
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
   if [[ "$eval_failed" == "true" ]]; then
-    eval_hard_retry_count=$(read_state_value "0" --arg i "$issue" '.tasks[$i].evalHardFailureRetryCount // 0')
+    # Bounded-retry bucket in the arm's feature dir (HOK-2924). The effective
+    # count is max(bucket, state mirror): the evalHardFailureRetryCount mirror
+    # stays authoritative for pre-existing state (and for
+    # resolve_challenge_pair_hard_failure, which reads it), while the bucket
+    # adds the head-keyed reset — a fresh commit zeroes both. The backoff base
+    # defaults to 0 (today's cadence); raise it via
+    # WAVEMILL_RETRY_BACKOFF_CHALLENGE_EVAL_HARD_BASE_SECONDS.
+    local hard_retry_state_dir hard_retry_head hard_retry_prior_head hard_retry_mirror hard_retry_base
+    hard_retry_state_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+    hard_retry_head=$(git -C "${WORKTREE_ROOT}/${slug}" rev-parse HEAD 2>/dev/null || echo "")
+    hard_retry_prior_head=$(bounded_retry_head "$hard_retry_state_dir" "challenge-eval-hard")
+    bounded_retry_reset_if_new_head "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_head"
+    if [[ -n "$hard_retry_prior_head" && -n "$hard_retry_head" && "$hard_retry_prior_head" != "$hard_retry_head" ]]; then
+      state_mutate "$STATE_FILE" '
+        .tasks[$issue].evalHardFailureRetryCount = 0
+        | .tasks[$issue].updated = (now | todateiso8601)
+      ' --arg issue "$issue" >/dev/null || true
+    fi
+    eval_hard_retry_count=$(bounded_retry_count "$hard_retry_state_dir" "challenge-eval-hard")
+    hard_retry_mirror=$(read_state_value "0" --arg i "$issue" '.tasks[$i].evalHardFailureRetryCount // 0')
+    [[ "$hard_retry_mirror" =~ ^[0-9]+$ ]] || hard_retry_mirror=0
+    (( hard_retry_mirror > eval_hard_retry_count )) && eval_hard_retry_count="$hard_retry_mirror"
     eval_hard_retry_max=$(challenge_eval_hard_failure_max_retries)
     if (( eval_hard_retry_count < eval_hard_retry_max )); then
+      hard_retry_base="${WAVEMILL_RETRY_BACKOFF_CHALLENGE_EVAL_HARD_BASE_SECONDS:-0}"
+      [[ "$hard_retry_base" =~ ^[0-9]+$ ]] || hard_retry_base=0
+      if ! bounded_retry_due "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_base"; then
+        log "debug" "challenge eval hard-failure retry for $issue holding (backoff)"
+        return 0
+      fi
+      bounded_retry_increment "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_head" >/dev/null
       eval_hard_retry_count=$((eval_hard_retry_count + 1))
       state_mutate "$STATE_FILE" '
         .tasks[$issue].evalFailed = false
@@ -8156,6 +8224,8 @@ maybe_run_challenge_eval() {
       ' --arg issue "$issue" --argjson retryCount "$eval_hard_retry_count" >/dev/null || true
       log "status" "challenge eval retrying for $issue: hard failure (attempt $eval_hard_retry_count/$eval_hard_retry_max)"
     else
+      bounded_retry_mark_exhausted "$hard_retry_state_dir" "challenge-eval-hard" \
+        "Challenge eval hard-failure retries exhausted for $issue (${eval_hard_retry_count}/${eval_hard_retry_max}) - resolving pair ${pair_id:-unknown}" || true
       resolve_challenge_pair_hard_failure "$pair_id" >/dev/null || true
       return 0
     fi
@@ -12002,6 +12072,13 @@ monitor_issue_state() {
               # Write canonical phase config (HOK-1177)
               write_phase_config "$FEATURE_DIR" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${FORCE_MODEL:-}"
 
+              # Bounded relaunch admission (HOK-2924): hold during backoff,
+              # terminalize once the phase-launch budget is spent.
+              if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "planning" "$WIN"; then
+                active_count=$((active_count + 1))
+                return 0
+              fi
+
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
               planner_launch_model="$planner_model"
@@ -12209,6 +12286,13 @@ monitor_issue_state() {
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
+            # Bounded relaunch admission (HOK-2924): hold during backoff,
+            # terminalize once the phase-launch budget is spent.
+            if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "coding" "$WIN"; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
             # Transition to coding phase
             set_task_phase "$ISSUE" "coding"
             coder_launch_model="$coder_model"
@@ -12407,6 +12491,13 @@ monitor_issue_state() {
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
+
+            # Bounded relaunch admission (HOK-2924): hold during backoff,
+            # terminalize once the phase-launch budget is spent.
+            if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "review" "$WIN"; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
 
             # Transition to review phase
             set_task_phase "$ISSUE" "review"
@@ -13072,6 +13163,7 @@ monitor_issue_state() {
     local resolved_phase ready_state_dir_path ready_status ready_verdict
     local launch_head current_head title launch_rc _conflict_cleared
     local recheck_disposition recheck_attempt recheck_limit
+    local pending_recheck_disposition pending_recheck_limit pending_recheck_reason
     _conflict_cleared=false
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
@@ -13332,12 +13424,45 @@ monitor_issue_state() {
     # the second case, a successful remediation leaves status=running/verdict=fail
     # and the controller never re-evaluates CI.
     if [[ "$ready_status" == "running" ]] && { [[ "$ready_verdict" == "pending" ]] || [[ -n "$launch_head" && "$launch_head" != "$current_head" ]]; }; then
+      # Bound the pending-ready re-check loop (HOK-2924): the sibling of the
+      # failed-ready budget above. A refused launch preserves exactly the
+      # precondition that re-arms this branch, so without a ceiling it retries
+      # every poll tick forever. A new commit or a fresh ready verdict wipes
+      # the budget; failed launches back off, then terminalize.
+      pending_recheck_limit="${WAVEMILL_PENDING_READY_RECHECK_MAX_ATTEMPTS:-4}"
+      [[ "$pending_recheck_limit" =~ ^[0-9]+$ ]] || pending_recheck_limit=4
+      pending_recheck_disposition=$(bounded_retry_gate "$ready_state_dir_path" "pending-ready-recheck" "$current_head" "$pending_recheck_limit")
+      case "$pending_recheck_disposition" in
+        exhausted)
+          pending_recheck_reason=$(ready_failure_reason "$ready_state_dir_path")
+          [[ -n "$pending_recheck_reason" ]] || pending_recheck_reason="ready launch kept failing without a fresh verdict"
+          if bounded_retry_mark_exhausted "$ready_state_dir_path" "pending-ready-recheck" \
+              "Pending-ready re-checks exhausted after $(bounded_retry_count "$ready_state_dir_path" "pending-ready-recheck") attempt(s) for PR #$PR: $pending_recheck_reason"; then
+            write_ready_attention_file "$ready_state_dir_path" \
+              "Pending-ready re-checks exhausted for PR #$PR: $pending_recheck_reason. Waiting for a new commit or operator."
+            log "status" "⛔ $ISSUE → Pending-ready re-checks exhausted for PR #$PR; waiting for a new commit or operator"
+          fi
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        exhausted-quiet)
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        backoff)
+          log "debug" "  $ISSUE: holding pending-ready re-check for PR #$PR (backoff)"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+      esac
+
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
+      bounded_retry_increment "$ready_state_dir_path" "pending-ready-recheck" "$current_head" >/dev/null
       if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
         launch_rc=0
       else
@@ -13350,25 +13475,40 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -eq 3 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -eq 5 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
+        # Terminal cause (HOK-2915 shape): a review artifact the readiness
+        # gate can never accept cannot become passing by relaunching ready —
+        # unless it is an infra failure, which launch_ready_phase recovers by
+        # relaunching review. Abort on the first refusal instead of retrying.
+        if ! review_result_passes_ready_gate "$ready_state_dir_path" \
+            && ! review_result_infra_failure "$ready_state_dir_path"; then
+          if bounded_retry_mark_exhausted "$ready_state_dir_path" "pending-ready-recheck" \
+              "Ready launch refused for PR #$PR: review verdict does not pass the readiness gate (terminal until the review artifact changes)"; then
+            log "status" "⛔ $ISSUE → Ready launch refused by review gate for PR #$PR; not retrying (terminal cause)"
+          fi
+        fi
         log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
+      bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
 
       log "status" "$ISSUE → Ready checks completed for PR #$PR"
       if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then

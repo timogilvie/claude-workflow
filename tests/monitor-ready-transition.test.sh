@@ -35,7 +35,10 @@ extract_function() {
 }
 
 MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
-extract_function "$MONITOR_SCRIPT_FILE" "ready_base_sha" > "$MONITOR_FUNC_FILE"
+# The extracted helpers are thin wrappers over the shared bounded-retry
+# module (HOK-2924); make it available first.
+cat "$REPO_DIR/shared/lib/bounded-retry.sh" > "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "ready_base_sha" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "get_main_head_sha" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_allows_merge" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
@@ -58,6 +61,8 @@ extract_function "$MONITOR_SCRIPT_FILE" "record_failed_ready_recheck_observation
 extract_function "$MONITOR_SCRIPT_FILE" "failed_ready_recheck_identical_streak" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "mark_failed_ready_recheck_exhausted" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "failed_ready_recheck_gate" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_passes_ready_gate" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_infra_failure" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "resolve_pair_on_primary_merge" >> "$MONITOR_FUNC_FILE"
@@ -227,12 +232,76 @@ JSON
         cat > "$READY_DIR/.ready-result.json" <<JSON
 {"stage":"ready","status":"running","artifacts":{"verdict":"pending","remediationAttempts":1,"remediationLaunchHead":"old-head"}}
 JSON
+        printf "%s\n" "1" > "$READY_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "old-head" > "$READY_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "0" > "$READY_DIR/.retry-ready-remediation-last-at"
         ;;
       ready_remediation_inflight_same_head)
         CURRENT_PHASE="ready"
         READY_STATUS="running"
         cat > "$READY_DIR/.ready-result.json" <<JSON
 {"stage":"ready","status":"running","artifacts":{"verdict":"fail","remediationAttempts":1,"remediationLaunchHead":"current-head"}}
+JSON
+        printf "%s\n" "1" > "$READY_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "0" > "$READY_DIR/.retry-ready-remediation-last-at"
+        ;;
+      pending_recheck_backoff_holds)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=1
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        printf "%s\n" "1" > "$READY_DIR/.retry-pending-ready-recheck-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.retry-pending-ready-recheck-head"
+        date +%s > "$READY_DIR/.retry-pending-ready-recheck-last-at"
+        ;;
+      pending_recheck_exhausted)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=1
+        INVOKE_COUNT=2
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","failureReason":"launch refused by review gate","artifacts":{"verdict":"pending"}}
+JSON
+        printf "%s\n" "4" > "$READY_DIR/.retry-pending-ready-recheck-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.retry-pending-ready-recheck-head"
+        printf "%s\n" "0" > "$READY_DIR/.retry-pending-ready-recheck-last-at"
+        ;;
+      pending_recheck_new_head_resets)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=4
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        printf "%s\n" "4" > "$READY_DIR/.retry-pending-ready-recheck-count"
+        printf "%s\n" "old-head" > "$READY_DIR/.retry-pending-ready-recheck-head"
+        printf "%s\n" "0" > "$READY_DIR/.retry-pending-ready-recheck-last-at"
+        printf "%s\n" "stale reason" > "$READY_DIR/.retry-pending-ready-recheck-exhausted"
+        ;;
+      pending_recheck_pass_clears_budget)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=0
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        printf "%s\n" "2" > "$READY_DIR/.retry-pending-ready-recheck-count"
+        printf "%s\n" "current-head" > "$READY_DIR/.retry-pending-ready-recheck-head"
+        printf "%s\n" "0" > "$READY_DIR/.retry-pending-ready-recheck-last-at"
+        ;;
+      pending_recheck_terminal_review_gate)
+        CURRENT_PHASE="ready"
+        READY_STATUS="running"
+        READY_LAUNCH_RC=1
+        INVOKE_COUNT=2
+        cat > "$READY_DIR/.ready-result.json" <<JSON
+{"stage":"ready","status":"running","artifacts":{"verdict":"pending"}}
+JSON
+        cat > "$READY_DIR/.review-result.json" <<JSON
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":321,"exitCode":"missing","verdict":"unknown","iterations":0,"blockerCount":1}}
 JSON
         ;;
       ready_conflict_merged)
@@ -457,6 +526,12 @@ JSON
     exhausted_log_count="$(printf "%s" "$LOG_OUTPUT" | grep -o "re-checks exhausted for PR" | grep -c . || true)"
     printf "recheck_count=%s\nrecheck_sentinel=%s\nexhausted_log_count=%s\n" \
       "$recheck_count" "$recheck_sentinel" "$exhausted_log_count"
+    pending_count="$(cat "$READY_DIR/.retry-pending-ready-recheck-count" 2>/dev/null || echo "")"
+    pending_sentinel="absent"
+    [[ -f "$READY_DIR/.retry-pending-ready-recheck-exhausted" ]] && pending_sentinel="present"
+    pending_exhausted_log_count="$(printf "%s" "$LOG_OUTPUT" | grep -o "Pending-ready re-checks exhausted" | grep -c . || true)"
+    printf "pending_count=%s\npending_sentinel=%s\npending_exhausted_log_count=%s\n" \
+      "$pending_count" "$pending_sentinel" "$pending_exhausted_log_count"
   '
 }
 
@@ -531,6 +606,31 @@ ready_remediation_inflight_same_head_output="$(run_monitor_case ready_remediatio
 check_contains "ready remediation in-flight keeps task active" "$ready_remediation_inflight_same_head_output" "active_count=1"
 check_contains "ready remediation in-flight does not relaunch ready" "$ready_remediation_inflight_same_head_output" "ready_launches=0"
 check_contains "ready remediation in-flight clears attention" "$ready_remediation_inflight_same_head_output" "attention=clear"
+
+pending_recheck_backoff_output="$(run_monitor_case pending_recheck_backoff_holds)"
+check_contains "pending recheck backoff skips relaunch" "$pending_recheck_backoff_output" "ready_launches=0"
+check_contains "pending recheck backoff holds slot active" "$pending_recheck_backoff_output" "active_count=1"
+
+pending_recheck_exhausted_output="$(run_monitor_case pending_recheck_exhausted)"
+check_contains "pending recheck exhaustion stops relaunching" "$pending_recheck_exhausted_output" "ready_launches=0"
+check_contains "pending recheck exhaustion flags user" "$pending_recheck_exhausted_output" "attention=needs-user"
+check_contains "pending recheck exhaustion logs terminal status once" "$pending_recheck_exhausted_output" "pending_exhausted_log_count=1"
+check_contains "pending recheck exhaustion writes sentinel" "$pending_recheck_exhausted_output" "pending_sentinel=present"
+check_contains "pending recheck exhaustion names the failing reason" "$pending_recheck_exhausted_output" "launch refused by review gate"
+
+pending_recheck_new_head_output="$(run_monitor_case pending_recheck_new_head_resets)"
+check_contains "new commit re-enables pending recheck" "$pending_recheck_new_head_output" "ready_launches=1"
+check_contains "new commit clears pending exhausted sentinel" "$pending_recheck_new_head_output" "pending_sentinel=absent"
+
+pending_recheck_pass_output="$(run_monitor_case pending_recheck_pass_clears_budget)"
+check_contains "ready pass relaunches pending recheck once" "$pending_recheck_pass_output" "ready_launches=1"
+check_contains "ready pass clears pending recheck budget" "$pending_recheck_pass_output" $'pending_count=\npending_sentinel=absent'
+
+pending_recheck_terminal_output="$(run_monitor_case pending_recheck_terminal_review_gate)"
+check_contains "unacceptable review artifact launches once" "$pending_recheck_terminal_output" "ready_launches=1"
+check_contains "unacceptable review artifact terminalizes immediately" "$pending_recheck_terminal_output" "pending_sentinel=present"
+check_contains "unacceptable review artifact logs terminal cause" "$pending_recheck_terminal_output" "refused by review gate"
+check_contains "unacceptable review artifact flags user" "$pending_recheck_terminal_output" "attention=needs-user"
 
 ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
 check_contains "ready merge wins over conflict rerun" "$ready_conflict_merged_output" "cleanup_count=1"

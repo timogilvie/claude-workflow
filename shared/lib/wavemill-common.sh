@@ -2,6 +2,13 @@
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
+# Bounded-retry invariant helpers (HOK-2924): every relaunch path counts
+# attempts, backs off, terminalizes at a ceiling, and resets on a new head SHA
+# through this one module. Sourced here so the mill, monitor, and startup
+# runner all inherit the same implementation.
+# shellcheck source=bounded-retry.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded-retry.sh"
+
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
@@ -444,6 +451,33 @@ cleanup_completed_task() {
     log "$issue: Complete ($completion_reason)"
   else
     log "$issue: Complete"
+  fi
+}
+
+# Canonical challenge-eval retry ceilings (HOK-2924). Formerly duplicated in
+# wavemill-mill.sh and the monitor; both scopes source this file.
+challenge_eval_retry_max_attempts() {
+  local max_attempts
+  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
+  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_attempts"
+  else
+    printf '1\n'
+  fi
+}
+
+challenge_eval_hard_failure_max_retries() {
+  local max_retries
+  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
+    return
+  fi
+
+  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
+  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_retries"
+  else
+    printf '2\n'
   fi
 }
 

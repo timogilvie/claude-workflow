@@ -51,6 +51,7 @@ All business logic lives in `shared/lib/` for reusability across CLI tools, comm
 - `outcome-collectors.ts` - Collect CI, test, review outcomes
 
 #### Utilities
+- `bounded-retry.sh` - The bounded-retry invariant (HOK-2924): every path that relaunches work after a failure must count attempts against a `(state_dir, bucket, head SHA)` key, back off between attempts, terminalize at a ceiling with a greppable recorded reason (`.retry-<bucket>-exhausted` sentinel), and reset on a new head SHA or successful launch. Terminal causes short-circuit via `bounded_retry_mark_exhausted` without consuming the budget. **New relaunch paths must use this helper — never implement a private retry counter.**
 - `prompt-utils.ts` - Prompt template filling
 - `llm-cli.ts` - Claude CLI integration
 - `string-utils.ts` - String manipulation (kebab-case, etc.)
