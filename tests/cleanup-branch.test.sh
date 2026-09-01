@@ -58,11 +58,12 @@ else
   fail "cleanup_completed_task is missing remote branch cleanup calls"
 fi
 
-if grep -Fq 'cleanup_completed_task "$loser_key" "$loser_slug"' "$MILL_SCRIPT" \
-  && grep -Fq 'cleanup_completed_task "$issue" "$slug"' "$MONITOR_SCRIPT_FILE"; then
-  pass "parent and monitor cleanup callers remain reachable"
+if grep -Fq 'cleanup_completed_task "$issue" "$slug"' "$MONITOR_SCRIPT_FILE" \
+  && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"' "$MONITOR_SCRIPT_FILE" \
+  && ! grep -Fq 'cleanup_forfeit_loser_from_resolution' "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE" "$COMMON_SCRIPT"; then
+  pass "monitor cleanup callers remain and hard-failure cleanup is gone"
 else
-  fail "parent or monitor cleanup callers disappeared"
+  fail "cleanup callers or hard-failure cleanup guard changed unexpectedly"
 fi
 
 # HOK-2774 reverses the HOK-1547/#524 split: tend deletes refs only for

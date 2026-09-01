@@ -176,18 +176,24 @@ test('runMillConfigPreflight rejects every removed HOK-2587 model field', async 
 });
 
 test('runMillConfigPreflight accepts clean config', async () => {
-  await withCertificationRoot(async () => {
+  const registry = makeRegistry();
+  await withCertificationRoot(async (root) => {
+    const artifact = makeArtifact(registry);
+    writeArtifact(root, artifact);
     const repoDir = makeRepo({
       router: { enabled: true, defaultAgent: 'claude' },
       observer: { enabled: false },
       nativeAgent: { certification: { autoRemediate: false } },
     });
     try {
-      const result = await runMillConfigPreflight(repoDir);
+      const result = await runMillConfigPreflight(repoDir, {
+        registry,
+        certificationRoot: root,
+      });
       assert.equal(result.ok, true);
       assert.equal(result.report.removedFields.length, 0);
       assert.equal(result.report.validationError, null);
-      assert.equal(result.report.certificationCoverage?.status, 'empty-store');
+      assert.equal(result.report.certificationCoverage?.status, 'ok');
     } finally {
       cleanup(repoDir);
     }
@@ -392,7 +398,7 @@ test('runMillConfigPreflight skips auto-remediation during mill dry-runs', async
           throw new Error('should not be called');
         },
       });
-      assert.equal(result.ok, true);
+      assert.equal(result.ok, false);
       assert.equal(result.report.certificationCoverage?.status, 'empty-store');
       assert.equal(result.report.certificationRemediation, undefined);
     } finally {

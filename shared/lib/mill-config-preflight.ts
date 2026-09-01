@@ -137,8 +137,7 @@ export async function runMillConfigPreflight(
   const certificationCoverageBlocked = certificationCoverage?.status === 'bump-without-publish'
     || certificationCoverage?.status === 'identity-drift';
   const certificationStaleBlocked = certificationCoverage?.status === 'stale';
-  const certificationEmptyBlocked = autoRemediationEnabled
-    && certificationCoverage?.status === 'empty-store'
+  const certificationEmptyBlocked = certificationCoverage?.status === 'empty-store'
     && certificationCoverage.nativeModelCount > 0;
 
   const report: MillConfigPreflightReport = {
