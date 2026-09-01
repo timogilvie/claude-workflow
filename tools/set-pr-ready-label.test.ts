@@ -10,6 +10,7 @@ function pullRequestWithLabels(labelNames: string[]): PullRequest {
     number: 304,
     title: 'Example',
     headRefName: 'task/ready-pr',
+    headRefOid: 'head-304',
     baseRefName: 'auto/integration',
     labels: labelNames.map((name) => ({ name })),
     url: 'https://github.com/acme/widgets/pull/304',

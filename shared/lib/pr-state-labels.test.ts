@@ -10,6 +10,7 @@ function buildPullRequest(labelNames: string[]) {
     state: 'OPEN',
     author: 'octocat',
     headRefName: 'task/labels',
+    headRefOid: 'head-229',
     baseRefName: 'main',
     labels: labelNames.map((name) => ({ name })),
     url: 'https://github.com/acme/widgets/pull/229',

@@ -110,6 +110,25 @@ marker_head() {
   marker_read "$path" | jq -r '.headSha // empty' 2>/dev/null || true
 }
 
+# marker_reason <path>
+# Prints marker reason for JSON markers, or first line for legacy markers.
+marker_reason() {
+  local path="$1"
+
+  [[ -f "$path" ]] || return 0
+
+  local body
+  body=$(cat "$path" 2>/dev/null || true)
+  [[ -n "$body" ]] || return 0
+
+  if jq -e '.schemaVersion == 1' <<< "$body" 2>/dev/null >/dev/null; then
+    jq -r '.reason // empty' <<< "$body" 2>/dev/null || true
+    return 0
+  fi
+
+  printf '%s\n' "$body" | head -1 | tr -d '\r'
+}
+
 # marker_is_stale <path> <current_head>
 # Exit 0: stale (SHA mismatch or absent), 1: valid, 2: legacy/unable to read
 marker_is_stale() {

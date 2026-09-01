@@ -8,7 +8,7 @@ export interface PrStateLabelOptions {
 }
 
 export interface PrLabelWriteArgs {
-  headSha: string;
+  headSha?: string;
   reason?: string;
 }
 
@@ -97,47 +97,87 @@ export function initGithubLabels(options: LabelInitOptions = {}): LabelInitResul
   return { repo, created, skipped };
 }
 
-export function setWavemillReady(prNumber: number | string, args: PrLabelWriteArgs, options: PrStateLabelOptions = {}): PullRequest {
+export function setWavemillReady(
+  prNumber: number | string,
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions = {},
+  maybeOptions: PrStateLabelOptions = {},
+): PullRequest {
+  const { args, options } = normalizeWriteArgs(argsOrOptions, maybeOptions);
   return transitionPullRequestLabels(prNumber, [WM_LABELS.ready], [WM_LABELS.blocked, WM_LABELS.merging], args, options);
 }
 
-export function setWavemillBlocked(prNumber: number | string, args: PrLabelWriteArgs, options: PrStateLabelOptions = {}): PullRequest {
+export function setWavemillBlocked(
+  prNumber: number | string,
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions = {},
+  maybeOptions: PrStateLabelOptions = {},
+): PullRequest {
+  const { args, options } = normalizeWriteArgs(argsOrOptions, maybeOptions);
   return transitionPullRequestLabels(prNumber, [WM_LABELS.blocked], [WM_LABELS.ready, WM_LABELS.merging], args, options);
 }
 
-export function setWavemillMerging(prNumber: number | string, args: PrLabelWriteArgs, options: PrStateLabelOptions = {}): PullRequest {
+export function setWavemillMerging(
+  prNumber: number | string,
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions = {},
+  maybeOptions: PrStateLabelOptions = {},
+): PullRequest {
+  const { args, options } = normalizeWriteArgs(argsOrOptions, maybeOptions);
   return transitionPullRequestLabels(prNumber, [WM_LABELS.merging], [WM_LABELS.ready, WM_LABELS.blocked], args, options);
 }
 
-export function setWavemillMerged(prNumber: number | string, args: PrLabelWriteArgs, options: PrStateLabelOptions = {}): PullRequest {
+export function setWavemillMerged(
+  prNumber: number | string,
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions = {},
+  maybeOptions: PrStateLabelOptions = {},
+): PullRequest {
+  const { args, options } = normalizeWriteArgs(argsOrOptions, maybeOptions);
   return transitionPullRequestLabels(prNumber, [WM_LABELS.merged], ACTIVE_STATE_LABELS, args, options);
 }
 
-export function setWavemillSuperseded(prNumber: number | string, args: PrLabelWriteArgs, options: PrStateLabelOptions = {}): PullRequest {
+export function setWavemillSuperseded(
+  prNumber: number | string,
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions = {},
+  maybeOptions: PrStateLabelOptions = {},
+): PullRequest {
+  const { args, options } = normalizeWriteArgs(argsOrOptions, maybeOptions);
   return transitionPullRequestLabels(prNumber, [WM_LABELS.superseded], ACTIVE_STATE_LABELS, args, options);
 }
 
 export function addWavemillBase(prNumber: number | string, options: PrStateLabelOptions = {}): PullRequest {
-  return transitionPullRequestLabels(prNumber, [WM_LABELS.wavemill], [], { headSha: '' }, options);
+  return transitionPullRequestLabels(prNumber, [WM_LABELS.wavemill], [], {}, options);
 }
 
 export function addWavemillRisky(prNumber: number | string, options: PrStateLabelOptions = {}): PullRequest {
-  return transitionPullRequestLabels(prNumber, [WM_LABELS.risky], [], { headSha: '' }, options);
+  return transitionPullRequestLabels(prNumber, [WM_LABELS.risky], [], {}, options);
 }
 
 export function addWavemillMigration(prNumber: number | string, options: PrStateLabelOptions = {}): PullRequest {
-  return transitionPullRequestLabels(prNumber, [WM_LABELS.migration], [], { headSha: '' }, options);
+  return transitionPullRequestLabels(prNumber, [WM_LABELS.migration], [], {}, options);
 }
 
 export function addWavemillApproved(prNumber: number | string, options: PrStateLabelOptions = {}): PullRequest {
-  return transitionPullRequestLabels(prNumber, [WM_LABELS.approved], [], { headSha: '' }, options);
+  return transitionPullRequestLabels(prNumber, [WM_LABELS.approved], [], {}, options);
 }
 
 export function clearWavemillState(prNumber: number | string, options: PrStateLabelOptions = {}): PullRequest {
   const pr = prStateLabelDeps.getPullRequest(prNumber, options);
   const markerHandle = getPrMarkerHandle(pr.number);
   clearMarker(markerHandle);
-  return transitionPullRequestLabels(prNumber, [], ALL_WM_LABELS, { headSha: '' }, options);
+  return transitionPullRequestLabels(prNumber, [], ALL_WM_LABELS, {}, options, pr);
+}
+
+function normalizeWriteArgs(
+  argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions,
+  maybeOptions: PrStateLabelOptions,
+): { args: PrLabelWriteArgs; options: PrStateLabelOptions } {
+  if (
+    'repo' in argsOrOptions &&
+    !('headSha' in argsOrOptions) &&
+    !('reason' in argsOrOptions)
+  ) {
+    return { args: {}, options: argsOrOptions };
+  }
+
+  return { args: argsOrOptions, options: maybeOptions };
 }
 
 function transitionPullRequestLabels(
@@ -146,8 +186,9 @@ function transitionPullRequestLabels(
   labelsToClear: string[],
   args: PrLabelWriteArgs,
   options: PrStateLabelOptions,
+  initialPr?: PullRequest,
 ): PullRequest {
-  const pr = prStateLabelDeps.getPullRequest(prNumber, options);
+  const pr = initialPr ?? prStateLabelDeps.getPullRequest(prNumber, options);
   const existingLabels = new Set(pr.labels.map((label) => label.name));
   const labelsToAdd = labelsToEnsure.filter((label, index, all) => all.indexOf(label) === index && !existingLabels.has(label));
   const labelsToRemove = labelsToClear.filter((label, index, all) => all.indexOf(label) === index && existingLabels.has(label));
@@ -162,18 +203,48 @@ function transitionPullRequestLabels(
     currentPr = prStateLabelDeps.addLabelsToPullRequest(pr.number, labelsToAdd, options);
   }
 
-  // Write marker with current active state labels
-  if (args.headSha) {
+  const writesTransientState = labelsToEnsure.some((label) => ACTIVE_STATE_LABELS.includes(label));
+  const clearsTransientState = labelsToClear.some((label) => ACTIVE_STATE_LABELS.includes(label));
+
+  if (writesTransientState || clearsTransientState || args.headSha) {
+    const headSha = args.headSha?.trim() || resolvePullRequestHeadSha(pr, options);
+    if (!headSha) {
+      return currentPr;
+    }
     const markerHandle = getPrMarkerHandle(pr.number);
     const activeLabels = currentPr.labels.map((label) => label.name);
     writeMarker(markerHandle, {
-      headSha: args.headSha,
+      headSha,
       reason: args.reason,
       detail: { activeLabels },
     });
   }
 
   return currentPr;
+}
+
+function resolvePullRequestHeadSha(pr: PullRequest, options: PrStateLabelOptions): string {
+  const embeddedSha = (pr as PullRequest & { headRefOid?: string }).headRefOid?.trim();
+  if (embeddedSha) {
+    return embeddedSha;
+  }
+
+  try {
+    const command = [
+      'gh',
+      'pr',
+      'view',
+      escapeShellArg(String(pr.number)),
+      '--json',
+      'headRefOid',
+      '--jq',
+      escapeShellArg('.headRefOid'),
+      ...(options.repo ? ['--repo', escapeShellArg(options.repo)] : []),
+    ].join(' ');
+    return prStateLabelDeps.execShellCommand(command, { encoding: 'utf-8' }).trim();
+  } catch {
+    return '';
+  }
 }
 
 export async function readPrStateMarker(

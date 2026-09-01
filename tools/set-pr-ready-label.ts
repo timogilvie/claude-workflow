@@ -14,7 +14,7 @@ export function setPrReadyLabel(prNumber: string, repo?: string): void {
     throw new Error('PR number is required');
   }
 
-  const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, { repo });
+  const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, repo ? { repo } : {});
 
   // Verify the write actually landed before claiming success.
   //

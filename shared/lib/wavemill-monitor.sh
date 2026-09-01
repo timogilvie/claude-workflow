@@ -6,7 +6,7 @@ set -Eeuo pipefail
 source "$1"
 
 # Source marker lifecycle helpers
-WAVEMILL_LIB_DIR="${WAVEMILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+WAVEMILL_LIB_DIR="${WAVEMILL_LIB_DIR:-${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 source "$WAVEMILL_LIB_DIR/transient-marker.sh"
 
 run_linear_retry_drain_tick() {
@@ -2104,7 +2104,8 @@ clear_ready_conflict_attention() {
 
 clear_ready_conflict_markers() {
   local feature_dir="$1"
-  rm -f "$feature_dir/.conflict-detected" "$feature_dir/.needs-attention" "$feature_dir/.conflict-recheck-at"
+  rm -f "$feature_dir/.conflict-detected" "$feature_dir/.conflict-recheck-at"
+  marker_clear "$feature_dir/.needs-attention"
   clear_ready_conflict_attention "$feature_dir"
 }
 
@@ -6422,10 +6423,12 @@ clear_cross_pr_guard_ready_evidence() {
     fi
   fi
 
-  if [[ -f "$state_dir/.needs-attention" ]] \
-    && { grep -Fq 'Cross-PR revert guard' "$state_dir/.needs-attention" \
-      || grep -Fq 'without explicit acknowledgement' "$state_dir/.needs-attention"; }; then
-    rm -f "$state_dir/.needs-attention"
+  local attention_reason=""
+  attention_reason="$(marker_reason "$state_dir/.needs-attention" 2>/dev/null || true)"
+  if [[ -n "$attention_reason" ]] \
+    && { [[ "$attention_reason" == *'Cross-PR revert guard'* ]] \
+      || [[ "$attention_reason" == *'without explicit acknowledgement'* ]]; }; then
+    marker_clear "$state_dir/.needs-attention"
   fi
 }
 
@@ -6970,7 +6973,7 @@ relaunch_review_after_infra_recovery() {
   launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" \
     "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    rm -f "$state_dir/.needs-attention"
+    marker_clear "$state_dir/.needs-attention"
     log "status" "♻ $issue → review relaunched after infrastructure recovery (attempt ${retry_number}/${retry_max})"
     return 6
   fi
@@ -7123,7 +7126,7 @@ _launch_ready_remediation_attempt() {
     write_stage_result "$state_dir" "ready" "running" "$remediation_agent" "$resolved_model" \
       "Ready remediation in progress for PR #$pr_number" \
       "$remediation_artifacts_json"
-    rm -f "$state_dir/.needs-attention"
+    marker_clear "$state_dir/.needs-attention"
     log "status" "⚙ $issue → Launched ready remediation (attempt ${remediation_attempt_number}/${remediation_max_attempts}) for PR #$pr_number"
     return 0
   fi
@@ -7330,7 +7333,7 @@ launch_ready_phase() {
       return 1
     fi
     touch "$state_dir/.conflict-detected"
-    rm -f "$state_dir/.needs-attention"
+    marker_clear "$state_dir/.needs-attention"
     log "status" "  ⚠ Merge conflict detected for $issue (PR #$pr_number)"
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
@@ -7383,7 +7386,8 @@ launch_ready_phase() {
       write_stage_result "$state_dir" "ready" "running" "$current_agent" "$current_model" \
         "pending GitHub mergeability - will retry (attempt ${transient_count}/${transient_limit})" \
         "$pending_artifacts_json"
-      rm -f "$state_dir/.needs-attention" "$state_dir/.needs-attention-transient"
+      marker_clear "$state_dir/.needs-attention"
+      marker_clear "$state_dir/.needs-attention-transient"
       log "info" "  Merge status for $issue is $merge_status - will retry (attempt ${transient_count}/${transient_limit})"
       return 4
     fi
@@ -7394,8 +7398,9 @@ launch_ready_phase() {
     return 1
   fi
 
-  rm -f "$state_dir/.conflict-detected" "$state_dir/.needs-attention" \
-    "$state_dir/.conflict-recheck-at" "$state_dir/.needs-attention-transient"
+  rm -f "$state_dir/.conflict-detected" "$state_dir/.conflict-recheck-at"
+  marker_clear "$state_dir/.needs-attention"
+  marker_clear "$state_dir/.needs-attention-transient"
   clear_ready_conflict_attention "$state_dir"
   clear_transient_mergeability_state "$state_dir"
 
@@ -7588,8 +7593,8 @@ check_ready_stage() {
   return $?
 }
 
-set_window_attention_state() {
-  local win="$1" state="${2:-clear}"
+_resolve_window_attention_target() {
+  local win="$1"
   local target="$win" issue="" slug=""
   if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
     issue="${BASH_REMATCH[1]}"
@@ -7599,13 +7604,25 @@ set_window_attention_state() {
     target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
   fi
   [[ -n "$target" ]] || target="$win"
-  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
+  _tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target"
+}
+
+clear_window_attention_state() {
+  local win="$1" target
+  target="$(_resolve_window_attention_target "$win")"
+  tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
+  tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+}
+
+set_window_attention_state() {
+  local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then
+    local target
+    target="$(_resolve_window_attention_target "$win")"
     tmux set-window-option -t "$target" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
     tmux set-window-option -t "$target" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
   else
-    tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
-    tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+    clear_window_attention_state "$win"
   fi
   tmux refresh-client -S >/dev/null 2>&1 || true
 }
@@ -11792,7 +11809,7 @@ monitor_issue_state() {
         write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
       else
         clear_transient_mergeability_state "$merged_ready_dir"
-        rm -f "$merged_ready_dir/.needs-attention"
+        marker_clear "$merged_ready_dir/.needs-attention"
       fi
     fi
 
@@ -12968,7 +12985,7 @@ monitor_issue_state() {
       write_ready_attention_file "$merged_ready_dir" "PR #$PR was merged before the Release Readiness Check passed."
     else
       clear_transient_mergeability_state "$merged_ready_dir"
-      rm -f "$merged_ready_dir/.needs-attention"
+      marker_clear "$merged_ready_dir/.needs-attention"
     fi
 
     log "status" "$ISSUE → PR #$PR MERGED"

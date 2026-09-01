@@ -6,7 +6,7 @@ import {
   readMarker,
   validateMarker,
   buildStaleMarkerFinding,
-  MarkerHandle,
+  type MarkerHandle,
 } from './transient-marker.ts';
 import { mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
