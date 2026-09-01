@@ -1648,30 +1648,8 @@ mark_challenge_comparison_running() {
     --arg challengerPr "$challenger_pr"
 }
 
-challenge_eval_retry_max_attempts() {
-  local max_attempts
-  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
-  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_attempts"
-  else
-    printf '1\n'
-  fi
-}
-
-challenge_eval_hard_failure_max_retries() {
-  local max_retries
-  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
-    return
-  fi
-
-  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
-  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_retries"
-  else
-    printf '2\n'
-  fi
-}
+# challenge_eval_retry_max_attempts() and challenge_eval_hard_failure_max_retries()
+# are provided by wavemill-common.sh (HOK-2924), sourced above.
 
 clear_challenge_pair_state() {
   local pair_id="$1"
