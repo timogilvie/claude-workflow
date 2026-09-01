@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -69,24 +70,27 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 
 FUNCTION_FILE="$TEST_TMP/challenge-running-functions.sh"
 : > "$FUNCTION_FILE"
+# save_task_state is provided by sourcing wavemill-common.sh below (HOK-2900
+# canonicalization); only monitor-local helpers are extracted here.
 for fn in \
-  save_task_state:2 \
-  mark_challenge_eval_running:1 \
-  clear_challenge_eval_running:1 \
-  mark_challenge_comparison_running:1 \
-  clear_challenge_comparison_running:1 \
-  sanitize_job_token:1 \
-  challenge_job_dir:1 \
-  build_eval_job_id:1 \
-  build_comparison_job_id:1 \
-  read_job_state_value:1 \
-  launch_tracked_job:1 \
-  maybe_run_challenge_eval:1 \
-  post_merge_eval_timeout_seconds:1 \
-  maybe_run_challenge_comparison:1
+  mark_challenge_eval_running:1:mill \
+  clear_challenge_eval_running:1:mill \
+  mark_challenge_comparison_running:1:mill \
+  clear_challenge_comparison_running:1:mill \
+  sanitize_job_token:1:monitor \
+  challenge_job_dir:1:monitor \
+  build_eval_job_id:1:monitor \
+  build_comparison_job_id:1:monitor \
+  read_job_state_value:1:monitor \
+  launch_tracked_job:1:monitor \
+  maybe_run_challenge_eval:1:monitor \
+  post_merge_eval_timeout_seconds:1:monitor \
+  maybe_run_challenge_comparison:1:monitor
 do
-  IFS=: read -r name occurrence <<<"$fn"
-  extract_function_occurrence "$MILL_SCRIPT" "$name" "$occurrence" >> "$FUNCTION_FILE"
+  IFS=: read -r name occurrence source <<<"$fn"
+  source_file="$MILL_SCRIPT"
+  [[ "$source" == "monitor" ]] && source_file="$MONITOR_SCRIPT_FILE"
+  extract_function_occurrence "$source_file" "$name" "$occurrence" >> "$FUNCTION_FILE"
   printf '\n' >> "$FUNCTION_FILE"
 done
 

@@ -33,6 +33,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -264,10 +265,14 @@ harness_extract_real_functions() {
     recover_missing_expansion_artifact \
     handle_expanded_reroute_handoff_failure
   do
-    local extracted
-    extracted="$(extract_function "$MILL_SCRIPT" "$func")"
+    local extracted source_file
+    # trim_outer_whitespace is defined only in the parent mill script; every
+    # other extracted controller function lives in the monitor script.
+    source_file="$MONITOR_SCRIPT_FILE"
+    [[ "$func" == "trim_outer_whitespace" ]] && source_file="$MILL_SCRIPT"
+    extracted="$(extract_function "$source_file" "$func")"
     if [[ -z "$extracted" ]]; then
-      echo "Could not extract $func() from $MILL_SCRIPT" >&2
+      echo "Could not extract $func() from $source_file" >&2
       exit 1
     fi
     printf '%s\n\n' "$extracted" >> "$REAL_FUNC_FILE"

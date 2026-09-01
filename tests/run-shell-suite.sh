@@ -35,6 +35,10 @@ TESTS=(
   native-terminal-failure.test.sh
   challenger-transient-retry.test.sh
   parent-monitor-function-drift.test.sh
+  save-task-state-canonicalization.test.sh
+  linear-state-canonicalization.test.sh
+  task-phase-canonicalization.test.sh
+  pr-state-merge-canonicalization.test.sh
   native-agent-shell-operators.test.sh
   native-coding-commit.test.sh
   hook-write-context-guard.test.sh
@@ -82,6 +86,7 @@ TESTS=(
   global-model-parity.test.sh
   stage-state.test.sh
   startup-handoff.test.sh
+  monitor-script-byte-identical.test.sh
 )
 
 SHARD_INDEX=1

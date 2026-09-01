@@ -58,6 +58,25 @@ function makeArtifact(suiteVersion: string, registry: ModelRegistry): NativeCert
   };
 }
 
+function withAdditionalNativeModels(registry: ModelRegistry, modelIds: string[]): ModelRegistry {
+  const models = { ...registry.models };
+  for (const modelId of modelIds) {
+    models[modelId] = {
+      ...registry.models['gpt-4o']!,
+      nativeCapability: {
+        ...registry.models['gpt-4o']!.nativeCapability!,
+        certification: {
+          ...registry.models['gpt-4o']!.nativeCapability!.certification!,
+        },
+      },
+    };
+  }
+  return {
+    ...registry,
+    models,
+  };
+}
+
 function writeArtifact(root: string, artifact: NativeCertificationArtifact): void {
   const path = buildGlobalCertificationPath(artifact.provider, artifact.model, artifact.suiteVersion, { root });
   mkdirSync(dirname(path), { recursive: true });
@@ -76,6 +95,8 @@ describe('evaluateSuiteCoverage', () => {
       assert.equal(coverage.requiredSuiteVersion, 'vNEW');
       assert.equal(coverage.artifactCountForRequiredSuite, 0);
       assert.deepEqual(coverage.artifactCountByOtherSuite, { vOLD: 1 });
+      assert.equal(coverage.staleCount, 0);
+      assert.deepEqual(coverage.modelsInRenewalWindow, []);
       assert.match(coverage.remediationCommand, /certify --all/);
 
       writeArtifact(root, makeArtifact('vNEW', registry));
@@ -119,6 +140,8 @@ describe('evaluateSuiteCoverage', () => {
       assert.equal(coverage.artifactCountForRequiredSuite, 1, 'count signal is unchanged');
       assert.equal(coverage.eligibleModelCount, 0);
       assert.equal(coverage.identityDriftCount, 1);
+      assert.equal(coverage.staleCount, 0);
+      assert.deepEqual(coverage.modelsInRenewalWindow, []);
       assert.deepEqual(
         coverage.ineligibleModels.map((m) => m.reason),
         ['identity-reidentified'],
@@ -148,6 +171,85 @@ describe('evaluateSuiteCoverage', () => {
       assert.equal(coverage.status, 'ok');
       assert.equal(coverage.eligibleModelCount, 1);
       assert.equal(coverage.identityDriftCount, 0);
+      assert.deepEqual(coverage.orphanArtifacts.map((entry) => ({
+        provider: entry.provider,
+        model: entry.model,
+        suiteVersion: entry.suiteVersion,
+      })), [{
+        provider: 'stealth',
+        model: 'removed-model',
+        suiteVersion: 'vNEW',
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('marks near-expiry artifacts as renewal due without blocking', () => {
+    const root = mkdtempSync(join(tmpdir(), 'suite-coverage-renewal-'));
+    const registry = makeRegistry('vNEW');
+    try {
+      writeArtifact(root, makeArtifact('vNEW', registry));
+
+      const coverage = evaluateSuiteCoverage({
+        registry,
+        root,
+        now: new Date('2026-10-22T00:00:00.000Z'),
+        renewalWindowDays: 7,
+      });
+      assert.equal(coverage.status, 'ok');
+      assert.equal(coverage.renewalDueCount, 1);
+      assert.deepEqual(coverage.modelsInRenewalWindow, [{
+        registryKey: 'gpt-4o',
+        expiresAt: '2026-10-23T00:00:00.000Z',
+      }]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('reports stale status when expired artifacts take out the certifiable fleet', () => {
+    const root = mkdtempSync(join(tmpdir(), 'suite-coverage-stale-'));
+    const registry = makeRegistry('vNEW');
+    try {
+      writeArtifact(root, makeArtifact('vNEW', registry));
+
+      const coverage = evaluateSuiteCoverage({
+        registry,
+        root,
+        now: new Date('2026-10-25T00:00:00.000Z'),
+      });
+      assert.equal(coverage.status, 'stale');
+      assert.equal(coverage.staleCount, 1);
+      assert.deepEqual(coverage.staleModels, [{ registryKey: 'gpt-4o' }]);
+      assert.equal(coverage.identityDriftCount, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps mixed stale and eligible coverage ok below the stale threshold', () => {
+    const root = mkdtempSync(join(tmpdir(), 'suite-coverage-mixed-stale-'));
+    const registry = withAdditionalNativeModels(makeRegistry('vNEW'), ['gpt-4o-mini', 'gpt-4.1']);
+    try {
+      writeArtifact(root, makeArtifact('vNEW', registry));
+      for (const model of ['gpt-4o-mini', 'gpt-4.1']) {
+        const fresh = makeArtifact('vNEW', registry);
+        fresh.subject = resolveCertificationSubject({ provider: 'openai', model, registry }).subject;
+        fresh.model = model;
+        fresh.certifiedAt = '2026-10-01T00:00:00.000Z';
+        writeArtifact(root, fresh);
+      }
+
+      const coverage = evaluateSuiteCoverage({
+        registry,
+        root,
+        now: new Date('2026-10-25T00:00:00.000Z'),
+      });
+      assert.equal(coverage.status, 'ok');
+      assert.equal(coverage.eligibleModelCount, 2);
+      assert.equal(coverage.staleCount, 1);
+      assert.deepEqual(coverage.staleModels, [{ registryKey: 'gpt-4o' }]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

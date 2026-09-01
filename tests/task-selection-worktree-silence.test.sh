@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 PASS=0
 FAIL=0
@@ -91,17 +92,9 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_task.sh"
-extract_function "$MILL_SCRIPT" "launch_task" > "$LAUNCH_FUNC_FILE"
-CLEANUP_FUNC_FILE="$TEST_TMP/cleanup_completed_task.sh"
-extract_nth_function "$MILL_SCRIPT" "cleanup_completed_task" 2 > "$CLEANUP_FUNC_FILE"
-
+extract_function "$MONITOR_SCRIPT_FILE" "launch_task" > "$LAUNCH_FUNC_FILE"
 if [[ ! -s "$LAUNCH_FUNC_FILE" ]]; then
   echo "Could not extract launch_task()"
-  exit 1
-fi
-
-if [[ ! -s "$CLEANUP_FUNC_FILE" ]]; then
-  echo "Could not extract active cleanup_completed_task()"
   exit 1
 fi
 
@@ -149,11 +142,21 @@ EOF
     log() { LOG_OUTPUT+="$*\n"; }
     log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
     log_warn() { LOG_OUTPUT+="warn $*\n"; }
+    state_mutate() { :; }
+    persist_task_window_id() { :; }
+    _tmux_target_join() { printf "%s:%s\n" "$1" "$2"; }
+    write_json_artifact() { :; }
+    write_phase_config() { :; }
+    record_planning_launch_route_snapshot() { :; }
+    write_stage_result_with_history() { :; }
     is_task_packet() { return 1; }
     should_update_linear_state() { return 1; }
     linear_set_state() { :; }
     agent_validate() { return 0; }
+    agent_validate_phase_launch() { return 0; }
+    agent_is_native_cmd() { return 1; }
     agent_resolve_from_model() { printf "%s\n" "${1:-codex}"; }
+    mark_task_needs_user_and_defer() { return 0; }
     save_task_state() { :; }
     set_task_phase() { :; }
     set_window_attention_state() { :; }
@@ -166,6 +169,12 @@ EOF
       return 0
     }
     handle_phase_launch_result() { return 0; }
+    ensure_worktree() {
+      local branch="$1" wt="$2" repo="$3"
+      mkdir -p "$(dirname "$wt")"
+      git -C "$repo" worktree add "$wt" "$branch" >>"$MILL_LOG_FILE" 2>&1 || return $?
+      printf "%s\n" "$wt"
+    }
 
     git() {
       if [[ "${1:-}" == "-C" ]]; then
@@ -211,18 +220,20 @@ run_cleanup_case() {
   local case_dir="$TEST_TMP/cleanup"
   mkdir -p "$case_dir"
 
-  CASE_DIR="$case_dir" CLEANUP_FUNC_FILE="$CLEANUP_FUNC_FILE" bash -lc '
+  CASE_DIR="$case_dir" COMMON_SCRIPT="$COMMON_SCRIPT" bash -lc '
     set -euo pipefail
-    source "$CLEANUP_FUNC_FILE"
+    source "$COMMON_SCRIPT"
 
     SESSION="task-selection-test"
     ISSUE="HOK-1447"
     SLUG="stray-text-in-task-selector-pane"
     REPO_DIR="$CASE_DIR/repo"
     WORKTREE_ROOT="$CASE_DIR/worktrees"
+    STATE_FILE="$CASE_DIR/state.json"
     MILL_LOG_FILE="$CASE_DIR/mill.log"
 
     mkdir -p "$REPO_DIR" "$WORKTREE_ROOT/$SLUG"
+    printf "{\"tasks\":{\"$ISSUE\":{\"pr\":4242}}}\n" > "$STATE_FILE"
     : > "$MILL_LOG_FILE"
 
     declare -Ag CLEANED=()
@@ -230,7 +241,10 @@ run_cleanup_case() {
     archive_stage_artifacts() { :; }
     log() { LOG_OUTPUT+="$*\n"; }
     log_warn() { LOG_OUTPUT+="warn $*\n"; }
+    reset_retry_count() { :; }
     remove_task_state() { :; }
+    pr_state() { printf "%s\n" "MERGED"; }
+    _with_timeout() { shift; "$@"; }
     tmux() { :; }
 
     git() {

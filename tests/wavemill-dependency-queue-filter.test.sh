@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -61,7 +61,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 RENDER_FUNC_FILE="$TMP_DIR/render-grouped.sh"
-extract_function "$MILL_SCRIPT" "render_grouped_task_list" > "$RENDER_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "render_grouped_task_list" > "$RENDER_FUNC_FILE"
 
 if [[ ! -s "$RENDER_FUNC_FILE" ]]; then
   echo "Could not extract render_grouped_task_list"

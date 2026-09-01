@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 extract_function() {
   local source_file="$1"
@@ -32,9 +32,6 @@ extract_function() {
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-archive_fn="$tmp/archive_stage_artifacts.sh"
-extract_function "$MILL_SCRIPT" "archive_stage_artifacts" > "$archive_fn"
-
 REPO_DIR="$tmp/repo"
 WORKTREE_ROOT="$REPO_DIR/worktrees"
 feature_dir="$WORKTREE_ROOT/demo/features/demo"
@@ -49,7 +46,7 @@ printf '{bad\n' > "$feature_dir/.coding-result.json"
 warnings="$tmp/warnings.log"
 (
   set -euo pipefail
-  source "$archive_fn"
+  source "$COMMON_SCRIPT"
   log() { :; }
   log_warn() { printf '%s\n' "$*" >> "$warnings"; }
   trace_read_id() { return 1; }
@@ -65,4 +62,3 @@ warnings="$tmp/warnings.log"
 grep -q "Skipping invalid stage result archive" "$warnings" || { echo "missing invalid JSON warning" >&2; exit 1; }
 
 echo "archive-stage-artifacts test passed"
-

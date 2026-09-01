@@ -3122,6 +3122,94 @@ test('tick classifies challenge PR in merge lane as waiting-on-eval-comparison w
   }
 });
 
+test('tick uses hard-failure retry config for challenge classification', async () => {
+  const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2358', 893);
+
+  writeFileSync(path.join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    challenge: { eval: { hardFailureRetryMaxAttempts: 3 } },
+  }, null, 2));
+
+  writeFileSync(stateFile, JSON.stringify({
+    tasks: {
+      'HOK-2358': {
+        slug: 'ready-watchdog-task',
+        branch: 'task/ready-watchdog-task',
+        worktree: path.join(repoDir, 'worktrees', 'ready-watchdog-task'),
+        pr: 893,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+        agent: 'claude',
+        model: 'claude-sonnet-4-6',
+        challengePairId: 'HOK-2358',
+        challengeRole: 'primary',
+        evalCompleted: true,
+      },
+      'HOK-2358_c': {
+        slug: 'ready-watchdog-task-challenger',
+        branch: 'task/ready-watchdog-task-challenger',
+        worktree: path.join(repoDir, 'worktrees', 'ready-watchdog-task-challenger'),
+        pr: 894,
+        phase: 'ready',
+        updated: '2026-05-05T12:00:00.000Z',
+        agent: 'claude',
+        model: 'claude-opus-4-8',
+        challengePairId: 'HOK-2358',
+        challengeRole: 'challenger',
+        evalFailed: true,
+        evalHardFailureRetryCount: 2,
+      },
+    },
+    jobs: {},
+  }, null, 2));
+
+  writeFileSync(path.join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'completed',
+    startedAt: '2026-05-05T11:55:00.000Z',
+    finishedAt: '2026-05-05T12:00:00.000Z',
+    agent: 'claude',
+    model: 'claude-sonnet-4-6',
+    notes: null,
+    artifacts: { type: 'ready', verdict: 'pass', prNumber: 893, queueState: 'ready-stale' },
+  }, null, 2));
+
+  const deps = {
+    fetchGitHubTruth: async () => makeTruth({ mergeStateStatus: 'CLEAN' }),
+    getCurrentHead: async () => 'head-1',
+    getWorktreeMergeState: async () => ({
+      mergeHead: null, unmergedPaths: [], stagedPaths: [], unstagedPaths: [], untrackedPaths: [], rawStatus: [],
+    }),
+    isTaskPaneActive: async () => null,
+    now: () => new Date('2030-05-05T12:30:00.000Z'),
+  };
+
+  try {
+    const pending = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps,
+    });
+    assert.equal(pending.findings[0].classification, 'waiting-on-eval-comparison');
+    assert.match(pending.findings[0].detail, /pair-unresolved:no-comparison/);
+
+    const state = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    state.tasks['HOK-2358_c'].evalHardFailureRetryCount = 3;
+    writeFileSync(stateFile, JSON.stringify(state, null, 2));
+
+    const exhausted = await tickReadyWatchdog({
+      repoDir,
+      stateFile,
+      config: WATCHDOG_CONFIG,
+      deps,
+    });
+    assert.equal(exhausted.findings[0].classification, 'needs-user');
+    assert.match(exhausted.findings[0].detail, /exhausted challenge eval hard-failure retries/i);
+  } finally {
+    await rm(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('tick classifies orphaned challenge PR in merge lane as needs-user with recovery command', async () => {
   const { repoDir, stateFile, featureDir } = setupReadyTask('HOK-2358', 893);
 

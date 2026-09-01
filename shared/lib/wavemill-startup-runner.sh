@@ -297,50 +297,10 @@ reset_startup_phase_artifacts() {
     "$feature_dir/plan.md"
 }
 
-save_task_state() {
-  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-}" agent="${7:-}"
-  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
-  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}" phase="${19:-}" window_id="${20:-}"
-  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
-    return 1
-  fi
-  state_mutate "$STATE_FILE" \
-    '.tasks[$issue] = (.tasks[$issue] // {}) + {
-        slug: $slug,
-        branch: $branch,
-        worktree: $worktree,
-        pr: $pr,
-        status: $status,
-        linearIssueId: $linearIssue,
-        updated: (now | todate)
-      } + (if $phase != "" then {phase: $phase} else {} end)
-      | if $agent != "" then .tasks[$issue].agent = $agent else . end
-      | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
-      | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
-      | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
-      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
-      | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
-      | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
-      | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
-      | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
-      | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
-      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
-      | if $windowId != "" then .tasks[$issue].windowId = $windowId else . end
-      | if $phase != "" then .tasks[$issue].phase = $phase else . end' \
-    --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
-    --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
-    --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
-    --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
-    --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
-    --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" --arg phase "$phase" \
-    --arg windowId "$window_id"
-}
-
-remove_task_state() {
-  local issue="$1"
-  state_mutate "$STATE_FILE" 'del(.tasks[$issue]) | .updated = (now | todate)' --arg issue "$issue"
-}
+# remove_task_state() is provided by wavemill-common.sh (HOK-2903), sourced
+# above. The canonical copy always returns 0 and warns through log_warn when
+# defined; this scope's former copy propagated state_mutate's exit code, but
+# every call site here already discarded it via `|| true`.
 
 set_task_phase_local() {
   local issue="$1" phase="$2"
@@ -1099,8 +1059,9 @@ $details_context"
   # Persist launched tasks as active planning work in the initial state write so
   # downstream startup checks do not depend on a second jq update succeeding.
   local persisted_phase="planning"
+  # Canonical save_task_state tail: challengeStage(19), phase(20), windowId(21).
   if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
-    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase" "${created_window_id:-}"; then
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$challenge_stage" "$persisted_phase" "${created_window_id:-}"; then
     startup_phase_failed "$startup_id" agent "$issue" "saving workflow state"
     [[ -n "${created_window:-}" ]] && tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     return 1
@@ -1154,7 +1115,7 @@ $details_context"
   # Re-persist the launched task after the pane handoff succeeds so the final
   # workflow record reflects a fully launched planning session.
   if ! wavemill_lock_run "state" save_task_state "$issue" "$slug" "$branch" "$wt_dir" "" "" "$task_agent" "$linear_issue" "$challenge" "$challenge_pair" "$challenge_role" "$challenge_model" \
-    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$persisted_phase" "${created_window_id:-}"; then
+    "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "$challenge_stage" "$persisted_phase" "${created_window_id:-}"; then
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "re-saving workflow state"

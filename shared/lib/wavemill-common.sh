@@ -93,6 +93,496 @@ wavemill_pane_area() {
   printf '%s\n' "$(( width * height ))"
 }
 
+_tmux_window_target_exists() {
+  local session="$1" target="$2" expected_path="${3:-}"
+  local target_session target_path expected_real target_real pane_dead
+
+  [[ -n "$session" && -n "$target" ]] || return 1
+  target_session="$(tmux display-message -p -t "$target" '#{session_name}' 2>/dev/null || true)"
+  [[ "$target_session" == "$session" ]] || return 1
+  if [[ -n "$expected_path" ]]; then
+    target_path="$(tmux display-message -p -t "$target" '#{pane_current_path}' 2>/dev/null || true)"
+    if [[ -z "$target_path" ]]; then
+      pane_dead="$(tmux list-panes -t "$target" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+      [[ "$pane_dead" == "1" ]] && return 0
+      return 1
+    fi
+    expected_real="$(cd -P "$expected_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$expected_path")"
+    target_real="$(cd -P "$target_path" 2>/dev/null && printf '%s\n' "$PWD" || printf '%s\n' "$target_path")"
+    [[ "$target_real" == "$expected_real" ]] || return 1
+  fi
+  return 0
+}
+
+_tmux_target_join() {
+  local session="$1" target="$2"
+  [[ -n "$target" ]] || return 1
+  case "$target" in
+    @*|*:*) printf '%s\n' "$target" ;;
+    *) printf '%s:%s\n' "$session" "$target" ;;
+  esac
+}
+
+_tmux_task_window_target() {
+  local session="$1" issue="$2" slug="$3" state_file="${4:-${STATE_FILE:-}}" wt_dir="${5:-}"
+  local stored_target="" canonical target issue_number renamed_target
+
+  if [[ -n "$state_file" && -f "$state_file" ]]; then
+    stored_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$state_file" 2>/dev/null || true)"
+  fi
+  if _tmux_window_target_exists "$session" "$stored_target" "$wt_dir"; then
+    printf '%s\n' "$stored_target"
+    return 0
+  fi
+
+  issue_number="${issue##*-}"
+  renamed_target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v issue="$issue" -v issue_number="$issue_number" -v slug="$slug" '
+        index($2, issue_number " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue_number " · " slug) == 1 { print $1; exit }
+        index($2, issue " · " slug " ·") == 1 { print $1; exit }
+        index($2, issue " · " slug) == 1 { print $1; exit }
+      ')"
+  if _tmux_window_target_exists "$session" "$renamed_target" "$wt_dir"; then
+    printf '%s\n' "$renamed_target"
+    return 0
+  fi
+
+  canonical="${issue}-${slug}"
+  target="$(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null \
+    | awk -F'|' -v name="$canonical" '$2 == name { print $1; exit }')"
+  if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+    printf '%s\n' "$target"
+    return 0
+  fi
+
+  if [[ -n "$wt_dir" ]]; then
+    while IFS='|' read -r target _name; do
+      [[ -n "$target" ]] || continue
+      if _tmux_window_target_exists "$session" "$target" "$wt_dir"; then
+        printf '%s\n' "$target"
+        return 0
+      fi
+    done < <(tmux list-windows -t "$session" -F '#{window_id}|#{window_name}' 2>/dev/null || true)
+  fi
+
+  return 1
+}
+
+retry_state_file() {
+  local session="$1"
+  local issue="$2"
+  printf '/tmp/wavemill-%s-%s.retry\n' "$session" "$issue"
+}
+
+reset_retry_count() {
+  local retry_file
+  retry_file="$(retry_state_file "$1" "$2")"
+  rm -f "$retry_file" 2>/dev/null || true
+}
+
+wavemill_cleanup_run() {
+  if command -v execute >/dev/null 2>&1; then
+    execute "$@"
+  else
+    "$@"
+  fi
+}
+
+_wavemill_archive_copy() {
+  local src="$1" dest="$2"
+  [[ -f "$src" ]] || return 0
+  mkdir -p "$(dirname "$dest")" 2>/dev/null || {
+    log_warn "  Failed to create artifact archive directory: $(dirname "$dest")"
+    return 1
+  }
+  if cp "$src" "$dest" 2>/dev/null; then
+    return 0
+  fi
+  log_warn "  Failed to archive artifact: $src"
+  return 1
+}
+
+_wavemill_archive_json_copy() {
+  local src="$1" dest="$2" label="${3:-artifact}"
+  [[ -f "$src" ]] || return 0
+  if jq -e . "$src" >/dev/null 2>&1; then
+    _wavemill_archive_copy "$src" "$dest"
+    return $?
+  fi
+  log_warn "  Skipping invalid ${label} archive: $src"
+  return 0
+}
+
+# Archive stage artifacts from worktree before cleanup.
+# Cleanup treats an archive copy failure as retryable and stops before removing
+# the window, worktree, branches, retry state, or task state.
+archive_stage_artifacts() {
+  local issue="$1" slug="$2"
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  local archive_dir="${REPO_DIR}/.wavemill/evals/artifacts/${issue}"
+  local feature_dir="" dir status=0
+
+  [[ -d "$wt_dir" ]] || return 0
+  mkdir -p "$archive_dir" 2>/dev/null || {
+    log_warn "  Failed to create artifact archive directory: $archive_dir"
+    return 1
+  }
+
+  for dir in features bugs; do
+    if [[ -d "$wt_dir/$dir/$slug" ]]; then
+      feature_dir="$wt_dir/$dir/$slug"
+      break
+    fi
+  done
+
+  if [[ -n "$feature_dir" ]]; then
+    _wavemill_archive_copy "$feature_dir/plan.md" "$archive_dir/plan.md" || status=1
+    if [[ -f "$feature_dir/task-packet.md" ]]; then
+      _wavemill_archive_copy "$feature_dir/task-packet.md" "$archive_dir/task-packet.md" || status=1
+    elif [[ -f "$feature_dir/task-packet-header.md" ]]; then
+      _wavemill_archive_copy "$feature_dir/task-packet-header.md" "$archive_dir/task-packet-header.md" || status=1
+      _wavemill_archive_copy "$feature_dir/task-packet-details.md" "$archive_dir/task-packet-details.md" || status=1
+    fi
+
+    _wavemill_archive_json_copy "$feature_dir/.routing-complete" "$archive_dir/routing-complete.json" "route artifact" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.initial-route.json" "$archive_dir/initial-route.json" "route artifact" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.post-expansion-route.json" "$archive_dir/post-expansion-route.json" "route artifact" || status=1
+    _wavemill_archive_copy "$feature_dir/routing.jsonl" "$archive_dir/routing.jsonl" || status=1
+    _wavemill_archive_copy "$feature_dir/.coding-uncommitted-output.resolved.jsonl" "$archive_dir/coding-uncommitted-output.resolved.jsonl" || status=1
+    _wavemill_archive_json_copy "$feature_dir/.operator-intervention.json" "$archive_dir/operator-intervention.json" "operator intervention" || status=1
+
+    local stage result_file sidecar sidecar_name
+    for stage in planning coding review; do
+      result_file="$feature_dir/.${stage}-result.json"
+      _wavemill_archive_json_copy "$result_file" "$archive_dir/${stage}-result.json" "stage result" || status=1
+
+      for sidecar in "$feature_dir/.${stage}-result.attempt-"*-failed.json; do
+        [[ -f "$sidecar" ]] || continue
+        sidecar_name="$(basename "$sidecar")"
+        sidecar_name="${sidecar_name#.}"
+        _wavemill_archive_json_copy "$sidecar" "$archive_dir/$sidecar_name" "failed attempt" || status=1
+      done
+    done
+
+    local evidence_file evidence_name
+    for evidence_name in ".challenge-aborted.json" ".coding-failure-handoff.json"; do
+      evidence_file="$feature_dir/$evidence_name"
+      _wavemill_archive_json_copy "$evidence_file" "$archive_dir/$evidence_name" "failure evidence" || status=1
+    done
+
+    if [[ -d "$feature_dir/.stale-artifacts" ]]; then
+      local stale_file stale_rel stale_dest
+      while IFS= read -r stale_file; do
+        [[ -f "$stale_file" ]] || continue
+        stale_rel="${stale_file#$feature_dir/.stale-artifacts/}"
+        stale_dest="$archive_dir/stale-artifacts/$stale_rel"
+        _wavemill_archive_copy "$stale_file" "$stale_dest" || status=1
+      done < <(find "$feature_dir/.stale-artifacts" -type f \( -name '.challenge-aborted.json' -o -name '.coding-failure-handoff.json' -o -name '*.jsonl' \) 2>/dev/null)
+    fi
+
+    local json_file jsonl_ref jsonl_path jsonl_dest jsonl_base
+    while IFS= read -r json_file; do
+      [[ -f "$json_file" ]] || continue
+      while IFS= read -r jsonl_ref; do
+        [[ -n "$jsonl_ref" ]] || continue
+        jsonl_path=""
+        if [[ "$jsonl_ref" = /* && -f "$jsonl_ref" ]]; then
+          jsonl_path="$jsonl_ref"
+        elif [[ -f "$feature_dir/$jsonl_ref" ]]; then
+          jsonl_path="$feature_dir/$jsonl_ref"
+        elif [[ -f "$wt_dir/$jsonl_ref" ]]; then
+          jsonl_path="$wt_dir/$jsonl_ref"
+        fi
+        [[ -n "$jsonl_path" ]] || continue
+        jsonl_base="$(basename "$jsonl_path")"
+        jsonl_dest="$archive_dir/native-sessions/$jsonl_base"
+        _wavemill_archive_copy "$jsonl_path" "$jsonl_dest" || status=1
+      done < <(jq -r '.. | select(type == "string" and test("\\.jsonl$"))' "$json_file" 2>/dev/null || true)
+    done < <(find "$feature_dir" -maxdepth 3 -type f \( -name '*.json' -o -name '.*.json' \) 2>/dev/null)
+
+    _wavemill_archive_copy "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" || status=1
+
+    local _tid _iid _sl
+    _tid=$(trace_read_id "$feature_dir" 2>/dev/null || true)
+    if [[ -n "$_tid" ]]; then
+      _iid=$(jq -r '.issueId // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      _sl=$(jq -r '.slug // empty' "$feature_dir/.trace-context.json" 2>/dev/null || true)
+      if [[ -n "$_iid" && -n "$_sl" ]]; then
+        trace_append_event "$feature_dir" "$_tid" "$_iid" "$_sl" "cleanup" "cleanup_archived" "ok" "" "" \
+          "$(jq -cn --arg dir "$archive_dir" '{meta:{archiveDir:$dir}}' 2>/dev/null || echo '{}')" 2>/dev/null || true
+        _wavemill_archive_copy "$feature_dir/trace.jsonl" "$archive_dir/trace.jsonl" || status=1
+      fi
+    fi
+  fi
+
+  local count
+  count=$(find "$archive_dir" -type f 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$count" -gt 0 ]]; then
+    log "debug" "Archived $count stage artifact(s) to .wavemill/evals/artifacts/$issue/"
+  fi
+  return "$status"
+}
+
+cleanup_remote_task_branch() {
+  local issue="$1" task_branch="$2" pr="${3:-}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+    return 0
+  fi
+  case "$task_branch" in
+    task/*) ;;
+    *) log "debug" "$issue: retaining non-task remote branch $task_branch"; return 0 ;;
+  esac
+
+  if [[ -z "$pr" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (no PR recorded)"
+    return 0
+  fi
+
+  local state
+  state=$(pr_state "$pr")
+  if [[ "$state" != "MERGED" ]]; then
+    log "debug" "$issue: retaining remote branch $task_branch (PR #$pr state=${state:-unknown}, not merged)"
+    return 0
+  fi
+
+  local ls_remote_rc
+  if _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" ls-remote --exit-code --heads origin "refs/heads/$task_branch" >/dev/null 2>&1; then
+    ls_remote_rc=0
+  else
+    ls_remote_rc=$?
+  fi
+  if [[ "$ls_remote_rc" == "2" ]]; then
+    log "debug" "$issue: remote branch already absent: $task_branch"
+    return 0
+  elif [[ "$ls_remote_rc" != "0" ]]; then
+    log_warn "  Remote branch cleanup could not verify branch (retained): $task_branch"
+    return 1
+  fi
+
+  if wavemill_cleanup_run _with_timeout "$API_TIMEOUT" git -C "$REPO_DIR" push origin --delete "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>&1; then
+    log "debug" "Deleted remote branch: $task_branch"
+  else
+    log_warn "  Remote branch cleanup failed (retained): $task_branch"
+    return 1
+  fi
+}
+
+# Canonical completed-task cleanup order:
+# 1. archive artifacts, 2. close pane/window, 3. remove worktree,
+# 4. remove local branch, 5. remove eligible remote branch,
+# 6. prune hooks/worktrees, 7. reset retry state and remove task state.
+cleanup_completed_task() {
+  local issue="$1"
+  local slug="$2"
+  local completion_reason="${3:-}"
+  local win="$issue-$slug"
+  local target=""
+  local target_gone="false"
+  local pr=""
+
+  pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
+  if [[ -z "$pr" ]] && declare -p PR_BY_ISSUE >/dev/null 2>&1; then
+    pr="${PR_BY_ISSUE[$issue]:-}"
+  fi
+
+  if ! archive_stage_artifacts "$issue" "$slug"; then
+    log_warn "  $issue cleanup could not archive stage artifacts; keeping task state"
+    return 1
+  fi
+
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+    target_gone="true"
+  else
+    wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+      target_gone="true"
+    fi
+  fi
+
+  if [[ "$target_gone" != "true" ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue cleanup could not close tmux window; keeping task state"
+    return 1
+  fi
+
+  log "debug" "Closed window: $win"
+
+  local wt_dir="${WORKTREE_ROOT}/${slug}"
+  if [[ -d "$wt_dir" ]]; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Removed worktree: $wt_dir"
+    else
+      log_warn "  Worktree cleanup failed: $wt_dir"
+      return 1
+    fi
+  fi
+
+  local task_branch="task/${slug}"
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Deleted local branch: $task_branch"
+    else
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
+      return 1
+    fi
+  fi
+
+  cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+
+  wavemill_cleanup_run git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  remove_task_state "$issue"
+  CLEANED["$issue"]=1
+
+  if [[ -n "$completion_reason" ]]; then
+    log "$issue: Complete ($completion_reason)"
+  else
+    log "$issue: Complete"
+  fi
+}
+
+# Canonical hard-failure resolution uses the monitor's live behavior: record
+# only concrete terminal evidence and never perform loser cleanup from this path.
+resolve_challenge_pair_hard_failure() {
+  local pair_id="$1"
+  local primary_key="$pair_id" challenger_key="${pair_id}_c"
+  local primary_exists challenger_exists resolve_output resolve_status resolve_reason
+  local retry_max primary_failed challenger_failed primary_completed challenger_completed
+  local primary_retry_count challenger_retry_count failed_sides_csv terminal_reason outcome
+  local primary_pr challenger_pr primary_model challenger_model primary_pr_url challenger_pr_url
+  local winner winner_model rationale timestamp record_json
+
+  [[ -n "$pair_id" ]] || return 1
+
+  if challenge_pair_record_exists "$pair_id"; then
+    mark_challenge_compared "$pair_id" "record"
+    return 0
+  fi
+
+  retry_max=$(challenge_eval_hard_failure_max_retries)
+  primary_exists=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i] != null')
+  challenger_exists=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i] != null')
+  primary_failed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalFailed // false')
+  challenger_failed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalFailed // false')
+  primary_completed=$(read_state_value "false" --arg i "$primary_key" '.tasks[$i].evalCompleted // false')
+  challenger_completed=$(read_state_value "false" --arg i "$challenger_key" '.tasks[$i].evalCompleted // false')
+  primary_retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+  challenger_retry_count=$(read_state_value "0" --arg i "$challenger_key" '.tasks[$i].evalHardFailureRetryCount // 0')
+
+  if [[ "$primary_exists" != "true" || "$challenger_exists" != "true" ]]; then
+    resolve_output=$(npx tsx "$TOOLS_DIR/resolve-orphan-challenge-pair.ts" \
+      --pair-id "$pair_id" \
+      --reason orphan-sibling \
+      --repo-dir "$REPO_DIR" 2>/dev/null || true)
+    resolve_status=$(jq -r '.status // empty' <<<"$resolve_output" 2>/dev/null || true)
+    if [[ "$resolve_status" == "resolved" || "$resolve_status" == "already-resolved" ]]; then
+      mark_challenge_compared "$pair_id" "record"
+      if [[ "$resolve_status" == "resolved" ]]; then
+        resolve_reason=$(jq -r '.reason // "orphan-sibling"' <<<"$resolve_output" 2>/dev/null || echo "orphan-sibling")
+        log_warn "challenge pair $pair_id resolved via $resolve_reason"
+      fi
+      return 0
+    fi
+  fi
+
+  failed_sides_csv=""
+  [[ "$primary_failed" == "true" ]] && failed_sides_csv="primary"
+  if [[ "$challenger_failed" == "true" ]]; then
+    if [[ -n "$failed_sides_csv" ]]; then
+      failed_sides_csv="${failed_sides_csv},challenger"
+    else
+      failed_sides_csv="challenger"
+    fi
+  fi
+  [[ -n "$failed_sides_csv" ]] || return 1
+
+  if [[ "$primary_failed" == "true" && "$challenger_failed" == "true" ]]; then
+    if (( primary_retry_count < retry_max )); then
+      return 1
+    fi
+    if (( challenger_retry_count < retry_max )); then
+      return 1
+    fi
+    outcome="double-forfeit"
+    winner="primary"
+    rationale="Both sides exhausted hard eval retries without persisting an eval record."
+  elif [[ "$primary_failed" == "true" ]]; then
+    [[ "$challenger_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="challenger"
+    rationale="Primary exhausted hard eval retries without persisting an eval record."
+  elif [[ "$challenger_failed" == "true" ]]; then
+    [[ "$primary_completed" == "true" ]] || return 1
+    outcome="forfeit"
+    winner="primary"
+    rationale="Challenger exhausted hard eval retries without persisting an eval record."
+  else
+    return 1
+  fi
+
+  terminal_reason=$(challenge_pair_hard_failure_reason "$failed_sides_csv")
+  primary_pr=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].pr // empty')
+  challenger_pr=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].pr // empty')
+  [[ -n "$primary_pr" && -n "$challenger_pr" ]] || return 1
+  primary_model=$(read_state_value "" --arg i "$primary_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  challenger_model=$(read_state_value "" --arg i "$challenger_key" '.tasks[$i].challengeModel // .tasks[$i].coderModel // empty')
+  primary_pr_url=$(challenge_pr_url_from_number "$primary_pr")
+  challenger_pr_url=$(challenge_pr_url_from_number "$challenger_pr")
+  if [[ "$winner" == "primary" ]]; then
+    winner_model="$primary_model"
+  else
+    winner_model="$challenger_model"
+  fi
+  [[ -n "$winner_model" ]] || winner_model="unknown"
+  timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  record_json=$(jq -cn \
+    --arg challengePairId "$pair_id" \
+    --arg primaryModel "$primary_model" \
+    --arg challengerModel "$challenger_model" \
+    --arg primaryPrUrl "$primary_pr_url" \
+    --arg challengerPrUrl "$challenger_pr_url" \
+    --arg winner "$winner" \
+    --arg winnerModel "$winner_model" \
+    --arg rationale "$rationale" \
+    --arg timestamp "$timestamp" \
+    --arg comparisonOutcome "$outcome" \
+    --arg terminalReason "$terminal_reason" \
+    '{
+      challengePairId: $challengePairId,
+      primaryModel: $primaryModel,
+      challengerModel: $challengerModel,
+      primaryPrUrl: $primaryPrUrl,
+      challengerPrUrl: $challengerPrUrl,
+      primaryEvalScore: 0,
+      challengerEvalScore: 0,
+      winner: $winner,
+      winnerModel: $winnerModel,
+      rationale: $rationale,
+      dimensions: {
+        completeness: { primary: 0, challenger: 0 },
+        correctness: { primary: 0, challenger: 0 },
+        code_quality: { primary: 0, challenger: 0 },
+        intervention_impact: { primary: 0, challenger: 0 },
+        autonomy: { primary: 0, challenger: 0 }
+      },
+      timestamp: $timestamp,
+      comparisonOutcome: $comparisonOutcome,
+      terminalReason: $terminalReason,
+      noComparisonReason: $terminalReason
+    }')
+  if ! challenge_pair_record_exists "$pair_id"; then
+    printf '%s\n' "$record_json" >> "$(challenge_pair_records_file)"
+  fi
+  mark_challenge_compared "$pair_id"
+  log_warn "challenge pair $pair_id resolved via $terminal_reason"
+}
+
 # The observer's findings are the highest-signal output in the backstage window,
 # while the tend loop prints a single repeated status line. Give the observer the
 # larger pane.
@@ -2705,6 +3195,36 @@ set_task_phase() {
     --arg issue "$issue" --arg phase "$phase"
 }
 
+# Canonical task-phase reader (HOK-2903). Before canonicalization the parent
+# mill and the extracted monitor each carried a private copy: the parent's raw
+# `jq -r ... 2>/dev/null` silently returned an empty string when $STATE_FILE
+# was missing, unreadable, or malformed — making downstream comparisons like
+# [[ "$phase" == "planning" ]] read as "some other phase" instead of "state is
+# gone" — while the monitor wrapped the read in read_state_value so every
+# failure mode fell back to "executing". The monitor was the only scope with
+# live callers, so its semantics are canonical:
+#   - $STATE_FILE missing, zero-byte, or unreadable  -> "executing"
+#   - jq parse error                                 -> "executing"
+#   - task absent, or task present without a .phase  -> "executing"
+#   - otherwise                                      -> .tasks[$issue].phase
+# The read_state_value guard is inlined here (rather than moving that helper
+# out of the monitor, which has 74 other callers) so this stays self-contained
+# while remaining byte-equivalent to the monitor's pre-change behavior.
+get_task_phase() {
+  local issue="$1"
+  local value
+  if [[ ! -r "$STATE_FILE" || ! -s "$STATE_FILE" ]]; then
+    printf 'executing\n'
+    return 0
+  fi
+  if value=$(jq -r --arg issue "$issue" \
+      '.tasks[$issue].phase // "executing"' "$STATE_FILE" 2>/dev/null); then
+    printf '%s\n' "$value"
+  else
+    printf 'executing\n'
+  fi
+}
+
 # ============================================================================
 # Hook Configuration
 # ============================================================================
@@ -3052,6 +3572,308 @@ state_mutate() {
   fi
 
   return "$mutate_status"
+}
+
+# ============================================================================
+# TASK STATE LEDGER
+# ============================================================================
+
+# Canonical task-state writer (HOK-2900). Before canonicalization the parent
+# mill, the startup runner, and the extracted monitor each carried a private
+# copy whose semantics had drifted: the parent copy defaulted an omitted
+# status to "" and never resolved a traceId (and had no production call site
+# left after the monitor extraction), while the monitor copy defaulted to
+# "active" and resolved traceId but rebuilt the task object from a fixed
+# field literal, silently dropping any stored field missing from its
+# allowlist (windowId among them). The startup copy instead collided on
+# positional argument 19 (phase there, challengeStage in the monitor). One
+# implementation lives here, sourced by all three scopes, so the live startup
+# launch writes and monitor runtime writes cannot drift apart again.
+#
+# Usage:
+#   save_task_state <issue> <slug> <branch> <worktree> [pr] [status] [agent]
+#     [linearIssue] [challenge] [challengePair] [challengeRole]
+#     [challengeModel] [plannerModel] [coderModel] [reviewerModel]
+#     [planDepth] [codeDepth] [reviewMode] [challengeStage] [phase]
+#     [windowId]
+#
+# Canonical positional tail: challengeStage (19), phase (20), windowId (21).
+# The monitor passes challengeStage at 19; startup callers pass phase and
+# windowId at 20/21 so both live layouts are unambiguous.
+#
+# Merge contract: the write is a single atomic state_mutate that overlays only
+# the supplied core fields onto the existing task object; every key the writer
+# does not understand (phase/window, challenge intent and varied routing,
+# retry/evaluation/comparison state, execution metadata, unknown future
+# fields) is retained. Blank optional arguments mean "leave the stored value
+# unchanged"; pr and status are always written.
+#
+# Status default: a blank or omitted status argument saves "active" — the
+# monitor's live default — instead of an accidental empty status. An explicit
+# non-empty status (including terminal and error states) always wins.
+#
+# traceId is resolved best-effort from the worktree's
+# features/<slug>/.trace-context.json, then bugs/<slug>/.trace-context.json
+# (HOK-2259); an absent or malformed context never fails the write and never
+# erases a traceId already stored in the ledger.
+save_task_state() {
+  local issue="$1" slug="$2" branch="$3" worktree="$4" pr="${5:-}" status="${6:-active}" agent="${7:-}"
+  local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
+  local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
+  local challenge_stage="${19:-}" phase="${20:-}" window_id="${21:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
+    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    return 1
+  fi
+
+  # Resolve traceId from the worktree's feature (then bug) directory —
+  # best-effort, never fails the state write.
+  local _trace_id_for_state="" _dir_prefix _ctx_candidate
+  for _dir_prefix in features bugs; do
+    _ctx_candidate="$worktree/$_dir_prefix/$slug/.trace-context.json"
+    if [[ -f "$_ctx_candidate" ]]; then
+      _trace_id_for_state=$(jq -r '.traceId // empty' "$_ctx_candidate" 2>/dev/null || true)
+      break
+    fi
+  done
+
+  if ! state_mutate "$STATE_FILE" \
+     '(.tasks[$issue] // {}) as $existing |
+      .tasks[$issue] = ($existing + {
+        slug: $slug,
+        branch: $branch,
+        worktree: $worktree,
+        pr: $pr,
+        status: $status,
+        linearIssueId: (if $linearIssue != "" then $linearIssue else ($existing.linearIssueId // $issue) end),
+        updated: (now | todate)
+      })
+      | if $agent != "" then .tasks[$issue].agent = $agent else . end
+      | if $challenge != "" then .tasks[$issue].challenge = ($challenge == "true") else . end
+      | if $challengePair != "" then .tasks[$issue].challengePairId = $challengePair else . end
+      | if $challengeRole != "" then .tasks[$issue].challengeRole = $challengeRole else . end
+      | if $challengeModel != "" then .tasks[$issue].challengeModel = $challengeModel else . end
+      | if $challengeStage != "" then .tasks[$issue].challengeStage = $challengeStage else . end
+      | if $plannerModel != "" then .tasks[$issue].plannerModel = $plannerModel else . end
+      | if $coderModel != "" then .tasks[$issue].coderModel = $coderModel else . end
+      | if $reviewerModel != "" then .tasks[$issue].reviewerModel = $reviewerModel else . end
+      | if $planDepth != "" then .tasks[$issue].planDepth = $planDepth else . end
+      | if $codeDepth != "" then .tasks[$issue].codeDepth = $codeDepth else . end
+      | if $reviewMode != "" then .tasks[$issue].reviewMode = $reviewMode else . end
+      | if $phase != "" then .tasks[$issue].phase = $phase else . end
+      | if $windowId != "" then .tasks[$issue].windowId = $windowId else . end
+      | if $traceId != "" then .tasks[$issue].traceId = $traceId else . end' \
+     --arg issue "$issue" --arg slug "$slug" --arg branch "$branch" \
+     --arg worktree "$worktree" --arg pr "$pr" --arg status "$status" --arg agent "$agent" \
+     --arg linearIssue "$linear_issue" --arg challenge "$challenge" --arg challengePair "$challenge_pair" \
+     --arg challengeRole "$challenge_role" --arg challengeModel "$challenge_model" \
+     --arg challengeStage "$challenge_stage" \
+     --arg plannerModel "$planner_model" --arg coderModel "$coder_model" --arg reviewerModel "$reviewer_model" \
+     --arg planDepth "$plan_depth" --arg codeDepth "$code_depth" --arg reviewMode "$review_mode" \
+     --arg phase "$phase" --arg windowId "$window_id" \
+     --arg traceId "$_trace_id_for_state"; then
+    # log_warn is caller-provided (the mill and monitor define it; the startup
+    # runner intentionally surfaces the failure through wavemill_lock_run).
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "save_task_state: failed to save $issue"
+    fi
+  fi
+}
+
+# Canonical task-state remover (HOK-2903). Before canonicalization three
+# private copies had drifted: the parent mill's jq body only deleted the task
+# (leaving the top-level .updated timestamp stale after a removal), while the
+# monitor and startup-runner copies also stamped .updated; the startup-runner
+# copy additionally skipped log_warn and propagated state_mutate's exit code
+# (though all four of its call sites discarded it via `|| true`). Canonical
+# semantics adopt the monitor's live behavior:
+#   - Atomic state_mutate on $STATE_FILE.
+#   - Always refresh the top-level .updated timestamp so observers and
+#     dashboards see the state churn, whether or not the task existed.
+#   - Idempotent when the task is absent: del(.tasks["missing"]) is a jq
+#     no-op that succeeds and still refreshes .updated.
+#   - On state_mutate failure, warn via log_warn when the caller defines it
+#     (the mill and monitor do; common-sourced test harnesses may not) and
+#     always return 0 so cleanup paths under set -e never abort.
+# Deliberately untouched bookkeeping: .migrationReservations[$issue] is
+# preserved — reservation numbers are intentionally sticky so they can be
+# re-associated with retry worktrees; changing that is a lifecycle decision
+# outside this helper's contract.
+remove_task_state() {
+  local issue="$1"
+  if ! state_mutate "$STATE_FILE" \
+     'del(.tasks[$issue]) | .updated = (now | todate)' \
+     --arg issue "$issue"; then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "remove_task_state: failed to remove $issue"
+    fi
+  fi
+}
+
+# ============================================================================
+# CANONICAL PR STATE AND MERGE VALIDATION HELPERS (HOK-2904)
+# ============================================================================
+# Before canonicalization, the parent mill queried GitHub without a timeout and
+# returned an empty string on failure, while the monitor bounded the state read
+# with API_TIMEOUT but used the same implicit empty-string uncertainty sentinel.
+# The canonical PR state vocabulary is explicit: MERGED, CLOSED, OPEN, UNKNOWN.
+# UNKNOWN covers GitHub errors, API_TIMEOUT expiry, empty output, and unexpected
+# state values. Callers compare against confirmed states, so unavailable GitHub
+# data never reads as a successful merge.
+pr_state() {
+  local pr="$1"
+  local state
+
+  if ! state=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq .state 2>/dev/null); then
+    printf 'UNKNOWN\n'
+    return 0
+  fi
+
+  case "$state" in
+    MERGED|CLOSED|OPEN)
+      printf '%s\n' "$state"
+      ;;
+    *)
+      printf 'UNKNOWN\n'
+      ;;
+  esac
+}
+
+# Check if PR is merged and ready for cleanup.
+# Returns 0 only for a confirmed merge to BASE_BRANCH; every unreadable,
+# unknown, open, closed-unmerged, or wrong-base state fails closed.
+# Note: Once PR is merged, CI status is irrelevant for cleanup decisions.
+validate_pr_merge() {
+  local pr="$1"
+  [[ -z "$pr" ]] && return 1
+
+  local details
+  if ! details=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state,baseRefName 2>/dev/null); then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "Failed to fetch PR #$pr details"
+    fi
+    return 1
+  fi
+
+  if [[ -z "$details" ]]; then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "Failed to fetch PR #$pr details"
+    fi
+    return 1
+  fi
+
+  local state base_branch
+  if ! state=$(printf '%s\n' "$details" | jq -r '.state' 2>/dev/null); then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "Failed to parse PR #$pr state"
+    fi
+    return 1
+  fi
+  if ! base_branch=$(printf '%s\n' "$details" | jq -r '.baseRefName' 2>/dev/null); then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "Failed to parse PR #$pr base branch"
+    fi
+    return 1
+  fi
+
+  # Check 1: Must be MERGED (not CLOSED or OPEN).
+  if [[ "$state" != "MERGED" ]]; then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "PR #$pr state is $state (not MERGED)"
+    fi
+    return 1
+  fi
+
+  # Check 2: Must be merged to correct base branch.
+  if [[ "$base_branch" != "${BASE_BRANCH:-}" ]]; then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "PR #$pr merged to wrong base: $base_branch (expected: ${BASE_BRANCH:-})"
+    fi
+    return 1
+  fi
+
+  # Once PR is merged, proceed with cleanup regardless of CI status.
+  # The merge has already happened; CI validation is for pre-merge safety.
+  return 0
+}
+
+# ============================================================================
+# CANONICAL LINEAR STATE HELPERS (HOK-2901)
+# ============================================================================
+# Single wall-clock cap for Linear-facing helpers. The monitor already defined
+# this knob (an API call that hangs blocks the monitor loop and the operator
+# cannot type 'q' or select tasks); the mill previously had no equivalent and
+# relied on the generic retry ladder. One default here means one knob controls
+# Linear latency in every scope that sources this file.
+API_TIMEOUT="${API_TIMEOUT:-30}"
+
+# Canonical Linear state writer. Before canonicalization the mill copy went
+# through the generic `retry` helper (up to MAX_RETRIES × RETRY_TIMEOUT plus
+# backoff sleeps — roughly 90 s of blocking work with stderr discarded), while
+# the monitor copy made a single API_TIMEOUT-bounded call and logged the exit
+# code and last stderr line on failure. The canonical helper keeps the monitor
+# semantics: one attempt, hard wall-clock cap, diagnostics retained. Queued
+# retry for transient Linear write failures lives in linear-retry-drain, not
+# here.
+#
+# Contract:
+# - Always non-fatal: returns 0 even when the tool fails (safe under set -e).
+# - Respects DRY_RUN: logs the intended transition and skips the tool call.
+# - Wall-clock: bounded by API_TIMEOUT (default 30 s) via the caller scope's
+#   _with_timeout.
+# - Diagnostics: on failure log_warn carries issue, target state, exit code,
+#   and the last stderr line the tool produced.
+linear_set_state() {
+  local issue="$1" state="$2"
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    declare -F log >/dev/null 2>&1 && log "[DRY-RUN] Would set $issue → $state"
+    return 0
+  fi
+
+  local stderr_file rc=0
+  stderr_file=$(mktemp) || {
+    declare -F log_warn >/dev/null 2>&1 && log_warn "Failed to update Linear state for $issue to $state (mktemp failed)"
+    return 0
+  }
+
+  _with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/set-issue-state.ts" "$issue" "$state" >/dev/null 2>"$stderr_file" || rc=$?
+  if (( rc == 0 )); then
+    rm -f "$stderr_file"
+    return 0
+  fi
+
+  if declare -F log_warn >/dev/null 2>&1; then
+    if [[ -s "$stderr_file" ]]; then
+      local err_line
+      err_line=$(tail -n 1 "$stderr_file")
+      log_warn "Failed to update Linear state for $issue to $state (exit $rc): $err_line"
+    else
+      log_warn "Failed to update Linear state for $issue to $state (exit $rc)"
+    fi
+  fi
+  rm -f "$stderr_file"
+  return 0
+}
+
+# Canonical Linear completion check. Before canonicalization the mill copy
+# asked get-issue-state.ts, which reports `completed` from Linear's
+# completedAt/canceledAt timestamps, while the monitor copy asked
+# get-issue.ts --json and matched the display name against a literal list
+# (Done, Completed, Canceled) — silently misclassifying workspaces with
+# renamed workflow states or non-US spellings such as "Cancelled". The
+# canonical helper uses get-issue-state.ts.
+#
+# Uncertainty policy: any lookup failure (Linear error, network failure,
+# API_TIMEOUT expiry, unexpected output) returns non-zero, i.e. "not
+# completed". Callers gate destructive worktree cleanup on this answer and
+# re-check on their next tick, so a transient outage delays cleanup instead of
+# ever wiping an operator's work on a false positive.
+linear_is_completed() {
+  local issue="$1"
+  local state
+  state=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/get-issue-state.ts" "$issue" 2>/dev/null || echo "active")
+  [[ "$state" == "completed" ]] && return 0
+  return 1
 }
 
 cleanup_background_jobs_startup() {

@@ -5,10 +5,11 @@ import { runImportCommand } from './native-agent-certifications-import.ts';
 import { runInspectCommand } from './native-agent-certifications-inspect.ts';
 import { runInvalidateCommand, runReidentifyCommand } from './native-agent-certifications-identity.ts';
 import { runListCommand } from './native-agent-certifications-list.ts';
+import { runPruneCommand } from './native-agent-certifications-prune.ts';
 import { runVerifyCommand } from './native-agent-certifications-verify.ts';
 import { runModelsReportCommand } from './native-agent-models-report.ts';
 
-const SUBCOMMANDS = ['list', 'inspect', 'verify', 'report', 'certify', 're-certify', 'reidentify', 'invalidate', 'migrate'] as const;
+const SUBCOMMANDS = ['list', 'inspect', 'verify', 'report', 'certify', 're-certify', 'reidentify', 'invalidate', 'migrate', 'prune'] as const;
 
 export async function runCertificationsCommand(argv = process.argv.slice(2)): Promise<void> {
   const [subcommand, ...rest] = argv;
@@ -43,6 +44,9 @@ export async function runCertificationsCommand(argv = process.argv.slice(2)): Pr
     case 'migrate':
       await runImportCommand(rest);
       return;
+    case 'prune':
+      await runPruneCommand(rest);
+      return;
     default:
       console.error(`Error: unknown certifications subcommand "${subcommand}".`);
       console.error(`Expected one of: ${SUBCOMMANDS.join(', ')}`);
@@ -66,12 +70,14 @@ Subcommands:
   reidentify   Dry-run identity change impact; --execute writes only an audit artifact.
   invalidate   Dry-run invalidation impact; --execute writes only an audit artifact.
   migrate      Inspect legacy repo-local artifacts; import only reusable current artifacts.
+  prune        Report orphan artifacts; delete only with --yes.
 
 Examples:
   wavemill native-agent certifications list --json
   wavemill native-agent certifications verify --provider openrouter --model qwen-3-coder --phase patch
   wavemill native-agent certifications certify --all --phase workflow
   wavemill native-agent certifications migrate --repo /path/to/repo --dry-run --json
+  wavemill native-agent certifications prune --yes
 `);
 }
 

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -43,7 +44,7 @@ assert_contains() {
   fi
 }
 
-dispatch_fn="$(extract_function "$MILL_SCRIPT" dispatch_task_and_persist)"
+dispatch_fn="$(extract_function "$MONITOR_SCRIPT_FILE" dispatch_task_and_persist)"
 if [[ -z "$dispatch_fn" ]]; then
   echo "FAIL: dispatch_task_and_persist is missing"
   exit 1
@@ -86,20 +87,20 @@ fallback_block="$(awk '
     }
   }
   { lines[NR] = $0 }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 assert_contains "fallback resets coder agent" "$fallback_block" 'task_agent_cmd="$AGENT_CMD"'
 assert_contains "fallback clears coder model to agent default" "$fallback_block" 'task_model=""'
 assert_contains "fallback records recovery action" "$fallback_block" "wavemill config migrate-model-settings"
 
-if grep -n 'launch_task "$sel_issue"' "$MILL_SCRIPT"; then
+if grep -n 'launch_task "$sel_issue"' "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE"; then
   echo "FAIL: selected monitor launches must use dispatch_task_and_persist"
   exit 1
 fi
-if ! grep -q 'dispatch_task_and_persist "$sel_issue"' "$MILL_SCRIPT"; then
+if ! grep -q 'dispatch_task_and_persist "$sel_issue"' "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE"; then
   echo "FAIL: selected monitor dispatch wrapper call is missing"
   exit 1
 fi
-if grep -q 'Selected coder route is not launchable: agent= model=' "$MILL_SCRIPT"; then
+if grep -q 'Selected coder route is not launchable: agent= model=' "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE"; then
   echo "FAIL: empty coder route diagnostic should no longer be emitted"
   exit 1
 fi

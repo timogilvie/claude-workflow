@@ -3,7 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -69,26 +71,27 @@ trap 'rm -rf "$TEST_TMP"' EXIT
 FUNCTION_FILE="$TEST_TMP/challenge-hard-failure-functions.sh"
 : > "$FUNCTION_FILE"
 for fn in \
-  mark_challenge_eval_running:1 \
-  challenge_eval_hard_failure_max_retries:1 \
-  challenge_pair_hard_failure_reason:1 \
-  challenge_pair_records_file:1 \
-  challenge_pr_url_from_number:1 \
-  challenge_pair_record_exists:1 \
-  challenge_pr_number_from_url:1 \
-  cleanup_forfeit_loser_from_resolution:1 \
-  mark_challenge_compared:1 \
-  resolve_challenge_pair_hard_failure:1 \
-  sanitize_job_token:1 \
-  challenge_job_dir:1 \
-  build_eval_job_id:1 \
-  read_job_state_value:1 \
-  launch_tracked_job:1 \
-  post_merge_eval_timeout_seconds:1 \
-  maybe_run_challenge_eval:1
+  mark_challenge_eval_running:1:mill \
+  challenge_eval_hard_failure_max_retries:1:mill \
+  challenge_pair_hard_failure_reason:1:mill \
+  challenge_pair_records_file:1:mill \
+  challenge_pr_url_from_number:1:mill \
+  challenge_pair_record_exists:1:mill \
+  mark_challenge_compared:1:monitor \
+  resolve_challenge_pair_hard_failure:1:common \
+  sanitize_job_token:1:monitor \
+  challenge_job_dir:1:monitor \
+  build_eval_job_id:1:monitor \
+  read_job_state_value:1:monitor \
+  launch_tracked_job:1:monitor \
+  post_merge_eval_timeout_seconds:1:monitor \
+  maybe_run_challenge_eval:1:monitor
 do
-  IFS=: read -r name occurrence <<<"$fn"
-  extract_function_occurrence "$MILL_SCRIPT" "$name" "$occurrence" >> "$FUNCTION_FILE"
+  IFS=: read -r name occurrence source <<<"$fn"
+  source_file="$MILL_SCRIPT"
+  [[ "$source" == "monitor" ]] && source_file="$MONITOR_SCRIPT_FILE"
+  [[ "$source" == "common" ]] && source_file="$COMMON_SCRIPT"
+  extract_function_occurrence "$source_file" "$name" "$occurrence" >> "$FUNCTION_FILE"
   printf '\n' >> "$FUNCTION_FILE"
 done
 
@@ -113,13 +116,25 @@ AGENT_CMD="codex"
 LOG_OUTPUT=""
 EVAL_LAUNCHES=0
 JOB_TRACKER_CALLS=0
+PR_CLOSES=0
+CLEANUPS=0
 
 mkdir -p "$REPO_DIR" "$WORKTREE_ROOT" "$TOOLS_DIR" "$REPO_DIR/.wavemill/evals"
 
 log() { printf -v LOG_OUTPUT "%s%s\n" "$LOG_OUTPUT" "$2"; }
 log_warn() { printf -v LOG_OUTPUT "%sWARN: %s\n" "$LOG_OUTPUT" "$1"; }
 get_linear_issue_id() { printf '%s\n' "$1"; }
-wavemill_load_config() { printf '%s\n' '{"eval":{"postMergeTimeoutSeconds":600}}'; }
+pr_state() { printf 'OPEN\n'; }
+cleanup_completed_task() {
+  CLEANUPS=$((CLEANUPS + 1))
+}
+wavemill_load_config() {
+  if [[ -n "${CONFIG_JSON:-}" ]]; then
+    printf '%s\n' "$CONFIG_JSON"
+  else
+    printf '%s\n' '{"eval":{"postMergeTimeoutSeconds":600}}'
+  fi
+}
 
 read_state_value() {
   local default="${1:-}"
@@ -153,6 +168,10 @@ gh() {
     printf 'https://github.com/example/repo/pull/%s\n' "${3:-0}"
     return 0
   fi
+  if [[ "${1:-}" == "pr" && "${2:-}" == "close" ]]; then
+    PR_CLOSES=$((PR_CLOSES + 1))
+    return 0
+  fi
   return 1
 }
 
@@ -162,10 +181,23 @@ npx() {
     return 0
   fi
   if [[ "$*" == *"resolve-orphan-challenge-pair.ts"* ]]; then
+    local orphan_winner="${ORPHAN_WINNER:-primary}"
+    local primary_pr_url="https://github.com/example/repo/pull/101"
+    local challenger_pr_url="https://github.com/unknown/unknown/pull/0"
+    local primary_model="model-a"
+    local challenger_model="unknown"
+    local winner_model="model-a"
+    if [[ "$orphan_winner" == "challenger" ]]; then
+      challenger_pr_url="https://github.com/example/repo/pull/102"
+      challenger_model="model-b"
+      winner_model="model-b"
+    fi
     cat > "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" <<JSON
-{"challengePairId":"HOK-2462","primaryModel":"model-a","challengerModel":"unknown","primaryPrUrl":"https://github.com/example/repo/pull/101","challengerPrUrl":"https://github.com/unknown/unknown/pull/0","primaryEvalScore":0,"challengerEvalScore":0,"winner":"primary","winnerModel":"model-a","rationale":"Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.","dimensions":{"completeness":{"primary":0,"challenger":0},"correctness":{"primary":0,"challenger":0},"code_quality":{"primary":0,"challenger":0},"intervention_impact":{"primary":0,"challenger":0},"autonomy":{"primary":0,"challenger":0}},"timestamp":"2026-07-17T00:00:00Z","comparisonOutcome":"forfeit","terminalReason":"orphan_pair"}
+{"challengePairId":"HOK-2462","primaryModel":"$primary_model","challengerModel":"$challenger_model","primaryPrUrl":"$primary_pr_url","challengerPrUrl":"$challenger_pr_url","primaryEvalScore":0,"challengerEvalScore":0,"winner":"$orphan_winner","winnerModel":"$winner_model","rationale":"Challenge pair became orphaned before a comparison could be launched; the surviving side wins by forfeit.","dimensions":{"completeness":{"primary":0,"challenger":0},"correctness":{"primary":0,"challenger":0},"code_quality":{"primary":0,"challenger":0},"intervention_impact":{"primary":0,"challenger":0},"autonomy":{"primary":0,"challenger":0}},"timestamp":"2026-07-17T00:00:00Z","comparisonOutcome":"forfeit","terminalReason":"orphan_pair"}
 JSON
-    printf '%s\n' '{"status":"resolved","reason":"orphan-sibling"}'
+    printf '{"status":"resolved","reason":"orphan-sibling","record":'
+    cat "$REPO_DIR/.wavemill/evals/challenge-records.jsonl"
+    printf '}\n'
     return 0
   fi
   if [[ "$*" == *"run-eval-hook.ts"* ]]; then
@@ -371,6 +403,199 @@ JSON
   printf 'orphan_reason=%s\n' "$(jq -r '.terminalReason' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
   printf 'orphan_winner=%s\n' "$(jq -r '.winner' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
   printf 'orphan_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
+  printf 'orphan_pr_closes=%s\n' "$PR_CLOSES"
+  printf 'orphan_cleanups=%s\n' "$CLEANUPS"
+}
+
+run_orphan_cleanup_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "pr": "102",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  }
+}
+JSON
+
+  ORPHAN_WINNER=challenger resolve_challenge_pair_hard_failure "HOK-2462"
+  ORPHAN_WINNER=challenger resolve_challenge_pair_hard_failure "HOK-2462"
+  printf 'orphan_cleanup_lines=%s\n' "$(wc -l < "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" | tr -d '[:space:]')"
+  printf 'orphan_cleanup_winner=%s\n' "$(jq -r '.winner' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
+  printf 'orphan_cleanup_compared_challenger=%s\n' "$(jq -r '.tasks["HOK-2462_c"].challengeCompared' "$STATE_FILE")"
+  printf 'orphan_cleanup_pr_closes=%s\n' "$PR_CLOSES"
+  printf 'orphan_cleanup_cleanups=%s\n' "$CLEANUPS"
+}
+
+run_incomplete_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    },
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "pr": "102",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": false,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  }
+}
+JSON
+
+  resolve_challenge_pair_hard_failure "HOK-2462" || true
+  printf 'incomplete_terminal_exists=%s\n' "$([[ -f "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" ]] && echo true || echo false)"
+  printf 'incomplete_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
+  printf 'incomplete_compared_challenger=%s\n' "$(jq -r '.tasks["HOK-2462_c"].challengeCompared' "$STATE_FILE")"
+  printf 'incomplete_pr_closes=%s\n' "$PR_CLOSES"
+  printf 'incomplete_cleanups=%s\n' "$CLEANUPS"
+}
+
+run_missing_pr_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    },
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  }
+}
+JSON
+
+  resolve_challenge_pair_hard_failure "HOK-2462" || true
+  printf 'missing_pr_terminal_exists=%s\n' "$([[ -f "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" ]] && echo true || echo false)"
+  printf 'missing_pr_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
+  printf 'missing_pr_compared_challenger=%s\n' "$(jq -r '.tasks["HOK-2462_c"].challengeCompared' "$STATE_FILE")"
+  printf 'missing_pr_closes=%s\n' "$PR_CLOSES"
+  printf 'missing_pr_cleanups=%s\n' "$CLEANUPS"
+}
+
+run_config_retry_case() {
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": true,
+      "evalHardFailureRetryCount": 2,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    },
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "pr": "102",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  },
+  "jobs": {
+    "eval-HOK-2462-primary-101": {
+      "id": "eval-HOK-2462-primary-101",
+      "status": "failed"
+    }
+  }
+}
+JSON
+
+  maybe_run_challenge_eval "HOK-2462" "101" "task/hok-2462" "hok-2462"
+  wait || true
+  printf 'config_retry_counter=%s\n' "$(jq -r '.tasks["HOK-2462"].evalHardFailureRetryCount // empty' "$STATE_FILE")"
+  printf 'config_retry_failed=%s\n' "$(jq -r '.tasks["HOK-2462"].evalFailed' "$STATE_FILE")"
+  printf 'config_retry_snapshot_exists=%s\n' "$([[ -f "$CASE_DIR/eval-launch-state.json" ]] && echo true || echo false)"
+  printf 'config_retry_snapshot_counter=%s\n' "$(jq -r '.tasks["HOK-2462"].evalHardFailureRetryCount' "$CASE_DIR/eval-launch-state.json")"
+  printf 'terminal_exists=%s\n' "$([[ -f "$REPO_DIR/.wavemill/evals/challenge-records.jsonl" ]] && echo true || echo false)"
+}
+
+run_helper_case() {
+  printf 'max_retries=%s\n' "$(challenge_eval_hard_failure_max_retries)"
 }
 
 "run_${CASE_NAME}_case"
@@ -382,10 +607,31 @@ chmod +x "$TEST_TMP/run-case.sh"
 
 echo "=== Challenge Eval Hard Failure ==="
 
+common_resolver_count="$(grep -c '^resolve_challenge_pair_hard_failure() {' "$COMMON_SCRIPT")"
+mill_resolver_count="$(grep -c '^resolve_challenge_pair_hard_failure() {' "$MILL_SCRIPT" || true)"
+monitor_resolver_count="$(grep -c '^resolve_challenge_pair_hard_failure() {' "$MONITOR_SCRIPT_FILE" || true)"
+mill_sources_common="$(grep -c 'source "\$SCRIPT_DIR/wavemill-common.sh"' "$MILL_SCRIPT" || true)"
+monitor_sources_common="$(grep -c 'source "\$LIB_DIR/wavemill-common.sh"' "$MONITOR_SCRIPT_FILE" || true)"
+
+check_eq "canonical resolver exists exactly once in common" "1" "$common_resolver_count"
+check_eq "parent no longer defines local hard-failure resolver" "0" "$mill_resolver_count"
+check_eq "monitor no longer defines local hard-failure resolver" "0" "$monitor_resolver_count"
+check_eq "parent sources common library" "1" "$mill_sources_common"
+check_eq "monitor sources common library" "1" "$monitor_sources_common"
+
 retry_output="$(CASE_NAME=retry CASE_DIR="$TEST_TMP/retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 exhausted_output="$(CASE_NAME=exhausted CASE_DIR="$TEST_TMP/exhausted" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 double_output="$(CASE_NAME=double CASE_DIR="$TEST_TMP/double" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 orphan_output="$(CASE_NAME=orphan CASE_DIR="$TEST_TMP/orphan" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+orphan_cleanup_output="$(CASE_NAME=orphan_cleanup CASE_DIR="$TEST_TMP/orphan-cleanup" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+incomplete_output="$(CASE_NAME=incomplete CASE_DIR="$TEST_TMP/incomplete" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+missing_pr_output="$(CASE_NAME=missing_pr CASE_DIR="$TEST_TMP/missing-pr" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_default_output="$(CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-default" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_config_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":4}}}' CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-config" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_soft_only_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts":9}}}' CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-soft-only" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=3 CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+helper_invalid_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts":9,"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=bad CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-invalid-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+config_retry_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":3}}}' CASE_NAME=config_retry CASE_DIR="$TEST_TMP/config-retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 
 check_contains "legacy hard failure defaults retry counter to zero then increments" "$retry_output" "retry_counter=1"
 check_contains "hard failure retry clears evalFailed before relaunch" "$retry_output" "retry_failed=false"
@@ -415,6 +661,39 @@ check_contains "orphan hard failure path writes forfeit outcome" "$orphan_output
 check_contains "orphan hard failure path records orphan reason" "$orphan_output" "orphan_reason=orphan_pair"
 check_contains "orphan hard failure path awards surviving primary" "$orphan_output" "orphan_winner=primary"
 check_contains "orphan hard failure path marks primary compared" "$orphan_output" "orphan_compared_primary=true"
+check_contains "orphan hard failure path does not close PRs" "$orphan_output" "orphan_pr_closes=0"
+check_contains "orphan hard failure path does not cleanup worktrees" "$orphan_output" "orphan_cleanups=0"
+
+check_contains "canonical orphan path remains idempotent" "$orphan_cleanup_output" "orphan_cleanup_lines=1"
+check_contains "canonical orphan path preserves concrete winner" "$orphan_cleanup_output" "orphan_cleanup_winner=challenger"
+check_contains "canonical orphan path marks survivor compared" "$orphan_cleanup_output" "orphan_cleanup_compared_challenger=true"
+check_contains "canonical orphan path does not use former parent PR cleanup" "$orphan_cleanup_output" "orphan_cleanup_pr_closes=0"
+check_contains "canonical orphan path does not use former parent worktree cleanup" "$orphan_cleanup_output" "orphan_cleanup_cleanups=0"
+
+check_contains "incomplete hard failure writes no terminal record" "$incomplete_output" "incomplete_terminal_exists=false"
+check_contains "incomplete hard failure does not compare primary" "$incomplete_output" "incomplete_compared_primary=false"
+check_contains "incomplete hard failure does not compare challenger" "$incomplete_output" "incomplete_compared_challenger=false"
+check_contains "incomplete hard failure does not close PRs" "$incomplete_output" "incomplete_pr_closes=0"
+check_contains "incomplete hard failure does not cleanup worktrees" "$incomplete_output" "incomplete_cleanups=0"
+
+check_contains "missing PR evidence writes no terminal record" "$missing_pr_output" "missing_pr_terminal_exists=false"
+check_contains "missing PR evidence does not compare primary" "$missing_pr_output" "missing_pr_compared_primary=false"
+check_contains "missing PR evidence does not compare challenger" "$missing_pr_output" "missing_pr_compared_challenger=false"
+check_contains "missing PR evidence does not close PRs" "$missing_pr_output" "missing_pr_closes=0"
+check_contains "missing PR evidence does not cleanup worktrees" "$missing_pr_output" "missing_pr_cleanups=0"
+
+check_contains "hard failure helper defaults to two retries" "$helper_default_output" "max_retries=2"
+check_contains "hard failure helper reads hard-failure config" "$helper_config_output" "max_retries=4"
+check_contains "soft retry config does not affect hard-failure helper" "$helper_soft_only_output" "max_retries=2"
+check_contains "hard failure env override wins over config" "$helper_env_output" "max_retries=3"
+check_contains "invalid hard failure env falls through to config" "$helper_invalid_env_output" "max_retries=4"
+check_contains "hard failure config allows retry before exhaustion" "$config_retry_output" "config_retry_counter=3"
+check_contains "hard failure config retry clears evalFailed" "$config_retry_output" "config_retry_failed=false"
+check_contains "hard failure config retry does not write terminal record" "$config_retry_output" "terminal_exists=false"
+check_contains "hard failure config retry launches eval" "$config_retry_output" "config_retry_snapshot_exists=true"
+check_contains "hard failure config retry snapshot has configured attempt" "$config_retry_output" "config_retry_snapshot_counter=3"
+check_contains "hard failure config retry records tracked job launch" "$config_retry_output" "job_tracker_calls=1"
+check_contains "hard failure config retry logs configured budget" "$config_retry_output" "challenge eval retrying for HOK-2462: hard failure (attempt 3/3)"
 
 echo ""
 echo "Passed: $PASS"

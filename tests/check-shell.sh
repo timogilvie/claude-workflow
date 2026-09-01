@@ -120,6 +120,9 @@ for f in \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
   "$REPO_DIR"/tests/challenger-transient-retry.test.sh \
   "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
+  "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \
+  "$REPO_DIR"/tests/task-phase-canonicalization.test.sh \
+  "$REPO_DIR"/tests/pr-state-merge-canonicalization.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
@@ -128,6 +131,7 @@ for f in \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
+  "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
@@ -228,8 +232,8 @@ else
   fail "backstage service health writer does not use state_mutate"
 fi
 
-if grep -q 'wavemill_git_remote_with_timeout .*ls-remote origin' "$LIB_DIR/wavemill-mill.sh" \
-  && ! grep -q 'git -C "\$wt_dir" ls-remote origin "refs/heads/\${base_branch}"' "$LIB_DIR/wavemill-mill.sh"; then
+if grep -q 'wavemill_git_remote_with_timeout .*ls-remote origin' "$LIB_DIR/wavemill-monitor.sh" \
+  && ! grep -q 'git -C "\$wt_dir" ls-remote origin "refs/heads/\${base_branch}"' "$LIB_DIR/wavemill-monitor.sh"; then
   pass "main head probe uses timeout helper"
 else
   fail "main head probe is missing the timeout helper"
@@ -402,20 +406,16 @@ echo ""
 echo "=== Heredoc Function Availability (wavemill-mill.sh monitor script) ==="
 
 MILL_SCRIPT="$LIB_DIR/wavemill-mill.sh"
+MONITOR_FILE="$LIB_DIR/wavemill-monitor.sh"
 
-if [[ ! -f "$MILL_SCRIPT" ]]; then
-  fail "wavemill-mill.sh not found"
+if [[ ! -f "$MILL_SCRIPT" || ! -f "$LIB_DIR/wavemill-monitor.sh" ]]; then
+  fail "wavemill-mill.sh or wavemill-monitor.sh not found"
 else
-  # Extract heredoc content (between <<'MONITOR_EOF' and ^MONITOR_EOF)
-  # Use awk to extract just the content (excluding the cat line and closing marker)
-  HEREDOC_CONTENT=$(awk '
-    /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-    /^MONITOR_EOF$/ { found=0; next }
-    found { print }
-  ' "$MILL_SCRIPT")
+  # Read the committed monitor script (formerly embedded as a MONITOR_EOF heredoc)
+  HEREDOC_CONTENT=$(cat "$LIB_DIR/wavemill-monitor.sh")
 
   if [[ -z "$HEREDOC_CONTENT" ]]; then
-    fail "Could not extract MONITOR_EOF heredoc from wavemill-mill.sh"
+    fail "Could not read monitor content from wavemill-monitor.sh"
   else
     # Use the same bash as the generated script shebang, but fall back for CI/non-macOS systems.
     MONITOR_BASH="/opt/homebrew/bin/bash"
@@ -592,7 +592,7 @@ else
   fail "startup migration scan is not using forced fetch helper"
 fi
 
-if grep -qF 'wavemill_fetch_base_branch "$effective_base" 2>/dev/null || true' "$MILL_SCRIPT"; then
+if grep -qF 'wavemill_fetch_base_branch "$effective_base" 2>/dev/null || true' "$MONITOR_FILE"; then
   pass "dynamic task launch uses cached fetch helper"
 else
   fail "dynamic task launch is not using cached fetch helper"
@@ -630,14 +630,14 @@ else
   fail "max parallel summaries are missing mill.maxParallel annotation"
 fi
 
-if grep -qF 'Checking every ${POLL_SECONDS}s$(wavemill_config_annotation "mill.pollSeconds" "$POLL_SECONDS")' "$MILL_SCRIPT"; then
+if grep -qF 'Checking every ${POLL_SECONDS}s$(wavemill_config_annotation "mill.pollSeconds" "$POLL_SECONDS")' "$MONITOR_FILE"; then
   pass "poll interval summary logs mill.pollSeconds annotation"
 else
   fail "poll interval summary is missing mill.pollSeconds annotation"
 fi
 
-if grep -qF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MILL_SCRIPT"; then
-  window_count="$(grep -cF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MILL_SCRIPT")"
+if grep -qF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MONITOR_FILE"; then
+  window_count="$(grep -cF 'Window stays open for review - close it when ready$(wavemill_config_annotation "mill.requireConfirm" "$REQUIRE_CONFIRM")' "$MONITOR_FILE")"
   if [[ "$window_count" -eq 2 ]]; then
     pass "window hold-open logs include mill.requireConfirm at both sites"
   else
@@ -696,12 +696,6 @@ else
     fail "monitor still risks cleanup when agent exits without PR"
   fi
 
-  if grep -qE '^pr_state\(\) \{' <<< "$HEREDOC_CONTENT"; then
-    pass "monitor defines pr_state helper"
-  else
-    fail "monitor is missing pr_state helper definition"
-  fi
-
   if grep -q 'linear_set_state .*"In Review"' <<< "$HEREDOC_CONTENT" && grep -q 'get_linear_issue_id' <<< "$HEREDOC_CONTENT"; then
     pass "monitor sets Linear issue to In Review when PR is detected"
   else
@@ -714,7 +708,10 @@ else
     fail "monitor does not set Linear issue to Done on completion"
   fi
 
-  if grep -q 'set-issue-state.ts' <<< "$HEREDOC_CONTENT"; then
+  # HOK-2901: linear_set_state is inherited from wavemill-common.sh, so the
+  # tool reference lives there rather than in the monitor script.
+  if grep -q 'set-issue-state.ts' <<< "$HEREDOC_CONTENT" \
+    || grep -q 'set-issue-state.ts' "$LIB_DIR/wavemill-common.sh"; then
     pass "monitor linear_set_state uses set-issue-state.ts"
   else
     fail "monitor linear_set_state is not calling set-issue-state.ts"
@@ -745,12 +742,16 @@ else
     pass "monitor does not reference update-linear-state.ts"
   fi
 
+  # HOK-2901: the canonical body lives in wavemill-common.sh; check it there
+  # (and any monitor-local override, should one reappear).
   LINEAR_SET_STATE_BLOCK=$(awk '
     /^linear_set_state\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' <<< "$HEREDOC_CONTENT")
-  if grep -q 'return 1' <<< "$LINEAR_SET_STATE_BLOCK"; then
+  ' <<< "$HEREDOC_CONTENT"$'\n'"$(cat "$LIB_DIR/wavemill-common.sh")")
+  if [[ -z "$LINEAR_SET_STATE_BLOCK" ]]; then
+    fail "linear_set_state definition not found in monitor scope or wavemill-common.sh"
+  elif grep -q 'return 1' <<< "$LINEAR_SET_STATE_BLOCK"; then
     fail "monitor linear_set_state must not return 1 (would exit under set -e)"
   else
     pass "monitor linear_set_state failures are non-fatal"
@@ -961,15 +962,18 @@ else
     fail "monitor is missing read_state_value helper"
   fi
 
+  # The canonical get_task_phase lives in wavemill-common.sh (HOK-2903) with
+  # the read_state_value guard inlined; assert the guard survived the move.
   GET_TASK_PHASE_BLOCK=$(awk '
     /^get_task_phase\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' <<< "$HEREDOC_CONTENT")
-  if grep -q 'read_state_value "executing"' <<< "$GET_TASK_PHASE_BLOCK"; then
-    pass "monitor get_task_phase defaults safely when state reads fail"
+  ' "$LIB_DIR/wavemill-common.sh")
+  if grep -q '! -r "\$STATE_FILE" || ! -s "\$STATE_FILE"' <<< "$GET_TASK_PHASE_BLOCK" \
+    && grep -Fq "printf 'executing\n'" <<< "$GET_TASK_PHASE_BLOCK"; then
+    pass "canonical get_task_phase defaults safely when state reads fail"
   else
-    fail "monitor get_task_phase is not using read_state_value"
+    fail "canonical get_task_phase is missing the inlined state-read guard"
   fi
 
   if grep -Fq 'current_agent=$(read_state_value ""' <<< "$MONITOR_ISSUE_BLOCK" \
@@ -1102,7 +1106,7 @@ fi
 echo ""
 echo "=== FORCE_MODEL Challenge Bypass Guards ==="
 
-FORCE_SKIP_COUNT=$(grep -c 'Challenge skipped because FORCE_MODEL is set (\$FORCE_MODEL)' "$MILL_SCRIPT" || true)
+FORCE_SKIP_COUNT=$(( $(grep -c 'Challenge skipped because FORCE_MODEL is set (\$FORCE_MODEL)' "$MILL_SCRIPT" || true) + $(grep -c 'Challenge skipped because FORCE_MODEL is set (\$FORCE_MODEL)' "$MONITOR_FILE" || true) ))
 if [[ "$FORCE_SKIP_COUNT" -eq 2 ]]; then
   pass "wavemill-mill.sh logs FORCE_MODEL challenge skips in both launch paths"
 else
@@ -1117,8 +1121,8 @@ else
   fail "initial launch path does not guard resolve-challenge-task.ts behind FORCE_MODEL"
 fi
 
-SECOND_FORCE_GUARD_LINE=$(grep -n 'if \[\[ -n "\${FORCE_MODEL:-}" \]\]; then' "$MILL_SCRIPT" | sed -n '2p' | cut -d: -f1 || true)
-SECOND_RESOLVE_LINE=$(grep -nF 'challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts"' "$MILL_SCRIPT" | sed -n '1p' | cut -d: -f1 || true)
+SECOND_FORCE_GUARD_LINE=$(grep -n 'if \[\[ -n "\${FORCE_MODEL:-}" \]\]; then' "$MONITOR_FILE" | sed -n '1p' | cut -d: -f1 || true)
+SECOND_RESOLVE_LINE=$(grep -nF 'challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts"' "$MONITOR_FILE" | sed -n '1p' | cut -d: -f1 || true)
 if [[ -n "$SECOND_FORCE_GUARD_LINE" && -n "$SECOND_RESOLVE_LINE" ]] && (( SECOND_FORCE_GUARD_LINE < SECOND_RESOLVE_LINE )); then
   pass "runtime launch path bypasses resolve-challenge-task.ts when FORCE_MODEL is set"
 else
@@ -1131,7 +1135,8 @@ fi
 echo ""
 echo "=== Codex Attention Style Regression Guard ==="
 
-if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && ! grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-mill.sh"; then
+if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] && ! grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-mill.sh" \
+  && ! grep -q 'window-status-activity-style bg=red,fg=white,bold' "$LIB_DIR/wavemill-monitor.sh"; then
   pass "mill no longer uses codex activity-style override"
 else
   fail "mill still uses codex activity-style override"
@@ -1173,24 +1178,24 @@ else
   fail "mill is missing codex pending-approval detection"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
-  && grep -q 'codex_has_pending_approval "\$WT_DIR"' "$LIB_DIR/wavemill-mill.sh" \
-  && grep -q 'set_window_attention_state "\$WIN" "needs-user"' "$LIB_DIR/wavemill-mill.sh"; then
+if [[ -f "$LIB_DIR/wavemill-monitor.sh" ]] \
+  && grep -q 'codex_has_pending_approval "\$WT_DIR"' "$LIB_DIR/wavemill-monitor.sh" \
+  && grep -q 'set_window_attention_state "\$WIN" "needs-user"' "$LIB_DIR/wavemill-monitor.sh"; then
   pass "monitor drives tab attention from explicit waiting states"
 else
   fail "monitor is missing explicit tab attention state wiring"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
-  && grep -qE '^launch_background_post_merge_eval\(\) \{' "$LIB_DIR/wavemill-mill.sh"; then
+if [[ -f "$LIB_DIR/wavemill-monitor.sh" ]] \
+  && grep -qE '^launch_background_post_merge_eval\(\) \{' "$LIB_DIR/wavemill-monitor.sh"; then
   pass "mill defines detached post-merge eval helper"
 else
   fail "mill is missing detached post-merge eval helper"
 fi
 
-if [[ -f "$LIB_DIR/wavemill-mill.sh" ]] \
-  && grep -qE '^post_merge_eval_timeout_seconds\(\) \{' "$LIB_DIR/wavemill-mill.sh" \
-  && grep -q '.eval.postMergeTimeoutSeconds // 600' "$LIB_DIR/wavemill-mill.sh"; then
+if [[ -f "$LIB_DIR/wavemill-monitor.sh" ]] \
+  && grep -qE '^post_merge_eval_timeout_seconds\(\) \{' "$LIB_DIR/wavemill-monitor.sh" \
+  && grep -q '.eval.postMergeTimeoutSeconds // 600' "$LIB_DIR/wavemill-monitor.sh"; then
   pass "mill defines configurable post-merge eval timeout with 600s default"
 else
   fail "mill is missing configurable post-merge eval timeout"
@@ -1200,7 +1205,7 @@ MERGED_BLOCK=$(awk '
   /log "status" "\$ISSUE → PR #\$PR MERGED"/ { in_block=1 }
   in_block { print }
   in_block && /elif \[\[ "\$pr_status" == "CLOSED" \]\]; then/ { exit }
-' "$LIB_DIR/wavemill-mill.sh")
+' "$LIB_DIR/wavemill-monitor.sh")
 if grep -q 'launch_background_post_merge_eval "\$ISSUE" "\$PR"' <<< "$MERGED_BLOCK"; then
   pass "merged PR path launches eval asynchronously"
 else
@@ -1217,7 +1222,7 @@ POST_MERGE_EVAL_BLOCK=$(awk '
   /^launch_background_post_merge_eval\(\) \{/ { in_block=1 }
   in_block { print }
   in_block && /^}/ { exit }
-' "$LIB_DIR/wavemill-mill.sh")
+' "$LIB_DIR/wavemill-monitor.sh")
 if grep -q '_with_timeout "\$eval_timeout" npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$POST_MERGE_EVAL_BLOCK" \
   && ! grep -q '_with_timeout 120 npx tsx "\$TOOLS_DIR/run-eval-hook.ts"' <<< "$POST_MERGE_EVAL_BLOCK"; then
   pass "detached post-merge eval uses configurable timeout"
@@ -1247,7 +1252,7 @@ EXTERNAL_BLOCK=$(awk '
   /log "status" "\$ISSUE → Completed externally \(cross-repo or manual\)"/ { in_block=1 }
   in_block { print }
   in_block && /if \[\[ "\$REQUIRE_CONFIRM" == "true" \]\]; then/ { exit }
-' "$LIB_DIR/wavemill-mill.sh")
+' "$LIB_DIR/wavemill-monitor.sh")
 if grep -q 'launch_background_post_merge_eval "\$ISSUE" ""' <<< "$EXTERNAL_BLOCK"; then
   pass "external completion path launches eval asynchronously"
 else
@@ -2115,16 +2120,17 @@ if [[ ! -f "$MILL_SCRIPT" ]]; then
   fail "wavemill-mill.sh not found for log filtering checks"
 else
   selection_prompt_uses_echo=1
-  if grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT"; then
+  if grep -Fq 'log "status" "Next tasks:"' "$MILL_SCRIPT" || grep -Fq 'log "status" "Next tasks:"' "$MONITOR_FILE"; then
     selection_prompt_uses_echo=0
   fi
-  if ! grep -Fq 'echo "Next tasks:"' "$MILL_SCRIPT" && ! grep -Fq '_task_frame="Next tasks:"' "$MILL_SCRIPT"; then
+  if ! grep -Fq 'echo "Next tasks:"' "$MONITOR_FILE" && ! grep -Fq '_task_frame="Next tasks:"' "$MONITOR_FILE"; then
     selection_prompt_uses_echo=0
   fi
-  if ! grep -Fq 'log "info" "All tasks:"' "$MILL_SCRIPT"; then
+  if ! grep -Fq 'log "info" "All tasks:"' "$MONITOR_FILE"; then
     selection_prompt_uses_echo=0
   fi
-  if grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" || grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT"; then
+  if grep -Fq 'slot(s) available. Next tasks:' "$MILL_SCRIPT" || grep -Fq 'slot(s) available. All tasks:' "$MILL_SCRIPT" \
+    || grep -Fq 'slot(s) available. Next tasks:' "$MONITOR_FILE" || grep -Fq 'slot(s) available. All tasks:' "$MONITOR_FILE"; then
     selection_prompt_uses_echo=0
   fi
 
@@ -2536,7 +2542,7 @@ else
     /^restore_review_task_window\(\) \{/ { capture=1 }
     capture { print }
     capture && /^\}/ { exit }
-  ' "$MILL_SCRIPT")
+  ' "$MONITOR_FILE")
 
   if [[ -z "$RESTORE_BLOCK" ]]; then
     fail "Could not extract review restoration helper"
@@ -2621,7 +2627,7 @@ else
     /^clear_stage_result\(\) \{/ && !captured { capture=1; captured=1 }
     capture && /^# Resolve the current workflow phase from controller-owned stage state\./ { exit }
     capture { print }
-  ' "$MILL_SCRIPT")
+  ' "$MONITOR_FILE")
 
   if [[ -z "$RECOVERY_BLOCK" ]]; then
     fail "Could not extract phase launch recovery helper"
@@ -2733,7 +2739,7 @@ else
     /^launch_coding_phase\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' "$MILL_SCRIPT")
+  ' "$MONITOR_FILE")
   if grep -q '_launch_agent_in_pane' <<< "$CODING_LAUNCH_BLOCK"; then
     pass "launch_coding_phase uses protected pane launcher"
   else
@@ -2744,7 +2750,7 @@ else
     /^launch_review_phase\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' "$MILL_SCRIPT")
+  ' "$MONITOR_FILE")
   if grep -q '_launch_agent_in_pane' <<< "$REVIEW_LAUNCH_BLOCK"; then
     pass "launch_review_phase uses protected pane launcher"
   else
@@ -2755,7 +2761,7 @@ else
     /^_launch_agent_in_pane\(\) \{/ { in_fn=1 }
     in_fn { print }
     in_fn && /^\}/ { exit }
-  ' "$MILL_SCRIPT")
+  ' "$MONITOR_FILE")
   if grep -q 'local esc_session esc_issue esc_slug esc_linear_issue linear_issue=""' <<< "$LAUNCH_AGENT_BLOCK"; then
     pass "protected pane launcher initializes linear_issue for strict-mode watchdog launches"
   else
@@ -3078,45 +3084,45 @@ unset window_titles_status
 echo ""
 echo "=== Routing Resilience Guards ==="
 
-if grep -q 'WAVEMILL_ROUTING_DEBUG' "$MILL_SCRIPT"; then
+if grep -q 'WAVEMILL_ROUTING_DEBUG' "$MONITOR_FILE"; then
   pass "routing debug flag is wired into mill launch"
 else
   fail "routing debug flag is missing from wavemill-mill.sh"
 fi
 
-if grep -q '\.routing-failure' "$MILL_SCRIPT"; then
+if grep -q '\.routing-failure' "$MONITOR_FILE"; then
   pass "routing failure marker is persisted"
 else
   fail "routing failure marker is missing"
 fi
 
-if grep -q 'selected-task.json' "$MILL_SCRIPT" && grep -q 'Created minimal routing packet from selected-task.json' "$MILL_SCRIPT"; then
+if grep -q 'selected-task.json' "$MONITOR_FILE" && grep -q 'Created minimal routing packet from selected-task.json' "$MONITOR_FILE"; then
   pass "routing can rebuild a packet from selected-task metadata"
 else
   fail "routing packet fallback from selected-task.json is missing"
 fi
 
-if grep -q 'route-tasks.ts' "$MILL_SCRIPT" && grep -q 'route-task.ts' "$MILL_SCRIPT"; then
+if grep -q 'route-tasks.ts' "$MONITOR_FILE" && grep -q 'route-task.ts' "$MONITOR_FILE"; then
   pass "mill script uses batch routing with single-task fallback"
 else
   fail "batch routing or single-task fallback is missing"
 fi
 
-if grep -q 'prepare_route_input_for_issue()' "$MILL_SCRIPT" \
-  && grep -q 'apply_route_json_for_issue()' "$MILL_SCRIPT" \
-  && grep -q 'batch_route_selected_tasks()' "$MILL_SCRIPT"; then
+if grep -q 'prepare_route_input_for_issue()' "$MONITOR_FILE" \
+  && grep -q 'apply_route_json_for_issue()' "$MONITOR_FILE" \
+  && grep -q 'batch_route_selected_tasks()' "$MONITOR_FILE"; then
   pass "interactive routing batch helpers are defined"
 else
   fail "interactive routing batch helper definitions are missing"
 fi
 
-if grep -q -- '--mode heuristic' "$MILL_SCRIPT"; then
+if grep -q -- '--mode heuristic' "$MONITOR_FILE"; then
   pass "routing retries fall back to heuristic mode"
 else
   fail "heuristic routing fallback is missing"
 fi
 
-if grep -q 'Workflow routing attempt \$route_attempt failed' "$MILL_SCRIPT"; then
+if grep -q 'Workflow routing attempt \$route_attempt failed' "$MONITOR_FILE"; then
   pass "routing attempts are logged with retry context"
 else
   fail "routing retry logging is missing"

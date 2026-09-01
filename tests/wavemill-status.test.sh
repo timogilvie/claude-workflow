@@ -1654,19 +1654,17 @@ assert_pr_check "CheckRun TIMED_OUT -> fail" \
 assert_pr_check "Empty rollup -> none" \
   "none" "$(run_pr_checks "$ROLLUP_FIXTURE" "task/empty-rollup")"
 
-# Regression guard: verify save_migration_reservation exists in MONITOR_EOF heredoc.
-# This guards against regressions where the function gets moved outside the heredoc
-# and becomes unavailable to the generated monitor script at runtime.
+# Regression guard: verify save_migration_reservation exists in the monitor script.
+# This guards against regressions where the function gets moved out of the monitor
+# script and becomes unavailable to the generated monitor script at runtime.
 echo ""
-echo "=== Heredoc Regression Guards ==="
-MONITOR_EOF_START=$(grep -n "^cat > \"\$MONITOR_SCRIPT\" <<'MONITOR_EOF'" "$REPO_DIR/shared/lib/wavemill-mill.sh" | cut -d: -f1)
-MONITOR_EOF_END=$(grep -n "^MONITOR_EOF$" "$REPO_DIR/shared/lib/wavemill-mill.sh" | cut -d: -f1)
-HEREDOC_CONTENT=$(sed -n "${MONITOR_EOF_START},${MONITOR_EOF_END}p" "$REPO_DIR/shared/lib/wavemill-mill.sh")
+echo "=== Monitor Script Regression Guards ==="
+HEREDOC_CONTENT=$(cat "$REPO_DIR/shared/lib/wavemill-monitor.sh")
 MATCH_COUNT=$(echo "$HEREDOC_CONTENT" | grep -c "^save_migration_reservation()" || true)
 if [ "$MATCH_COUNT" -gt 0 ]; then
-  pass "save_migration_reservation is defined in MONITOR_EOF heredoc"
+  pass "save_migration_reservation is defined in the monitor script"
 else
-  fail "save_migration_reservation missing from MONITOR_EOF heredoc (will cause 'command not found' at runtime)"
+  fail "save_migration_reservation missing from monitor script (will cause 'command not found' at runtime)"
 fi
 
 echo ""
@@ -2541,6 +2539,167 @@ if [[ "$queue_backstage_render" == *"Queue: degraded"* && "$queue_backstage_rend
   pass "backstage health summary renders degraded queue health"
 else
   fail "backstage health summary did not render degraded queue health"
+fi
+
+# ── Malformed challenge-pair state stubs (HOK-2926) ──────────────────────
+# A primary whose ledger write was rejected ends up as a bare object with
+# challenge metadata but no slug. gather_tasks filters it out, so without an
+# explicit warning the arm is invisible while its agent keeps running.
+# These fixtures live in their own directory so the backstage/queue health
+# files written above do not add unrelated warning rows.
+
+echo ""
+echo "=== Malformed challenge-pair state warning (HOK-2926) ==="
+
+MALFORMED_DIR="$TMP_DIR/malformed-challenge"
+mkdir -p "$MALFORMED_DIR" \
+  "$WORKTREES_DIR/malformed-pair-challenger/features/malformed-pair-challenger" \
+  "$WORKTREES_DIR/healthy-solo-task/features/healthy-solo-task"
+
+MALFORMED_STATE="$MALFORMED_DIR/state.json"
+MALFORMED_BEHAVIOR="$MALFORMED_DIR/behavior.json"
+MALFORMED_OUTPUT="$MALFORMED_DIR/output.txt"
+cat > "$MALFORMED_BEHAVIOR" <<'EOF'
+{
+  "pane": {
+    "HOK-2918_c-malformed-pair-challenger": "5",
+    "HOK-2919-healthy-solo-task": "6"
+  }
+}
+EOF
+
+# One stub: the exact shape observed on HOK-2918 — challenge metadata only.
+cat > "$MALFORMED_STATE" <<EOF
+{
+  "tasks": {
+    "HOK-2918": {
+      "phase": "planning",
+      "windowId": "@69",
+      "challengerLaunched": true,
+      "challengePairId": "HOK-2918",
+      "challengeStage": "implementation",
+      "challengeExecutionIntent": { "pairId": "HOK-2918", "decisionSource": "bootstrap" }
+    },
+    "HOK-2918_c": {
+      "slug": "malformed-pair-challenger",
+      "branch": "task/malformed-pair-challenger",
+      "worktree": "$WORKTREES_DIR/malformed-pair-challenger",
+      "status": "active",
+      "phase": "coding",
+      "pr": "",
+      "challenge": true,
+      "challengePairId": "HOK-2918",
+      "challengeRole": "challenger"
+    },
+    "HOK-2919": {
+      "slug": "healthy-solo-task",
+      "branch": "task/healthy-solo-task",
+      "worktree": "$WORKTREES_DIR/healthy-solo-task",
+      "status": "active",
+      "phase": "coding",
+      "pr": ""
+    },
+    "HOK-2920": {
+      "phase": "planning"
+    }
+  }
+}
+EOF
+
+run_render "$MALFORMED_STATE" "$WORKTREES_DIR" "$MALFORMED_BEHAVIOR" "$MALFORMED_OUTPUT"
+malformed_render="$(cat "$MALFORMED_OUTPUT")"
+
+if [[ "$malformed_render" == *"WARN: challenge pair entry HOK-2918 has no slug"* ]]; then
+  pass "slug-less challenge pair entry surfaces as a dashboard warning"
+else
+  echo "    render: $malformed_render"
+  fail "slug-less challenge pair entry did not surface as a dashboard warning"
+fi
+
+if [[ "$malformed_render" == *"HOK-2926"* ]]; then
+  pass "malformed challenge warning cites the repair issue"
+else
+  fail "malformed challenge warning does not cite the repair issue"
+fi
+
+if [[ "$malformed_render" == *"HOK-2918_c"* && "$malformed_render" == *"HOK-2919"* ]]; then
+  pass "valid challenger and solo task rows still render beside the warning"
+else
+  echo "    render: $malformed_render"
+  fail "valid task rows were lost when a malformed challenge entry was present"
+fi
+
+if [[ "$malformed_render" != *"HOK-2920"* ]]; then
+  pass "slug-less non-challenge entry stays silently filtered (no warning, no row)"
+else
+  echo "    render: $malformed_render"
+  fail "slug-less non-challenge entry leaked into the dashboard"
+fi
+
+# The warning must be a header row, not a task row: the stub has no worktree
+# to act on, so it must never be classified as an inbox/active task.
+malformed_warning_line_count="$(grep -c 'WARN: challenge pair entry' "$MALFORMED_OUTPUT" || true)"
+malformed_task_row_count="$(grep -cE '^[^├]*HOK-2918[^_]' "$MALFORMED_OUTPUT" || true)"
+if [[ "$malformed_warning_line_count" == "1" && "$malformed_task_row_count" == "0" ]]; then
+  pass "malformed challenge entry renders exactly one warning row and no task row"
+else
+  echo "    warning rows: $malformed_warning_line_count, task rows: $malformed_task_row_count"
+  echo "    render: $malformed_render"
+  fail "malformed challenge entry rendered as a task row or duplicated its warning"
+fi
+
+# Several stubs are reported together on one row.
+jq '.tasks["HOK-2921"] = {phase: "planning", challengePairId: "HOK-2921", challengerLaunched: true}' \
+  "$MALFORMED_STATE" > "$MALFORMED_DIR/state.multi.json"
+run_render "$MALFORMED_DIR/state.multi.json" "$WORKTREES_DIR" "$MALFORMED_BEHAVIOR" "$MALFORMED_OUTPUT"
+malformed_multi_render="$(cat "$MALFORMED_OUTPUT")"
+if [[ "$malformed_multi_render" == *"WARN: 2 challenge pair entries have no slug (HOK-2918, HOK-2921)"* ]]; then
+  pass "multiple slug-less challenge pair entries are reported together"
+else
+  echo "    render: $malformed_multi_render"
+  fail "multiple slug-less challenge pair entries were not reported together"
+fi
+
+# Healthy state: no warning row at all.
+jq 'del(.tasks["HOK-2918"]) | del(.tasks["HOK-2920"])' "$MALFORMED_STATE" > "$MALFORMED_DIR/state.healthy.json"
+run_render "$MALFORMED_DIR/state.healthy.json" "$WORKTREES_DIR" "$MALFORMED_BEHAVIOR" "$MALFORMED_OUTPUT"
+malformed_healthy_render="$(cat "$MALFORMED_OUTPUT")"
+if [[ "$malformed_healthy_render" != *"challenge pair entr"* ]]; then
+  pass "healthy challenge pair state renders no malformed-entry warning"
+else
+  echo "    render: $malformed_healthy_render"
+  fail "healthy challenge pair state produced a spurious malformed-entry warning"
+fi
+
+# Direct helper contract: unreadable/missing state and non-object task values
+# fail closed (return 1, print nothing) instead of erroring the render loop.
+malformed_helper_probe="$(
+  set -- test-session "$WORKTREES_DIR" "$MALFORMED_STATE"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  printf '%s\n' '{"tasks":{"HOK-1":"not-an-object","HOK-2":null,"HOK-3":{"challengePairId":"HOK-3"}}}' > "$MALFORMED_DIR/state.odd.json"
+  if out="$(malformed_challenge_state_warning "$MALFORMED_DIR/state.odd.json")"; then
+    echo "odd:0:$out"
+  else
+    echo "odd:1:$out"
+  fi
+  if out="$(malformed_challenge_state_warning "$MALFORMED_DIR/does-not-exist.json")"; then
+    echo "missing:0:$out"
+  else
+    echo "missing:1:$out"
+  fi
+  if out="$(malformed_challenge_state_warning "")"; then
+    echo "empty:0:$out"
+  else
+    echo "empty:1:$out"
+  fi
+)"
+if [[ "$malformed_helper_probe" == *"odd:0:challenge pair entry HOK-3 has no slug"* \
+  && "$malformed_helper_probe" == *"missing:1:"* \
+  && "$malformed_helper_probe" == *"empty:1:"* ]]; then
+  pass "malformed challenge helper tolerates non-object task values and fails closed on missing state"
+else
+  echo "    probe: $malformed_helper_probe"
+  fail "malformed challenge helper contract violated"
 fi
 
 echo ""

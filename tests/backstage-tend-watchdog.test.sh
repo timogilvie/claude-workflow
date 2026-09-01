@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 TMP_DIR="$(mktemp -d)"
@@ -62,7 +62,7 @@ for fn in \
   backstage_tend_restart_diagnostic \
   check_backstage_health
 do
-  extract_function "$MILL_SCRIPT" "$fn" >> "$FUNCS_FILE"
+  extract_function "$MONITOR_SCRIPT_FILE" "$fn" >> "$FUNCS_FILE"
   printf '\n' >> "$FUNCS_FILE"
 done
 source "$FUNCS_FILE"

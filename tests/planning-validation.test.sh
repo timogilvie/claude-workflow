@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -66,10 +66,10 @@ extract_function() {
 }
 
 log_warn() { :; }
-eval "$(extract_function "$MILL_SCRIPT" capture_planning_baseline)"
-eval "$(extract_function "$MILL_SCRIPT" validate_planning_phase_output)"
-eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_feature_artifact_path)"
-eval "$(extract_function "$MILL_SCRIPT" wavemill_owned_dirty_path)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" capture_planning_baseline)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" validate_planning_phase_output)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" wavemill_owned_feature_artifact_path)"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" wavemill_owned_dirty_path)"
 
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT

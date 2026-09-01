@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -24,7 +24,7 @@ extract_function() {
     $0 ~ "^" name "\\(\\) \\{" { capture=1 }
     capture { print }
     /^}/ && capture { exit }
-  ' "$MILL_SCRIPT"
+  ' "$MONITOR_SCRIPT_FILE"
 }
 
 eval "$(extract_function native_hook_terminal_failure_detail)"
