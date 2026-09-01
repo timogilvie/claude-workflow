@@ -26,6 +26,11 @@ HELPERS="$(awk '
   capture { print }
 ' "$MONITOR_SCRIPT_FILE")"
 eval "$HELPERS"
+# handle_phase_launch_result records terminal causes via the shared
+# bounded-retry helpers (HOK-2924).
+# shellcheck source=../shared/lib/bounded-retry.sh
+source "$REPO_DIR/shared/lib/bounded-retry.sh"
+eval "$(extract_function phase_launch_head)"
 eval "$(extract_function resolve_phase_model)"
 eval "$(extract_function resolve_stage_result_model)"
 eval "$(extract_function challenge_cancel_challenger_arm)"
