@@ -193,6 +193,15 @@ subsystems in the codebase.
 - Performance: ...
 - Backwards compatibility: ...
 
+**Model promotion issues**: when the issue promotes a provisional model, the constraint set must be
+satisfiable with the standard tooling alone. Prescribe the full script-driven sequence:
+`tools/promote-provisional-model.ts --apply` (lands the conservative pre-certification state), then
+certification and Hokusai reconciliation, then `tools/promote-provisional-model.ts --activate`
+(verifies the certification artifact and flips `readOnlyNative`, `certifiedAt`, `launchEligible`,
+`routingEligible`, and `evidencePolicy`). Keep "manual editing of the model registry is forbidden"
+as a hard rule — but never require a post-certification enablement step without also prescribing
+`--activate` as the mechanism for it, since that pairing is otherwise unsatisfiable.
+
 ---
 
 ## 6. Validation Steps

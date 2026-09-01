@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
 RUNNER_SCRIPT="$REPO_DIR/shared/lib/wavemill-startup-runner.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -188,8 +189,8 @@ write_plan() {
 
 echo "=== Startup Handoff Regression Guards ==="
 
-if [[ ! -f "$MILL_SCRIPT" || ! -f "$RUNNER_SCRIPT" ]]; then
-  fail "required mill/startup-runner scripts are missing"
+if [[ ! -f "$MILL_SCRIPT" || ! -f "$RUNNER_SCRIPT" || ! -f "$MONITOR_SCRIPT_FILE" ]]; then
+  fail "required mill/startup-runner/monitor scripts are missing"
   echo ""
   echo "--- Results: $PASS passed, $FAIL failed ---"
   exit 1
@@ -203,7 +204,7 @@ PRE_TMUX_BLOCK="$(awk '
 
 OUTER_PRE_HANDOFF_BLOCK="$(awk '
   /^LAUNCH_ARGS=\(\)$/ { capture=1 }
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { capture=0 }
+  /^cp "\$SCRIPT_DIR\/wavemill-monitor\.sh" "\$MONITOR_SCRIPT"$/ { capture=0 }
   capture { print }
 ' "$MILL_SCRIPT")"
 
@@ -226,49 +227,49 @@ WINDOW_RESOLUTION_BLOCK="$(awk '
   /^_tmux_window_target_exists\(\) \{/ { capture=1 }
   /^_ensure_task_window_exists\(\) \{/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 ENSURE_WINDOW_BLOCK="$(awk '
   /^_ensure_task_window_exists\(\) \{/ { capture=1 }
   /^# Relaunch an in-flight task/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 RESTORE_WINDOW_BLOCK="$(awk '
   /^_restore_inflight_task_window_if_missing\(\) \{/ { capture=1 }
   /^# Launch an agent in a tmux window/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 REROUTE_EXPANDED_BLOCK="$(awk '
   /^reroute_expanded_packets_for_coding_handoff\(\) \{/ { capture=1 }
   /^recover_missing_expansion_artifact\(\) \{/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 LAUNCH_PLANNING_BLOCK="$(awk '
   /^launch_planning_phase\(\) \{/ { capture=1 }
   /^# Launch the coding phase/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 LAUNCH_CODING_BLOCK="$(awk '
   /^launch_coding_phase\(\) \{/ { capture=1 }
   /^# Launch the review phase/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 LAUNCH_REVIEW_BLOCK="$(awk '
   /^launch_review_phase\(\) \{/ { capture=1 }
   /^# Restore the operator-facing review window/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 LAUNCH_READY_BLOCK="$(awk '
   /^launch_ready_phase\(\) \{/ { capture=1 }
   /^cleanup_task\(\) \{/ { capture=0 }
   capture { print }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ "$WINDOW_RESOLUTION_BLOCK" == *'.tasks[$issue].windowId'* ]] \
   && [[ "$WINDOW_RESOLUTION_BLOCK" == *'_tmux_window_target_exists "$session" "$stored_target" "$wt_dir"'* ]] \
@@ -404,7 +405,7 @@ do
       }
     ' "$source_file"
   }
-  extracted="$(extract_function "$MILL_SCRIPT" "$fn")"
+  extracted="$(extract_function "$MONITOR_SCRIPT_FILE" "$fn")"
   if [[ -z "$extracted" ]]; then
     fail "missing extracted helper for expected replacement test: $fn"
   fi

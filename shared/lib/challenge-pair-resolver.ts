@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { loadWavemillConfig } from './config.ts';
+import { getChallengeEvalHardFailureRetryMaxAttempts } from './config.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import {
   appendChallengeComparison,
@@ -28,7 +28,6 @@ import {
 import { repairChallengePairingSync } from './challenge-pairing-repair.ts';
 
 const ORPHAN_PAIR_GRACE_MS = 60_000;
-const DEFAULT_HARD_FAILURE_RETRY_MAX = 2;
 const UNKNOWN_PR_NUMBER = 0;
 const UNKNOWN_MODEL = 'unknown';
 const PRIMARY_MERGED_REASON = 'Primary already merged as PR';
@@ -82,7 +81,7 @@ export async function resolveUnresolvablePair(input: UnresolvablePairInput): Pro
   if (!pairState) {
     return { status: 'skipped', reason: `Pair ${input.pairId} is not present in workflow state.` };
   }
-  const retryMax = getHardFailureRetryMax(input.repoDir);
+  const retryMax = getChallengeEvalHardFailureRetryMaxAttempts(input.repoDir);
 
   if ((workflow.activeJobsByPair.get(input.pairId) ?? []).length > 0) {
     return { status: 'skipped', reason: `Pair ${input.pairId} still has active eval/comparison work.` };
@@ -552,16 +551,4 @@ async function markChallengerSupersededForPrimaryMerge(
     task.updated = timestamp;
     return current;
   });
-}
-
-function getHardFailureRetryMax(repoDir: string): number {
-  const fromEnv = Number(process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES ?? '');
-  if (Number.isInteger(fromEnv) && fromEnv >= 0) {
-    return fromEnv;
-  }
-
-  const raw = loadWavemillConfig(repoDir).challenge?.eval?.retryMaxAttempts;
-  return typeof raw === 'number' && Number.isInteger(raw) && raw >= 0
-    ? raw
-    : DEFAULT_HARD_FAILURE_RETRY_MAX;
 }

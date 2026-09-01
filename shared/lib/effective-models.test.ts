@@ -5,7 +5,11 @@ import {
   listChallengerEligibleModelsForStage,
   listEffectiveModelsForStage,
 } from './effective-models.ts';
-import { explainModelSupportExclusion } from './model-registry.ts';
+import { DEFAULT_MODEL_REGISTRY, explainModelSupportExclusion, type ModelRegistry } from './model-registry.ts';
+
+function cloneRegistry(): ModelRegistry {
+  return JSON.parse(JSON.stringify(DEFAULT_MODEL_REGISTRY)) as ModelRegistry;
+}
 
 describe('effective-models', () => {
   it('excludes retired native-openrouter aliases from coding availability', () => {
@@ -99,31 +103,58 @@ describe('challenger eligibility', () => {
     }
   });
 
-  it('permits only provisional identity, never any other exclusion', () => {
-    // Every other exclusion must still apply. A blocked, disabled or
-    // stage-incompatible model must not reach the challenger pool.
+  it('matches the effective stage projection exactly', () => {
     for (const stage of ['planning', 'coding', 'review'] as const) {
-      const primary = new Set(listEffectiveModelsForStage(stage, {}).models);
-      const extra = listChallengerEligibleModelsForStage(stage, {}).models
-        .filter((model) => !primary.has(model));
-
-      for (const model of extra) {
-        assert.equal(
-          explainModelSupportExclusion(model, stage),
-          'provisional-identity',
-          `${model} entered the challenger pool for a reason other than provisional identity`,
-        );
-      }
+      assert.deepEqual(
+        listChallengerEligibleModelsForStage(stage, {}).models,
+        listEffectiveModelsForStage(stage, {}).models,
+      );
     }
   });
 
-  it('does not widen the primary pool at all', () => {
+  it('does not admit provisional routing-ineligible identities to challenger pools', () => {
+    const registry = cloneRegistry();
+    const base = registry.models['glm-5.3-flash'];
+    assert.ok(base, 'expected fixture base model to exist');
+    registry.models['hok-2920-provisional'] = {
+      ...base,
+      qualityScores: {
+        expansion: 0,
+        planning: 0,
+        coding: 0,
+        review: 0,
+      },
+      supportedModel: {
+        ...base.supportedModel,
+        wavemillAlias: 'hok-2920-provisional',
+        providerNativeId: 'test/hok-2920-provisional',
+        stages: ['planning', 'coding', 'review'],
+        launchEligible: true,
+        routingEligible: false,
+      },
+      identity: {
+        status: 'provisional',
+        revision: 1,
+        fingerprint: 'a'.repeat(64),
+        displayName: 'HOK 2920 Provisional',
+        family: 'unknown',
+        evidencePolicy: 'held',
+      },
+    };
+
     for (const stage of ['planning', 'coding', 'review'] as const) {
-      const primary = listEffectiveModelsForStage(stage, {}).models;
-      const challenger = listChallengerEligibleModelsForStage(stage, {}).models;
-      // Challenger is a strict superset; primary must lose nothing and gain nothing.
-      assert.ok(primary.every((model) => challenger.includes(model)));
-      assert.equal(primary.includes('ox-alpha'), false);
+      assert.equal(
+        explainModelSupportExclusion('hok-2920-provisional', stage, registry),
+        'provisional-identity',
+      );
+      assert.equal(
+        listEffectiveModelsForStage(stage, { registry }).models.includes('hok-2920-provisional'),
+        false,
+      );
+      assert.equal(
+        listChallengerEligibleModelsForStage(stage, { registry }).models.includes('hok-2920-provisional'),
+        false,
+      );
     }
   });
 });

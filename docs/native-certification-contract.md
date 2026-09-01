@@ -124,6 +124,62 @@ All TTL evaluation functions accept an optional `now: Date` parameter so unit te
 
 ---
 
+## Automatic Remediation
+
+Mill startup preflight evaluates the global certification store before launching native agents. When coverage reports `identity-drift`, `stale`, `bump-without-publish`, or `empty-store`, preflight attempts one deterministic `workflow` certification publication before blocking startup. It then re-evaluates coverage and launches only if the post-remediation result is healthy. Mill dry-runs set `WAVEMILL_MILL_DRY_RUN=1` and do not mutate the global certification store.
+
+Artifacts that are still fresh but will expire inside the renewal window are renewed proactively. The default window is 7 days and can be configured with:
+
+```json
+{
+  "nativeAgent": {
+    "certification": {
+      "renewalWindowDays": 7
+    }
+  }
+}
+```
+
+Automatic remediation runs only the deterministic certification harness. Provisional models that require `OPENROUTER_LIVE_SMOKE=1` are excluded from automatic target selection, and the remediation call strips `OPENROUTER_LIVE_SMOKE` from its scoped environment.
+
+The remediation loop guard records one attempt per current catalog hash, required suite version, target set, and process under the global certification root. A second preflight for the same failing identity in that process blocks with the manual certification command instead of repeatedly re-running the matrix. A later process may try again, so an old failure cannot permanently suppress TTL renewal or recovery after artifacts are replaced.
+
+Operators can disable only the automatic repair behavior while keeping the guard active:
+
+```json
+{
+  "nativeAgent": {
+    "certification": {
+      "autoRemediate": false
+    }
+  }
+}
+```
+
+The equivalent environment override is `WAVEMILL_SKIP_CERTIFICATION_AUTO_REMEDIATE=1`. The existing `WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1` disables both the guard and remediation and should remain an emergency-only escape hatch.
+
+---
+
+## Orphan Pruning
+
+Coverage reports artifacts whose storage identity no longer maps to any native-certifiable registry model as orphan artifacts. Orphans do not count against fleet health.
+
+Use dry-run mode to inspect candidates:
+
+```bash
+wavemill native-agent certifications prune
+```
+
+Delete candidates explicitly with:
+
+```bash
+wavemill native-agent certifications prune --yes
+```
+
+Pruning unlinks global artifacts and then best-effort removes empty parent directories. Because artifact reads fail closed, a concurrent launch that races with pruning may see `missing`; run prune during maintenance windows.
+
+---
+
 ## Reason Codes
 
 The evaluator returns one of the following stable reason codes when a certification is ineligible:
@@ -256,7 +312,6 @@ The per-check helpers (`checkSchemaVersion`, `checkSuiteVersion`, `checkNotExpir
 This contract covers **only** the certification schema, storage path, phase semantics, TTL policy, and fail-closed evaluation helpers. It does not:
 
 - Change any existing router, harness, registry, or CLI routing behavior.
-- Define how certification runs are triggered or orchestrated.
 - Specify which suite scenarios are required for each phase level.
 
 These concerns are addressed in downstream implementation issues that consume this contract.

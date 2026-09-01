@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 ADAPTERS_SCRIPT="$REPO_DIR/shared/lib/agent-adapters.sh"
 
@@ -51,11 +52,7 @@ TEST_SESSION="TESTREC$$"
 trap 'rm -rf "$TEST_TMP"; rm -f /tmp/wavemill-'"$TEST_SESSION"'-*.hook /tmp/wavemill-'"$TEST_SESSION"'-*.retry /tmp/wavemill-'"$TEST_SESSION"'-*.exit 2>/dev/null || true' EXIT
 
 extract_monitor_heredoc() {
-  awk '
-    /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-    /^MONITOR_EOF$/ { found=0; next }
-    found { print }
-  ' "$MILL_SCRIPT"
+  cat "$MONITOR_SCRIPT_FILE"
 }
 
 extract_function() {

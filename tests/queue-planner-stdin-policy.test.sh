@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -35,11 +36,7 @@ check_contains() {
 }
 
 extract_monitor_heredoc() {
-  awk '
-    /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-    /^MONITOR_EOF$/ { found=0; next }
-    found { print }
-  ' "$MILL_SCRIPT"
+  cat "$MONITOR_SCRIPT_FILE"
 }
 
 extract_function() {

@@ -277,6 +277,7 @@ export interface ChallengeGateConfig {
 
 export interface ChallengeEvalConfig {
   retryMaxAttempts?: number;
+  hardFailureRetryMaxAttempts?: number;
 }
 
 export interface ChallengeConfig {
@@ -395,6 +396,11 @@ export interface NativePatchCodingConfig {
   enabled?: boolean;
 }
 
+export interface NativeCertificationConfig {
+  autoRemediate?: boolean;
+  renewalWindowDays?: number;
+}
+
 export interface NativeContextManagementConfig {
   compactionThreshold?: number;
   safetyMarginPct?: number;
@@ -421,6 +427,7 @@ export interface NativeAgentConfig {
   };
   planning?: NativePlanningConfig;
   patchCoding?: NativePatchCodingConfig;
+  certification?: NativeCertificationConfig;
   contextManagement?: NativeContextManagementConfig;
   providers?: NativeAgentProvidersConfig;
 }
@@ -878,6 +885,8 @@ export const DEFAULT_READY_MIGRATION_DANGER_LABELS = {
   drop_table: 'migration:destructive',
   alter_column_type: 'migration:long-running',
 } as const;
+
+const DEFAULT_CHALLENGE_EVAL_HARD_FAILURE_RETRY_MAX_ATTEMPTS = 2;
 
 // ────────────────────────────────────────────────────────────────
 // Schema Validation
@@ -1472,6 +1481,29 @@ export function getChallengeGateConfig(repoDir?: string): Required<ChallengeGate
   return {
     coolOffSeconds: gate.coolOffSeconds ?? 300,
   };
+}
+
+function parseNonNegativeIntegerSetting(value: unknown): number | null {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  if (typeof value !== 'string' || !/^[0-9]+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+export function getChallengeEvalHardFailureRetryMaxAttempts(repoDir?: string): number {
+  const fromEnv = parseNonNegativeIntegerSetting(process.env.WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES);
+  if (fromEnv !== null) {
+    return fromEnv;
+  }
+
+  const fromConfig = parseNonNegativeIntegerSetting(
+    loadWavemillConfig(repoDir).challenge?.eval?.hardFailureRetryMaxAttempts,
+  );
+  return fromConfig ?? DEFAULT_CHALLENGE_EVAL_HARD_FAILURE_RETRY_MAX_ATTEMPTS;
 }
 
 /**

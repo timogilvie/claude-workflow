@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -42,7 +42,7 @@ extract_function() {
 }
 
 # ── Static contract: review launch materializes the baseline ──
-launch_body="$(extract_function "$MILL_SCRIPT" "launch_review_phase")"
+launch_body="$(extract_function "$MONITOR_SCRIPT_FILE" "launch_review_phase")"
 if [[ "$launch_body" == *"ensure_review_scope_baseline"* ]]; then
   pass "launch_review_phase calls ensure_review_scope_baseline"
 else
@@ -50,7 +50,7 @@ else
 fi
 
 # ── Behavior: extract and run ensure_review_scope_baseline for real ──
-eval "$(extract_function "$MILL_SCRIPT" "ensure_review_scope_baseline")"
+eval "$(extract_function "$MONITOR_SCRIPT_FILE" "ensure_review_scope_baseline")"
 
 # shellcheck disable=SC2034  # read by the eval'd ensure_review_scope_baseline
 TOOLS_DIR="$REPO_DIR/tools"

@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
 
 TMP_DIR="$(mktemp -d)"
@@ -75,17 +76,12 @@ assert_file_missing() {
 
 source "$COMMON_SCRIPT"
 
-HEREDOC_CONTENT="$(awk '
-  /^cat > "\$MONITOR_SCRIPT" <<'\''MONITOR_EOF'\''$/ { found=1; next }
-  /^MONITOR_EOF$/ { found=0; next }
-  found { print }
-' "$MILL_SCRIPT")"
+HEREDOC_CONTENT="$(cat "$MONITOR_SCRIPT_FILE")"
 
 FUNCS_FILE="$TMP_DIR/advance-monitor-funcs.sh"
 : > "$FUNCS_FILE"
 for fn in \
   read_state_value \
-  get_task_phase \
   read_stage_result \
   read_stage_status \
   check_stage_complete \

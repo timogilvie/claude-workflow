@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 COMMON_LIB="$REPO_DIR/shared/lib/wavemill-common.sh"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/lifecycle"
 
@@ -179,7 +179,7 @@ for fn in \
   cleanup_merged_primary_challenge_task \
   monitor_issue_state
 do
-  extract_function "$MILL_SCRIPT" "$fn" >> "$MONITOR_FUNC_FILE"
+  extract_function "$MONITOR_SCRIPT_FILE" "$fn" >> "$MONITOR_FUNC_FILE"
   printf '\n' >> "$MONITOR_FUNC_FILE"
 done
 

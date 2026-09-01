@@ -13,8 +13,10 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import Ajv from 'ajv';
 import type { EvalRecord, RoutingRole } from './eval-schema.ts';
 import {
+  assertRegistryConsistency,
   computeIdentityFingerprint,
   type ModelCapabilities,
+  type NativeCertificationMetadata,
 } from './model-registry.ts';
 import {
   loadModelRegistryCatalog,
@@ -28,8 +30,10 @@ import {
   isRevisionAwareArtifact,
   phaseSatisfies,
   type CertificationPhase,
+  type CertificationSubject,
+  type NativeCertificationArtifact,
 } from './native-agent/certification/schema.ts';
-import { readCertification } from './native-agent/certification/store.ts';
+import { listGlobalCertifications, readCertification } from './native-agent/certification/store.ts';
 import {
   resolveCertificationSubject,
   subjectsEqual,
@@ -152,6 +156,48 @@ export interface PlanPromotionOptions {
 
 export interface ApplyPromotionOptions extends PlanPromotionOptions {
   manifest?: PromotionManifest;
+}
+
+export type ActivationStatus = 'activated' | 'already_activated';
+
+export interface ActivatePromotionOptions {
+  spec: ModelTransitionSpec;
+  repoDir: string;
+  now?: string;
+  /**
+   * Certification store root override. Defaults to the global store
+   * (`~/.wavemill/native-agent-certifications`, or
+   * `WAVEMILL_NATIVE_CERTIFICATION_ROOT` when set).
+   */
+  certificationRoot?: string;
+}
+
+export interface ActivationManifest {
+  schemaVersion: '1';
+  manifestId: string;
+  promotionId: string;
+  mode: 'activate';
+  status: ActivationStatus;
+  repoDir: string;
+  createdAt: string;
+  final: ModelTransitionSpec['final'];
+  certification: {
+    path: string;
+    certifiedAt: string;
+    phase: CertificationPhase;
+    suiteVersion: string;
+    subject: CertificationSubject;
+  };
+  registry: {
+    path: string;
+    relativePath: string;
+    beforeHash: string;
+    afterHash: string;
+    backupPath?: string;
+  };
+  fieldChanges: string[];
+  diagnostics: string[];
+  manifestPath: string;
 }
 
 const TRANSITION_SCHEMA = JSON.parse(
@@ -438,6 +484,205 @@ export function rollbackModelPromotion(manifestPath: string): PromotionManifest 
     diagnostics: [...manifest.diagnostics, 'rollback restored exact backups'],
   };
   return rolledBack;
+}
+
+/**
+ * Activate an already-promoted model: the post-certification half of a
+ * promotion. The apply path deliberately lands the final model with
+ * `launchEligible`/`routingEligible` false, `readOnlyNative` partial, and
+ * `evidencePolicy` held; nothing may flip those until certification of the
+ * final subject has actually run. Activation verifies a matching
+ * revision-aware certification artifact in the certification store first, so
+ * the apply → certify → activate gate is enforced by the tool rather than by
+ * reviewer vigilance. Refusals leave the catalog byte-for-byte unchanged, and
+ * repeat invocations report `already_activated` without writing.
+ */
+export function activateModelPromotion(options: ActivatePromotionOptions): ActivationManifest {
+  const spec = validateModelTransitionSpec(options.spec);
+  const repoDir = resolve(options.repoDir);
+  const now = options.now ?? new Date().toISOString();
+  const catalogPath = resolveCatalogPath(repoDir, spec);
+  if (!catalogPath) {
+    throw new Error('No model registry catalog found; nothing to activate');
+  }
+  const beforeContent = readFileSync(catalogPath, 'utf-8');
+  const catalog = loadModelRegistryCatalog(catalogPath);
+  const finalEntry = catalog.models.find((entry) => entry.id === spec.final.alias);
+  if (!finalEntry) {
+    throw new Error(
+      `Catalog does not contain final model ${spec.final.alias}; run the promotion with --apply before --activate`,
+    );
+  }
+  const provisionalEntry = catalog.models.find((entry) => entry.id === spec.provisional.alias);
+  if (provisionalEntry?.capabilities.identity?.lineage?.successor !== spec.final.alias) {
+    throw new Error(
+      `Catalog entry ${spec.final.alias} is not the promoted successor of ${spec.provisional.alias}; refusing to activate`,
+    );
+  }
+  const capabilities = finalEntry.capabilities;
+  const nativeCapability = capabilities.nativeCapability;
+  const supportedModel = capabilities.supportedModel;
+  const identity = capabilities.identity;
+  if (!nativeCapability || !supportedModel || !identity) {
+    throw new Error(
+      `Final model ${spec.final.alias} is missing nativeCapability, supportedModel, or identity metadata; cannot activate`,
+    );
+  }
+
+  const certification = findActivationCertification(spec, catalog, options.certificationRoot);
+
+  const fieldChanges: string[] = [];
+  if (nativeCapability.readOnlyNative !== 'certified') {
+    nativeCapability.readOnlyNative = 'certified';
+    fieldChanges.push('nativeCapability.readOnlyNative=certified');
+  }
+  // The certification metadata mirrors the validated artifact: apply seeds a
+  // stale block from the provisional source (or none at all), and the actual
+  // certification timestamp only exists once the artifact does.
+  const certificationMetadata: NativeCertificationMetadata = {
+    ...(nativeCapability.certification ?? {}),
+    maxCertifiedPhase: certification.artifact.phase,
+    certifiedAt: certification.artifact.certifiedAt,
+    certificationSuiteVersion: certification.artifact.suiteVersion,
+  };
+  if (JSON.stringify(nativeCapability.certification) !== JSON.stringify(certificationMetadata)) {
+    nativeCapability.certification = certificationMetadata;
+    fieldChanges.push(`nativeCapability.certification.certifiedAt=${certification.artifact.certifiedAt}`);
+  }
+  if (supportedModel.launchEligible !== true) {
+    supportedModel.launchEligible = true;
+    fieldChanges.push('supportedModel.launchEligible=true');
+  }
+  if (supportedModel.routingEligible !== true) {
+    supportedModel.routingEligible = true;
+    fieldChanges.push('supportedModel.routingEligible=true');
+  }
+  if (identity.evidencePolicy !== 'eligible') {
+    identity.evidencePolicy = 'eligible';
+    fieldChanges.push('identity.evidencePolicy=eligible');
+  }
+
+  const manifestPath = activationManifestPath(repoDir, spec);
+  const beforeHash = sha256(beforeContent);
+  const relativeCatalogPath = relative(repoDir, catalogPath);
+  const baseManifest = {
+    schemaVersion: '1' as const,
+    manifestId: spec.manifestId ?? spec.promotionId,
+    promotionId: spec.promotionId,
+    mode: 'activate' as const,
+    repoDir,
+    createdAt: now,
+    final: spec.final,
+    certification: {
+      path: certification.path,
+      certifiedAt: certification.artifact.certifiedAt,
+      phase: certification.artifact.phase,
+      suiteVersion: certification.artifact.suiteVersion,
+      subject: certification.artifact.subject,
+    },
+    fieldChanges,
+    manifestPath,
+  };
+
+  if (fieldChanges.length === 0) {
+    return {
+      ...baseManifest,
+      status: 'already_activated',
+      registry: {
+        path: catalogPath,
+        relativePath: relativeCatalogPath,
+        beforeHash,
+        afterHash: beforeHash,
+      },
+      diagnostics: ['model already activated; no writes performed'],
+    };
+  }
+
+  // The activated catalog must still satisfy every registry invariant (e.g.
+  // readOnlyNative=certified must agree with the transport compat flags)
+  // before any file is touched.
+  assertRegistryConsistency(projectModelRegistryCatalog(catalog));
+
+  const afterContent = `${JSON.stringify(catalog, null, 2)}\n`;
+  const backupPath = join(promotionDir(repoDir, spec), 'activation-backups', relativeCatalogPath);
+  mkdirSync(dirname(backupPath), { recursive: true });
+  if (!existsSync(backupPath)) {
+    copyFileSync(catalogPath, backupPath);
+  }
+  const tempPath = tempPathFor(catalogPath, spec);
+  writeFileSync(tempPath, afterContent, 'utf-8');
+  renameSync(tempPath, catalogPath);
+
+  const manifest: ActivationManifest = {
+    ...baseManifest,
+    status: 'activated',
+    registry: {
+      path: catalogPath,
+      relativePath: relativeCatalogPath,
+      beforeHash,
+      afterHash: sha256(afterContent),
+      backupPath,
+    },
+    diagnostics: [`activation flipped ${fieldChanges.length} field(s) after verified certification`],
+  };
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf-8');
+  return manifest;
+}
+
+interface ActivationCertification {
+  artifact: NativeCertificationArtifact;
+  path: string;
+}
+
+/**
+ * Locate a certification artifact that proves the promoted final subject was
+ * certified: current schema, revision-aware subject equal to the catalog's
+ * resolved subject, matching suite version, and a phase satisfying the
+ * highest phase the catalog requires. Throws when nothing qualifies.
+ */
+function findActivationCertification(
+  spec: ModelTransitionSpec,
+  catalog: ModelRegistryCatalog,
+  certificationRoot?: string,
+): ActivationCertification {
+  const registry = projectModelRegistryCatalog(catalog);
+  const capabilities = registry.models[spec.final.alias];
+  const suiteVersion = capabilities?.supportedModel?.certificationSuiteVersion
+    ?? capabilities?.nativeCapability?.certification?.certificationSuiteVersion
+    ?? capabilities?.supportedModel?.canonicalArtifactIdentity?.suiteVersion;
+  if (!suiteVersion) {
+    throw new Error(`Final model ${spec.final.alias} declares no certificationSuiteVersion; cannot verify certification`);
+  }
+  const requiredPhase = highestRequiredPhase(capabilities?.supportedModel?.requiredCertificationPhaseByStage)
+    ?? capabilities?.nativeCapability?.certification?.maxCertifiedPhase
+    ?? 'read-only';
+  const nativeProvider = capabilities?.nativeCapability?.nativeProvider;
+  if (!nativeProvider) {
+    throw new Error(`Final model ${spec.final.alias} declares no nativeProvider; cannot resolve certification subject`);
+  }
+  const subject = resolveCertificationSubject({
+    provider: nativeProvider,
+    model: spec.final.alias,
+    registry,
+  }).subject;
+  for (const certPath of listGlobalCertifications({ root: certificationRoot })) {
+    const result = readCertification(certPath);
+    if (!result.ok || !isRevisionAwareArtifact(result.artifact)) {
+      continue;
+    }
+    const artifact = result.artifact;
+    if (
+      artifact.suiteVersion === suiteVersion
+      && phaseSatisfies(artifact.phase, requiredPhase)
+      && subjectsEqual(artifact.subject, subject)
+    ) {
+      return { artifact, path: certPath };
+    }
+  }
+  throw new Error(
+    `No certification artifact for ${spec.final.alias} satisfies suite ${suiteVersion} at phase ${requiredPhase} or above; `
+    + 'certify the promoted model before --activate',
+  );
 }
 
 function buildPromotionPlan(options: PlanPromotionOptions): PromotionPlan {
@@ -1359,6 +1604,10 @@ function promotionDir(repoDir: string, spec: ModelTransitionSpec): string {
 
 function promotionManifestPath(repoDir: string, spec: ModelTransitionSpec): string {
   return join(promotionDir(repoDir, spec), `${spec.manifestId ?? spec.promotionId}.manifest.json`);
+}
+
+function activationManifestPath(repoDir: string, spec: ModelTransitionSpec): string {
+  return join(promotionDir(repoDir, spec), `${spec.manifestId ?? spec.promotionId}.activation.manifest.json`);
 }
 
 function backupPathFor(repoDir: string, spec: ModelTransitionSpec, filePath: string): string {

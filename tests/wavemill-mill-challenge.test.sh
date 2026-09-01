@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 FIXTURE="$REPO_DIR/tests/fixtures/challenge-task-packet.md"
 
 PASS=0
@@ -41,7 +42,7 @@ RUNTIME_BLOCK="$(awk '
   /challenge_args=\(--issue "\$issue"/ { capture=1 }
   capture { print }
   /log_warn "  \$issue: Planner challenge deferred until expanded route is available"/ && capture { capture=0; exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$STARTUP_BLOCK" ]]; then
   check_contains "startup block includes feature-dir hook" "$STARTUP_BLOCK" 'challenge_args+=(--feature-dir "${WORKTREE_ROOT}/${SLUG}/features/${SLUG}")'
@@ -86,7 +87,7 @@ RUNTIME_SAVE_BLOCK="$(awk '
   /# Save to state ledger/ { capture=1 }
   capture { print }
   /# Verify agent was saved correctly/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$RUNTIME_SAVE_BLOCK" ]]; then
   check_contains "runtime primary state saves planner agent for planning phase" "$RUNTIME_SAVE_BLOCK" '"${planner_agent:-$task_agent_cmd}"'
@@ -96,11 +97,115 @@ else
   fail "could not extract runtime state save block"
 fi
 
+echo ""
+echo "=== Bootstrap Challenge Primary Role (HOK-2926) ==="
+
+# The in-launch (bootstrap) pairing path forms the pair inside launch_task,
+# before the primary has any state entry, so the challenge_role seeded from
+# state is empty. The block must stamp "primary" itself: the canonical
+# save_task_state fails closed on an empty role for a challenge entry, and a
+# rejected primary write leaves the arm slug-less and invisible. The pre-launch
+# batch path (TASK_CHALLENGE_ROLE_BY_ISSUE) was never affected and is not what
+# this section covers.
+BOOTSTRAP_PAIR_BLOCK="$(awk '
+  /challenge_enabled_for_launch="true"/ { capture=1 }
+  capture { print }
+  /challenge_assert_arms_diverge "\$issue"/ && capture { exit }
+' "$MONITOR_SCRIPT_FILE")"
+
+if [[ -n "$BOOTSTRAP_PAIR_BLOCK" ]]; then
+  check_contains "bootstrap pair block stamps the primary role" "$BOOTSTRAP_PAIR_BLOCK" 'challenge_role="primary"'
+  check_contains "bootstrap pair block keeps the pair id on the primary" "$BOOTSTRAP_PAIR_BLOCK" 'challenge_pair="$issue"'
+
+  # The role must be assigned inside launch_task and before the ledger write.
+  launch_task_line="$(grep -n '^launch_task() {' "$MONITOR_SCRIPT_FILE" | head -1 | cut -d: -f1)"
+  role_line="$(grep -n 'challenge_role="primary"' "$MONITOR_SCRIPT_FILE" | head -1 | cut -d: -f1)"
+  save_line="$(grep -n '# Save to state ledger' "$MONITOR_SCRIPT_FILE" | head -1 | cut -d: -f1)"
+  if [[ -n "$launch_task_line" && -n "$role_line" && -n "$save_line" ]] \
+    && (( launch_task_line < role_line )) && (( role_line < save_line )); then
+    pass "bootstrap primary role is stamped inside launch_task before the state-ledger write"
+  else
+    echo "    launch_task=${launch_task_line:-?} role=${role_line:-?} save=${save_line:-?}"
+    fail "bootstrap primary role is not stamped between launch_task start and the state-ledger write"
+  fi
+else
+  fail "could not extract bootstrap challenge pair block"
+fi
+
+if [[ -n "$RUNTIME_SAVE_BLOCK" ]]; then
+  check_contains "runtime primary state write passes the seeded role" "$RUNTIME_SAVE_BLOCK" '"$effective_challenge" "$challenge_pair" "${challenge_role:-}"'
+  check_contains "runtime challenger state write passes the literal challenger role" "$RUNTIME_SAVE_BLOCK" '"true" "$challenge_pair" "challenger"'
+fi
+
+# Functional replay: evaluate the bootstrap block's own role/pair assignments
+# (lifted from the live monitor text, not re-typed here) and drive the
+# canonical writer exactly as launch_task does — seeded role from an empty
+# state entry, then the primary save, then the challengerLaunched mutation.
+BOOTSTRAP_ROLE_ASSIGNMENTS="$(printf '%s\n' "$BOOTSTRAP_PAIR_BLOCK" | grep -E '^[[:space:]]*challenge_(enabled_for_launch|pair|role)=' || true)"
+if [[ -n "$BOOTSTRAP_ROLE_ASSIGNMENTS" ]]; then
+  BOOTSTRAP_STATE_TMP="$(mktemp -d)"
+  BOOTSTRAP_STATE_FILE="$BOOTSTRAP_STATE_TMP/state.json"
+  printf '%s\n' '{"tasks":{}}' > "$BOOTSTRAP_STATE_FILE"
+  (
+    set +e
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    log_warn() { :; }
+    STATE_FILE="$BOOTSTRAP_STATE_FILE"
+    issue="HOK-2926"
+    challenge_role="$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // empty' "$STATE_FILE")"
+    eval "$BOOTSTRAP_ROLE_ASSIGNMENTS"
+    effective_challenge="$challenge_enabled_for_launch"
+    save_task_state "$issue" "bootstrap-primary" "task/bootstrap-primary" "/tmp/bootstrap-primary" "" "" "codex" "$issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "light" "medium" "static" "implementation" 2>/dev/null
+    echo "$?" > "$BOOTSTRAP_STATE_TMP/save.rc"
+    state_mutate "$STATE_FILE" '.tasks[$issue].challengerLaunched = true' --arg issue "$issue" >/dev/null 2>&1 || true
+  )
+  if [[ "$(cat "$BOOTSTRAP_STATE_TMP/save.rc")" == "0" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].slug // ""' "$BOOTSTRAP_STATE_FILE")" == "bootstrap-primary" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challengeRole // ""' "$BOOTSTRAP_STATE_FILE")" == "primary" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challengePairId // ""' "$BOOTSTRAP_STATE_FILE")" == "HOK-2926" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challenge' "$BOOTSTRAP_STATE_FILE")" == "true" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challengerLaunched' "$BOOTSTRAP_STATE_FILE")" == "true" ]]; then
+    pass "bootstrap primary replay writes a complete entry with challengeRole=primary"
+  else
+    echo "    state: $(cat "$BOOTSTRAP_STATE_FILE")"
+    fail "bootstrap primary replay did not produce a complete primary entry"
+  fi
+
+  # Control: the same replay without the role stamp reproduces the HOK-2926
+  # failure mode (rejected write, then a slug-less stub from the follow-up
+  # mutation). This pins the mechanism the fix guards against.
+  printf '%s\n' '{"tasks":{}}' > "$BOOTSTRAP_STATE_FILE"
+  (
+    set +e
+    source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    log_warn() { :; }
+    STATE_FILE="$BOOTSTRAP_STATE_FILE"
+    issue="HOK-2926"
+    challenge_role="$(jq -r --arg issue "$issue" '.tasks[$issue].challengeRole // empty' "$STATE_FILE")"
+    eval "$(printf '%s\n' "$BOOTSTRAP_ROLE_ASSIGNMENTS" | grep -v 'challenge_role=')"
+    effective_challenge="$challenge_enabled_for_launch"
+    save_task_state "$issue" "bootstrap-primary" "task/bootstrap-primary" "/tmp/bootstrap-primary" "" "" "codex" "$issue" "$effective_challenge" "$challenge_pair" "${challenge_role:-}" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "light" "medium" "static" "implementation" 2>/dev/null
+    echo "$?" > "$BOOTSTRAP_STATE_TMP/save.rc"
+    state_mutate "$STATE_FILE" '.tasks[$issue].challengerLaunched = true' --arg issue "$issue" >/dev/null 2>&1 || true
+  )
+  if [[ "$(cat "$BOOTSTRAP_STATE_TMP/save.rc")" != "0" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].slug // ""' "$BOOTSTRAP_STATE_FILE")" == "" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challengerLaunched' "$BOOTSTRAP_STATE_FILE")" == "true" ]]; then
+    pass "control: without the role stamp the primary write is rejected and only a slug-less stub remains"
+  else
+    echo "    state: $(cat "$BOOTSTRAP_STATE_FILE")"
+    fail "control replay did not reproduce the slug-less stub failure mode"
+  fi
+  rm -rf "$BOOTSTRAP_STATE_TMP"
+else
+  fail "could not lift role/pair assignments from the bootstrap challenge pair block"
+fi
+
 CODING_HANDOFF_BLOCK="$(awk '
   /if ! coder_agent="\$\(agent_resolve_from_model "\$coder_launch_model" "coding"\)"; then/ { capture=1 }
   capture { print }
   /launch_coding_phase "\$ISSUE"/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$CODING_HANDOFF_BLOCK" ]]; then
   check_contains "coding handoff updates task agent to coder" "$CODING_HANDOFF_BLOCK" '.tasks[$issue].agent = $agent'
@@ -116,14 +221,14 @@ FINALIZATION_HELPER="$(awk '
   /^finalize_challenge_execution_intent_before_coding\(\) \{/ { capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 CODING_FINALIZATION_BLOCK="$(awk '
   /FINALIZED_CHALLENGE_CODER=""/ { capture=1 }
   capture { print }
   /if \[\[ -n "\$FINALIZED_CHALLENGE_CODER" \]\]/ && capture { seen=1 }
   seen && /fi/ { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$FINALIZATION_HELPER" ]]; then
   check_contains "finalizer skips challenger side" "$FINALIZATION_HELPER" '[[ "$challenge_role_meta" != "challenger" ]] || return 0'
@@ -157,7 +262,7 @@ CANCEL_HELPER="$(awk '
   /^challenge_cancel_challenger_arm\(\) \{/ { capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$CANCEL_HELPER" ]]; then
   check_contains "collapse helper removes challenger state" "$CANCEL_HELPER" 'remove_task_state "$challenger_key"'
@@ -169,14 +274,14 @@ else
 fi
 
 SAVE_STATE_HELPER="$(awk '
-  /^save_task_state\(\) \{/ { count++; if (count == 2) capture=1 }
+  /^save_task_state\(\) \{/ { count++; if (count == 1) capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$REPO_DIR/shared/lib/wavemill-common.sh")"
 
 if [[ -n "$SAVE_STATE_HELPER" ]]; then
-  check_contains "runtime state saves preserve projected challenge intent" "$SAVE_STATE_HELPER" '(.tasks[$issue].challengeIntent // null) as $old_challenge_intent'
-  check_contains "runtime state writes projected challenge intent back" "$SAVE_STATE_HELPER" 'challengeIntent: $old_challenge_intent'
+  check_contains "canonical state writer merges over the stored task object" "$SAVE_STATE_HELPER" '.tasks[$issue] = ($existing + {'
+  check_contains "canonical state writer is atomic via state_mutate" "$SAVE_STATE_HELPER" 'state_mutate "$STATE_FILE"'
 
   # Exercise the production helper: startup pairing stores this projected
   # contract before either member is expanded, and later state updates must not
@@ -187,7 +292,6 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   source "$REPO_DIR/shared/lib/wavemill-common.sh"
   log_warn() { :; }
   STATE_FILE="$RUNTIME_STATE_FILE"
-  eval "$SAVE_STATE_HELPER"
   save_task_state "HOK-2724_c" "native-review" "task/native-review" "/tmp/native-review" "" "coding" "codex" "HOK-2724_c" "true" "HOK-2724" "challenger" "qwen-3-coder" "bootstrap-planner" "bootstrap-coder" "qwen-3-coder" "light" "medium" "llm" "review"
   if [[ "$(jq -r '.tasks["HOK-2724_c"].challengeIntent.challenger.expectedRoute.reviewer' "$RUNTIME_STATE_FILE")" == "qwen-3-coder" ]]; then
     pass "runtime state update retains challenge intent for native reviewer"
@@ -226,7 +330,7 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
     /^challenge_varied_stage_model\(\) \{/ { capture=1 }
     capture { print }
     /^}/ && capture { exit }
-  ' "$MILL_SCRIPT")"
+  ' "$MONITOR_SCRIPT_FILE")"
   if [[ -n "$CHALLENGE_VARIED_HELPER" ]]; then
     eval "$CHALLENGE_VARIED_HELPER"
     # Stand in for the mill helper; wavemill-common.sh does not define read_state_value.
@@ -269,14 +373,14 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   fi
   rm -rf "$RUNTIME_STATE_TMP"
 else
-  fail "could not extract runtime save_task_state helper"
+  fail "could not extract canonical save_task_state helper from wavemill-common.sh"
 fi
 
 DIVERGE_HELPER="$(awk '
   /^challenge_assert_arms_diverge\(\) \{/ { capture=1 }
   capture { print }
   /^}/ && capture { exit }
-' "$MILL_SCRIPT")"
+' "$MONITOR_SCRIPT_FILE")"
 
 if [[ -n "$DIVERGE_HELPER" ]]; then
   DIVERGE_TMP="$(mktemp -d)"

@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMMON_SCRIPT="$REPO_DIR/shared/lib/wavemill-common.sh"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -114,7 +114,7 @@ test_monitor_render_path_uses_helper() {
     /_task_frame="Next tasks:"/ { capture = 1 }
     capture { print }
     capture && /paint_task_list_frame/ { exit }
-  ' "$MILL_SCRIPT")"
+  ' "$MONITOR_SCRIPT_FILE")"
 
   check_contains "render path calls paint_task_list_frame" "$snippet" "paint_task_list_frame"
   check_not_contains "render path omits tput ed" "$snippet" "tput ed"
@@ -133,7 +133,7 @@ test_monitor_render_path_uses_helper() {
       }
       if (capture && depth == 0) exit
     }
-  ' "$MILL_SCRIPT")"
+  ' "$MONITOR_SCRIPT_FILE")"
 
   check_contains "paint_task_list_frame calls wavemill_pane_repaint" "$helper_def" "wavemill_pane_repaint"
 }
