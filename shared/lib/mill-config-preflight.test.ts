@@ -392,7 +392,7 @@ test('runMillConfigPreflight skips auto-remediation during mill dry-runs', async
           throw new Error('should not be called');
         },
       });
-      assert.equal(result.ok, true);
+      assert.equal(result.ok, false);
       assert.equal(result.report.certificationCoverage?.status, 'empty-store');
       assert.equal(result.report.certificationRemediation, undefined);
     } finally {
