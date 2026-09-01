@@ -123,6 +123,7 @@ for f in \
   "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \
   "$REPO_DIR"/tests/task-phase-canonicalization.test.sh \
   "$REPO_DIR"/tests/pr-state-merge-canonicalization.test.sh \
+  "$REPO_DIR"/tests/with-timeout.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \

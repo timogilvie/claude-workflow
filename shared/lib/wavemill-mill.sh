@@ -703,44 +703,6 @@ confirm() {
 }
 
 
-# Run a command with a hard wall-clock timeout (works on macOS without coreutils).
-# Usage: _with_timeout <seconds> <command> [args...]
-_with_timeout() {
-  local secs=$1
-  shift
-
-  # Prefer system timeout / gtimeout if available
-  if command -v timeout &>/dev/null; then
-    timeout "$secs" "$@"
-    return $?
-  fi
-  if command -v gtimeout &>/dev/null; then
-    gtimeout "$secs" "$@"
-    return $?
-  fi
-
-  # Fallback: background process + fire-and-forget watchdog.
-  # Redirect watchdog output to /dev/null so it doesn't hold file
-  # descriptors open inside $() command substitutions.
-  "$@" &
-  local pid=$!
-  ( sleep "$secs" && kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
-  local wd=$!
-
-  # Wait ONLY for the actual command — returns as soon as it exits.
-  # Do NOT wait for the watchdog: on macOS, killing the watchdog subshell
-  # does not kill its child `sleep`, so `wait $wd` blocks for the full
-  # timeout duration even when the command finished quickly.
-  wait "$pid" 2>/dev/null
-  local rc=$?
-
-  # Best-effort cleanup of the watchdog (fire-and-forget).
-  kill "$wd" 2>/dev/null || true
-
-  return "$rc"
-}
-
-
 # Per-attempt timeout for retried commands (seconds)
 RETRY_TIMEOUT="${RETRY_TIMEOUT:-30}"
 

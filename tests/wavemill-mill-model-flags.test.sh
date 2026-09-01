@@ -67,6 +67,7 @@ export STATE_DIR="$TMP_DIR/state"
 export SESSION="mill-model-flags-$$"
 export SKIP_CONFIG_CHECK=true
 export SKIP_CONTEXT_CHECK=true
+export WAVEMILL_SKIP_CERTIFICATION_COVERAGE_GUARD=1
 export WAVEMILL_NO_PROGRESS=1
 export REQUIRE_CONFIRM=false
 export GH_REPO="acme/wavemill"

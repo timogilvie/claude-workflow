@@ -169,16 +169,10 @@ if [[ -n "${MOCK_SLEEP:-}" ]]; then exec sleep "$MOCK_SLEEP"; fi
 exit "${MOCK_RC:-0}"
 SH
 
-# _with_timeout intentionally stays local to the mill and monitor; exercise
-# the helpers against the monitor's real implementation rather than a stub.
-WITH_TIMEOUT_SRC="$TEST_TMP/with-timeout.sh"
-awk '
-  /^_with_timeout\(\) \{/ { capture=1 }
-  capture { print }
-  /^}/ && capture { exit }
-' "$REPO_DIR/shared/lib/wavemill-monitor.sh" > "$WITH_TIMEOUT_SRC"
-if ! grep -q '^_with_timeout() {' "$WITH_TIMEOUT_SRC"; then
-  echo "Could not extract _with_timeout from wavemill-monitor.sh"
+# _with_timeout is inherited from shared/lib/wavemill-common.sh; exercise the
+# helpers against the canonical implementation rather than a stub.
+if ! grep -q '^_with_timeout() {' "$REPO_DIR/shared/lib/wavemill-common.sh"; then
+  echo "Could not find _with_timeout in wavemill-common.sh"
   exit 1
 fi
 
@@ -194,12 +188,11 @@ run_case() {
   : > "$case_dir/info.log"
   : > "$case_dir/calls.log"
   PATH="$FIXTURE_BIN:$PATH" TOOLS_DIR="$FIXTURE_TOOLS" REPO_DIR="$REPO_DIR" \
-  WITH_TIMEOUT_SRC="$WITH_TIMEOUT_SRC" STATE_FILE="$case_dir/state.json" \
+  STATE_FILE="$case_dir/state.json" \
   WARN_LOG="$case_dir/warn.log" INFO_LOG="$case_dir/info.log" MOCK_CALL_LOG="$case_dir/calls.log" \
     bash -c '
       set -euo pipefail
       source "$REPO_DIR/shared/lib/wavemill-common.sh"
-      source "$WITH_TIMEOUT_SRC"
       log() { printf "%s\n" "$*" >> "$INFO_LOG"; }
       log_warn() { printf "%s\n" "$*" >> "$WARN_LOG"; }
       '"$snippet"'
