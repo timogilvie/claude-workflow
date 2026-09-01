@@ -269,6 +269,7 @@ TESTS=(
   shared/lib/native-agent/certification/schema.test.ts
   shared/lib/native-agent/certification/store.test.ts
   shared/lib/native-agent/certification/coverage.test.ts
+  shared/lib/native-agent/certification/auto-remediate.test.ts
   shared/lib/native-agent/certification/validator.test.ts
   shared/lib/native-agent/certification/scenarios.test.ts
   shared/lib/native-agent/certification/scenario-runner.test.ts
@@ -277,6 +278,7 @@ TESTS=(
   shared/lib/native-agent/certification/rollout-regression.test.ts
   tools/native-agent-certify.test.ts
   tools/native-agent-certifications-import.test.ts
+  tools/native-agent-certifications-prune.test.ts
   tools/native-agent-certifications.test.ts
   shared/lib/incident-linear-retry-queue.test.ts
   shared/lib/incident-to-linear-synchronizer.test.ts

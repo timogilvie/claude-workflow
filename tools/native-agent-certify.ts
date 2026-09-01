@@ -82,6 +82,15 @@ export interface CertifyAllOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface CertifySelectedTarget {
+  provider: NativeProviderName;
+  model: string;
+}
+
+export interface CertifySelectedOptions extends Omit<CertifyAllOptions, 'provider'> {
+  targets: CertifySelectedTarget[];
+}
+
 export interface CertifyAllEntry {
   provider: string;
   model: string;
@@ -223,9 +232,6 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
 
 export async function certifyAllNativeAgents(opts: CertifyAllOptions): Promise<CertifyAllResult> {
   const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
-  const published: CertifyAllEntry[] = [];
-  const skipped: CertifyAllEntry[] = [];
-  const failed: CertifyAllEntry[] = [];
   const targets = Object.entries(registry.models)
     .filter(([, model]) => {
       const capability = model.nativeCapability;
@@ -237,6 +243,17 @@ export async function certifyAllNativeAgents(opts: CertifyAllOptions): Promise<C
       model,
       provider: entry.nativeCapability!.nativeProvider,
     }))
+    .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
+
+  return certifySelectedNativeAgents({ ...opts, registry, targets });
+}
+
+export async function certifySelectedNativeAgents(opts: CertifySelectedOptions): Promise<CertifyAllResult> {
+  const registry = opts.registry ?? getEffectiveRegistry(opts.repoDir);
+  const published: CertifyAllEntry[] = [];
+  const skipped: CertifyAllEntry[] = [];
+  const failed: CertifyAllEntry[] = [];
+  const targets = [...opts.targets]
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
 
   for (const target of targets) {

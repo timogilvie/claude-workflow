@@ -113,6 +113,9 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
+      - name: Certify native fleet
+        uses: ./.github/actions/certify-native-fleet
+
       - name: Run native launch certification
         run: npm run test:native-launch-certification
 

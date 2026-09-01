@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import { resolve } from 'node:path';
 import {
+  formatCertificationRemediationReport,
   formatMillConfigPreflightReport,
   runMillConfigPreflight,
 } from '../shared/lib/mill-config-preflight.ts';
@@ -31,7 +32,7 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-function main(): void {
+async function main(): Promise<void> {
   let args: Args;
   try {
     args = parseArgs(process.argv.slice(2));
@@ -41,11 +42,13 @@ function main(): void {
   }
 
   try {
-    const result = runMillConfigPreflight(args.repoDir, { json: args.json });
+    const result = await runMillConfigPreflight(args.repoDir, { json: args.json });
     if (args.json) {
       console.log(JSON.stringify(result, null, 2));
     } else if (!result.ok) {
       console.error(formatMillConfigPreflightReport(result.report));
+    } else if (result.report.certificationRemediation) {
+      console.error(formatCertificationRemediationReport(result.report));
     }
     process.exit(result.ok ? 0 : 2);
   } catch (err) {
@@ -60,4 +63,4 @@ function main(): void {
   }
 }
 
-main();
+await main();
