@@ -567,7 +567,7 @@ cleanup_completed_task() {
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   local task_branch="task/${slug}"
   local cleanup_rc=0
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "cleanup_completed_task" || cleanup_rc=$?
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" || cleanup_rc=$?
   if [[ "$cleanup_rc" -eq 20 ]]; then
     return 1
   fi
