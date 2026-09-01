@@ -52,6 +52,12 @@ common_remote_cleanup=$(awk '
   in_fn && /^}$/ { exit }
 ' "$COMMON_SCRIPT")
 
+safe_cleanup=$(awk '
+  /^safe_remove_task_worktree_and_branch\(\) \{/ { count++; if (count == 1) in_fn=1 }
+  in_fn { print }
+  in_fn && /^}$/ { exit }
+' "$COMMON_SCRIPT")
+
 if grep -Fq 'cleanup_remote_task_branch "$issue" "$task_branch" "$pr"' <<< "$common_cleanup"; then
   pass "common cleanup invokes remote branch cleanup"
 else
@@ -89,22 +95,23 @@ else
   fail "remote deletion is not wired through the common cleanup adapter"
 fi
 
-if grep -Fq 'Deleted local branch: $task_branch' <<< "$common_cleanup"; then
+if grep -Fq 'Deleted local branch: $task_branch' <<< "$safe_cleanup"; then
   pass "cleanup logging distinguishes local branch deletion"
 else
   fail "cleanup logging still reports generic branch deletion"
 fi
 
-if grep -Fq 'Local branch cleanup failed after worktree removal: $task_branch' <<< "$common_cleanup" \
-  && grep -Fq 'return 1' <<< "$common_cleanup"; then
+if grep -Fq 'Local branch cleanup failed after worktree removal: $task_branch' <<< "$safe_cleanup" \
+  && grep -Fq 'return 20' <<< "$safe_cleanup"; then
   pass "cleanup retains state when local branch deletion fails"
 else
   fail "cleanup is missing local deletion fallback logging"
 fi
 
-if grep -Fq 'Refusing to delete protected branch: $task_branch' <<< "$common_cleanup" \
-  && grep -Fq 'Refusing to delete protected branch: $branch' "$MILL_SCRIPT"; then
-  pass "cleanup guards protected branches in all deletion paths"
+if grep -Fq 'Refusing to delete protected branch: $task_branch' <<< "$safe_cleanup" \
+  && grep -Fq 'safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner"' "$MILL_SCRIPT" \
+  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm"' "$MONITOR_SCRIPT_FILE"; then
+  pass "cleanup guards protected branches through shared helper"
 else
   fail "cleanup is missing protected branch guards"
 fi

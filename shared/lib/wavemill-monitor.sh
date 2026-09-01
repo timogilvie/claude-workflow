@@ -1461,15 +1461,8 @@ challenge_cancel_challenger_arm() {
     if [[ -n "$challenger_slug" ]]; then
       local wt_dir="${WORKTREE_ROOT}/${challenger_slug}"
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
-      if [[ -d "$wt_dir" ]]; then
-        git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-      fi
-
       local task_branch="task/${challenger_slug}"
-      if [[ "$task_branch" != "main" && "$task_branch" != "master" ]] \
-        && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-        git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-      fi
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || true
     fi
 
     git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
@@ -8698,30 +8691,7 @@ cleanup_aborted_challenge_arm() {
     return 0
   fi
 
-  if [[ -d "$wt_dir" ]]; then
-    git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
-    log "debug" "Removed worktree: $wt_dir"
-  fi
-
-  case "$task_branch" in
-    task/*) ;;
-    *)
-      log "debug" "$issue: retaining non-task local branch $task_branch"
-      task_branch=""
-      ;;
-  esac
-
-  if [[ -n "$task_branch" ]]; then
-    if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
-      log_warn "  Refusing to delete protected branch: $task_branch"
-    elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-      if git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-        log "debug" "Deleted local branch: $task_branch"
-      else
-        log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
-      fi
-    fi
-  fi
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || true
 
   if [[ -n "$pr" ]]; then
     log "debug" "$issue: retaining remote branch ${state_branch:-task/${slug}} (aborted cleanup does not delete PR branches)"
