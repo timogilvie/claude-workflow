@@ -1582,6 +1582,7 @@ save_migration_reservation() {
 
 mark_eval_completed() {
   local issue="$1"
+  local slug
   if ! state_mutate "$STATE_FILE" \
      '.tasks[$issue].evalCompleted = true
       | .tasks[$issue].evalFailed = false
@@ -1590,6 +1591,12 @@ mark_eval_completed() {
       | .tasks[$issue].updated = (now | todateiso8601)' \
      --arg issue "$issue"; then
     log_warn "mark_eval_completed: failed to update $issue"
+  fi
+  # Successful eval wipes the arm's bounded-retry eval budgets (HOK-2924).
+  slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
+  if [[ -n "$slug" && -n "${WORKTREE_ROOT:-}" ]]; then
+    bounded_retry_clear "${WORKTREE_ROOT}/${slug}/features/${slug}" "challenge-eval-soft"
+    bounded_retry_clear "${WORKTREE_ROOT}/${slug}/features/${slug}" "challenge-eval-hard"
   fi
 }
 
@@ -8065,12 +8072,39 @@ poll_challenge_jobs() {
     fi
     if [[ "$kind" == "eval" && "$reason" == "timed_out" && -n "$issue_id" && -n "$pair_id" ]]; then
       local retry_max retry_count timed_out_sides_csv timeout_reason primary_key challenger_key artifact_path
-      local issue_pr issue_branch issue_slug
+      local issue_pr issue_branch issue_slug soft_retry_state_dir soft_retry_head
       primary_key="$pair_id"
       challenger_key="${pair_id}_c"
       settle_tracked_job "$job_id"
       retry_max=$(challenge_eval_retry_max_attempts)
-      retry_count=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].comparisonRetryCount // 0')
+      issue_pr=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].pr // empty')
+      issue_branch=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].branch // empty')
+      issue_slug=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].slug // empty')
+      # Bounded-retry bucket in the arm's feature dir (HOK-2924). Effective
+      # count is max(bucket, comparisonRetryCount mirror) so pre-existing
+      # state keeps its budget; a fresh commit on the arm zeroes both. The
+      # mirror keeps being written for external consumers.
+      soft_retry_state_dir=""
+      soft_retry_head=""
+      local soft_retry_prior_head soft_retry_mirror
+      if [[ -n "$issue_slug" ]]; then
+        soft_retry_state_dir="${WORKTREE_ROOT}/${issue_slug}/features/${issue_slug}"
+        soft_retry_head=$(git -C "${WORKTREE_ROOT}/${issue_slug}" rev-parse HEAD 2>/dev/null || echo "")
+        soft_retry_prior_head=$(bounded_retry_head "$soft_retry_state_dir" "challenge-eval-soft")
+        bounded_retry_reset_if_new_head "$soft_retry_state_dir" "challenge-eval-soft" "$soft_retry_head"
+        if [[ -n "$soft_retry_prior_head" && -n "$soft_retry_head" && "$soft_retry_prior_head" != "$soft_retry_head" ]]; then
+          state_mutate "$STATE_FILE" '
+            .tasks[$issue].comparisonRetryCount = 0
+            | .tasks[$issue].updated = (now | todateiso8601)
+          ' --arg issue "$primary_key" >/dev/null || true
+        fi
+        retry_count=$(bounded_retry_count "$soft_retry_state_dir" "challenge-eval-soft")
+      else
+        retry_count=0
+      fi
+      soft_retry_mirror=$(read_state_value "0" --arg i "$primary_key" '.tasks[$i].comparisonRetryCount // 0')
+      [[ "$soft_retry_mirror" =~ ^[0-9]+$ ]] || soft_retry_mirror=0
+      (( soft_retry_mirror > retry_count )) && retry_count="$soft_retry_mirror"
       timed_out_sides_csv=$(challenge_pair_timed_out_sides_csv "$primary_key")
       if [[ -n "$timed_out_sides_csv" ]]; then
         case ",$timed_out_sides_csv," in
@@ -8084,6 +8118,9 @@ poll_challenge_jobs() {
       timeout_reason=$(challenge_pair_timeout_reason "$timed_out_sides_csv")
 
       if (( retry_count < retry_max )); then
+        if [[ -n "$soft_retry_state_dir" ]]; then
+          bounded_retry_increment "$soft_retry_state_dir" "challenge-eval-soft" "$soft_retry_head" >/dev/null
+        fi
         retry_count=$((retry_count + 1))
         write_challenge_pair_state "$pair_id" "retrying_eval" "$timeout_reason" "$retry_count" "$retry_max" "$issue_id" "$timed_out_sides_csv" ""
         state_mutate "$STATE_FILE" '
@@ -8091,9 +8128,6 @@ poll_challenge_jobs() {
           | .tasks[$issue].evalCompleted = false
           | .tasks[$issue].updated = (now | todateiso8601)
         ' --arg issue "$issue_id" >/dev/null || true
-        issue_pr=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].pr // empty')
-        issue_branch=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].branch // empty')
-        issue_slug=$(read_state_value "" --arg i "$issue_id" '.tasks[$i].slug // empty')
         log "status" "challenge comparison retrying for $pair_id: $side eval timed out (attempt $retry_count/$retry_max)"
         if [[ -n "$issue_pr" && -n "$issue_branch" && -n "$issue_slug" ]]; then
           maybe_run_challenge_eval "$issue_id" "$issue_pr" "$issue_branch" "$issue_slug"
@@ -8103,6 +8137,10 @@ poll_challenge_jobs() {
         continue
       fi
 
+      if [[ -n "$soft_retry_state_dir" ]]; then
+        bounded_retry_mark_exhausted "$soft_retry_state_dir" "challenge-eval-soft" \
+          "Challenge eval soft retries exhausted for $issue_id (pair $pair_id): ${timed_out_sides_csv} eval timed out after ${retry_count}/${retry_max} attempt(s); manual comparison needed" || true
+      fi
       artifact_path=$(write_manual_challenge_comparison_artifact "$pair_id" "$primary_key" "$challenger_key" "$timed_out_sides_csv" "$retry_count" "$retry_max" || true)
       write_challenge_pair_state "$pair_id" "manual_comparison_needed" "$timeout_reason" "$retry_count" "$retry_max" "" "$timed_out_sides_csv" "$artifact_path"
       log_warn "challenge comparison blocked for $pair_id: ${timed_out_sides_csv} eval timed out. manual comparison needed${artifact_path:+ ($artifact_path)}"
@@ -8146,9 +8184,37 @@ maybe_run_challenge_eval() {
   fi
   eval_failed=$(read_state_value "false" --arg i "$issue" '.tasks[$i].evalFailed // false')
   if [[ "$eval_failed" == "true" ]]; then
-    eval_hard_retry_count=$(read_state_value "0" --arg i "$issue" '.tasks[$i].evalHardFailureRetryCount // 0')
+    # Bounded-retry bucket in the arm's feature dir (HOK-2924). The effective
+    # count is max(bucket, state mirror): the evalHardFailureRetryCount mirror
+    # stays authoritative for pre-existing state (and for
+    # resolve_challenge_pair_hard_failure, which reads it), while the bucket
+    # adds the head-keyed reset — a fresh commit zeroes both. The backoff base
+    # defaults to 0 (today's cadence); raise it via
+    # WAVEMILL_RETRY_BACKOFF_CHALLENGE_EVAL_HARD_BASE_SECONDS.
+    local hard_retry_state_dir hard_retry_head hard_retry_prior_head hard_retry_mirror hard_retry_base
+    hard_retry_state_dir="${WORKTREE_ROOT}/${slug}/features/${slug}"
+    hard_retry_head=$(git -C "${WORKTREE_ROOT}/${slug}" rev-parse HEAD 2>/dev/null || echo "")
+    hard_retry_prior_head=$(bounded_retry_head "$hard_retry_state_dir" "challenge-eval-hard")
+    bounded_retry_reset_if_new_head "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_head"
+    if [[ -n "$hard_retry_prior_head" && -n "$hard_retry_head" && "$hard_retry_prior_head" != "$hard_retry_head" ]]; then
+      state_mutate "$STATE_FILE" '
+        .tasks[$issue].evalHardFailureRetryCount = 0
+        | .tasks[$issue].updated = (now | todateiso8601)
+      ' --arg issue "$issue" >/dev/null || true
+    fi
+    eval_hard_retry_count=$(bounded_retry_count "$hard_retry_state_dir" "challenge-eval-hard")
+    hard_retry_mirror=$(read_state_value "0" --arg i "$issue" '.tasks[$i].evalHardFailureRetryCount // 0')
+    [[ "$hard_retry_mirror" =~ ^[0-9]+$ ]] || hard_retry_mirror=0
+    (( hard_retry_mirror > eval_hard_retry_count )) && eval_hard_retry_count="$hard_retry_mirror"
     eval_hard_retry_max=$(challenge_eval_hard_failure_max_retries)
     if (( eval_hard_retry_count < eval_hard_retry_max )); then
+      hard_retry_base="${WAVEMILL_RETRY_BACKOFF_CHALLENGE_EVAL_HARD_BASE_SECONDS:-0}"
+      [[ "$hard_retry_base" =~ ^[0-9]+$ ]] || hard_retry_base=0
+      if ! bounded_retry_due "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_base"; then
+        log "debug" "challenge eval hard-failure retry for $issue holding (backoff)"
+        return 0
+      fi
+      bounded_retry_increment "$hard_retry_state_dir" "challenge-eval-hard" "$hard_retry_head" >/dev/null
       eval_hard_retry_count=$((eval_hard_retry_count + 1))
       state_mutate "$STATE_FILE" '
         .tasks[$issue].evalFailed = false
@@ -8158,6 +8224,8 @@ maybe_run_challenge_eval() {
       ' --arg issue "$issue" --argjson retryCount "$eval_hard_retry_count" >/dev/null || true
       log "status" "challenge eval retrying for $issue: hard failure (attempt $eval_hard_retry_count/$eval_hard_retry_max)"
     else
+      bounded_retry_mark_exhausted "$hard_retry_state_dir" "challenge-eval-hard" \
+        "Challenge eval hard-failure retries exhausted for $issue (${eval_hard_retry_count}/${eval_hard_retry_max}); resolving pair ${pair_id:-unknown}" || true
       resolve_challenge_pair_hard_failure "$pair_id" >/dev/null || true
       return 0
     fi
