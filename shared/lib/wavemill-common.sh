@@ -1782,6 +1782,72 @@ mill_terminate_blocking_processes() {
   [[ "$terminated_any" == true ]]
 }
 
+# Run a command with a hard wall-clock timeout.
+#
+# Backend selection is portable across Linux and macOS:
+#   1. GNU timeout, when available as `timeout`
+#   2. GNU timeout, when available as Homebrew's `gtimeout`
+#   3. A bash watchdog fallback
+#
+# Exit semantics are canonical across all paths:
+#   - command finishes before the deadline: return the command's exit status
+#   - command exceeds the deadline: return 124
+#   - invalid invocation: return non-zero without running the command
+#
+# The fallback waits only for the wrapped command, so fast commands return
+# immediately instead of waiting for the watchdog sleep. The watchdog redirects
+# its own descriptors to /dev/null so command substitutions such as
+# `out=$(_with_timeout 5 echo hi)` do not stay open after the command exits.
+# Cleanup kills the watchdog sleep child before killing the watchdog subshell,
+# which avoids leaked `sleep` processes on macOS.
+# Usage: _with_timeout <seconds> <command> [args...]
+_with_timeout() {
+  local secs="${1:-}"
+
+  [[ "$secs" =~ ^[0-9]+([.][0-9]+)?$ ]] || return 1
+  shift || return 1
+  (( $# > 0 )) || return 1
+
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+    return $?
+  fi
+
+  local marker_dir timeout_marker cmd_pid watchdog_pid rc=0
+  marker_dir="${TMPDIR:-/tmp}"
+  timeout_marker="$(mktemp "${marker_dir%/}/wavemill-timeout.XXXXXX")" || return 1
+  rm -f "$timeout_marker"
+
+  "$@" &
+  cmd_pid=$!
+
+  (
+    sleep "$secs" || exit 0
+    : > "$timeout_marker"
+    _wavemill_kill_process_tree "$cmd_pid"
+  ) >/dev/null 2>&1 &
+  watchdog_pid=$!
+
+  wait "$cmd_pid" 2>/dev/null || rc=$?
+
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -P "$watchdog_pid" 2>/dev/null || true
+  fi
+  kill "$watchdog_pid" 2>/dev/null || true
+  wait "$watchdog_pid" 2>/dev/null || true
+
+  if [[ -f "$timeout_marker" ]]; then
+    rc=124
+  fi
+  rm -f "$timeout_marker"
+
+  return "$rc"
+}
+
 wavemill_git_remote_with_timeout() {
   local timeout_seconds="${1:-}"
   shift || true
