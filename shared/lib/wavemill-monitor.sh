@@ -4604,7 +4604,7 @@ phase_launch_gate() {
       reason="${phase^} launch retries exhausted after ${attempts} attempt(s) at head ${head:-unknown}"
       write_stage_result "$feature_dir" "$phase" "failed" "" "" "$reason"
       if bounded_retry_mark_exhausted "$feature_dir" "$bucket" "$reason"; then
-        log "status" "⛔ $issue → ${phase^} launch retries exhausted after ${attempts} attempt(s); aborting task"
+        log "status" "⛔ $issue → ${phase^} launch retries exhausted after ${attempts} attempt(s) - aborting task"
       fi
       set_task_phase "$issue" "aborted"
       if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
@@ -7181,7 +7181,7 @@ launch_ready_watchdog_remediation() {
   fi
 
   if ! bounded_retry_due "$state_dir" "ready-remediation"; then
-    jq -cn --arg detail "Ready remediation backoff window open for PR #$pr_number; retry deferred." --argjson attempt "$remediation_attempts" \
+    jq -cn --arg detail "Ready remediation backoff window open for PR #$pr_number - retry deferred." --argjson attempt "$remediation_attempts" \
       '{status:"skipped-backoff", detail:$detail, attemptNumber:$attempt}'
     return 0
   fi
@@ -8139,7 +8139,7 @@ poll_challenge_jobs() {
 
       if [[ -n "$soft_retry_state_dir" ]]; then
         bounded_retry_mark_exhausted "$soft_retry_state_dir" "challenge-eval-soft" \
-          "Challenge eval soft retries exhausted for $issue_id (pair $pair_id): ${timed_out_sides_csv} eval timed out after ${retry_count}/${retry_max} attempt(s); manual comparison needed" || true
+          "Challenge eval soft retries exhausted for $issue_id (pair $pair_id): ${timed_out_sides_csv} eval timed out after ${retry_count}/${retry_max} attempt(s) - manual comparison needed" || true
       fi
       artifact_path=$(write_manual_challenge_comparison_artifact "$pair_id" "$primary_key" "$challenger_key" "$timed_out_sides_csv" "$retry_count" "$retry_max" || true)
       write_challenge_pair_state "$pair_id" "manual_comparison_needed" "$timeout_reason" "$retry_count" "$retry_max" "" "$timed_out_sides_csv" "$artifact_path"
@@ -8225,7 +8225,7 @@ maybe_run_challenge_eval() {
       log "status" "challenge eval retrying for $issue: hard failure (attempt $eval_hard_retry_count/$eval_hard_retry_max)"
     else
       bounded_retry_mark_exhausted "$hard_retry_state_dir" "challenge-eval-hard" \
-        "Challenge eval hard-failure retries exhausted for $issue (${eval_hard_retry_count}/${eval_hard_retry_max}); resolving pair ${pair_id:-unknown}" || true
+        "Challenge eval hard-failure retries exhausted for $issue (${eval_hard_retry_count}/${eval_hard_retry_max}) - resolving pair ${pair_id:-unknown}" || true
       resolve_challenge_pair_hard_failure "$pair_id" >/dev/null || true
       return 0
     fi
