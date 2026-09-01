@@ -4555,9 +4555,72 @@ check_stage_aborted() {
   return 1
 }
 
+# Resolve the worktree HEAD for a feature dir (…/<wt>/features/<slug>).
+# Empty output means git failed; bounded-retry helpers treat that as
+# "no new information" and never reset on it.
+phase_launch_head() {
+  local feature_dir="$1"
+  local wt_dir="${feature_dir%/features/*}"
+  [[ -n "$wt_dir" && "$wt_dir" != "$feature_dir" ]] || { echo ""; return 0; }
+  git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo ""
+}
+
+# Pre-launch admission for phase relaunches (HOK-2924). The revert-for-retry
+# in handle_phase_launch_result restores exactly the state that re-derives the
+# same launch on the next poll tick, so without this gate a failing launch
+# retries forever at poll cadence (HOK-2921; HOK-2893_c retried 234 times).
+#
+# Usage: phase_launch_gate <issue> <feature_dir> <phase> <win>
+# Returns 0 when the launch may proceed. Returns 1 when the caller must hold
+# the task this cycle: a backoff window is open, or the retry budget is
+# exhausted (the task is terminalized here with a recorded reason).
+phase_launch_gate() {
+  local issue="$1" feature_dir="$2" phase="$3" win="$4"
+  local bucket="phase-launch-$phase"
+  local limit head disposition attempts reason
+
+  limit="${WAVEMILL_PHASE_LAUNCH_MAX_ATTEMPTS:-4}"
+  [[ "$limit" =~ ^[0-9]+$ ]] || limit=4
+  head="$(phase_launch_head "$feature_dir")"
+  disposition=$(bounded_retry_gate "$feature_dir" "$bucket" "$head" "$limit")
+
+  case "$disposition" in
+    proceed)
+      return 0
+      ;;
+    backoff)
+      log "debug" "  $issue: holding ${phase} launch retry (backoff)"
+      return 1
+      ;;
+    exhausted)
+      attempts=$(bounded_retry_count "$feature_dir" "$bucket")
+      reason="${phase^} launch retries exhausted after ${attempts} attempt(s) at head ${head:-unknown}"
+      write_stage_result "$feature_dir" "$phase" "failed" "" "" "$reason"
+      if bounded_retry_mark_exhausted "$feature_dir" "$bucket" "$reason"; then
+        log "status" "⛔ $issue → ${phase^} launch retries exhausted after ${attempts} attempt(s); aborting task"
+      fi
+      set_task_phase "$issue" "aborted"
+      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+        wavemill_reconcile_terminal "$SESSION" "$issue" "phase_launch_exhausted" || true
+      fi
+      set_window_attention_state "$win" "needs-user"
+      return 1
+      ;;
+    *)
+      # exhausted-quiet: already terminalized; hold silently until a new
+      # commit clears the bucket.
+      set_window_attention_state "$win" "needs-user"
+      return 1
+      ;;
+  esac
+}
+
 # Normalize launch outcomes after the controller has already advanced phase state.
 # On launch failure, revert the controller phase so the next monitor cycle retries
 # the same transition instead of waiting for artifacts that will never arrive.
+# Each failure counts against the phase-launch-<phase> bounded-retry bucket
+# (HOK-2924); phase_launch_gate enforces the backoff and ceiling before the
+# next launch fires, and a successful launch clears the bucket.
 #
 # Usage:
 #   handle_phase_launch_result <issue> <feature_dir> <launched_phase> <retry_phase> \
@@ -4568,6 +4631,7 @@ check_stage_aborted() {
 handle_phase_launch_result() {
   local issue="$1" feature_dir="$2" launched_phase="$3" retry_phase="$4"
   local launch_rc="$5" win="$6" agent="${7:-}" model="${8:-}"
+  local launch_attempts
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
     log_task "status" "$issue" "⛔ $issue → Workflow aborted during ${launched_phase} launch"
@@ -4583,15 +4647,22 @@ handle_phase_launch_result() {
   if [[ "$launch_rc" -ne 0 ]]; then
     log_native_launch_preflight_detail "$issue" "$launched_phase" "$agent" "$model" || true
     if challenge_abort_for_native_preflight_varied_model "$issue" "$feature_dir" "$win" "$launched_phase" "$agent" "$model"; then
+      # Terminal cause: the varied model can never pass native preflight
+      # (HOK-2920), so record the terminal reason without consuming the
+      # retry budget.
+      bounded_retry_mark_exhausted "$feature_dir" "phase-launch-$launched_phase" \
+        "${launched_phase^} launch aborted: varied model cannot pass native preflight${model:+ ($model)}" || true
       return 1
     fi
+    launch_attempts=$(bounded_retry_increment "$feature_dir" "phase-launch-$launched_phase" "$(phase_launch_head "$feature_dir")")
     clear_stage_result "$feature_dir" "$launched_phase"
     set_task_phase "$issue" "$retry_phase"
     set_window_attention_state "$win" "needs-user"
-    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc), reverting to $retry_phase for retry"
+    log "warn" "⚠ $issue → ${launched_phase^} phase launch failed (rc=$launch_rc, attempt ${launch_attempts}), reverting to $retry_phase for retry"
     return 1
   fi
 
+  bounded_retry_clear "$feature_dir" "phase-launch-$launched_phase"
   return 0
 }
 
@@ -11933,6 +12004,13 @@ monitor_issue_state() {
               # Write canonical phase config (HOK-1177)
               write_phase_config "$FEATURE_DIR" "$planner_model" "$coder_model" "$reviewer_model" "$plan_depth" "$code_depth" "$review_mode" "${FORCE_MODEL:-}"
 
+              # Bounded relaunch admission (HOK-2924): hold during backoff,
+              # terminalize once the phase-launch budget is spent.
+              if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "planning" "$WIN"; then
+                active_count=$((active_count + 1))
+                return 0
+              fi
+
               # Transition to planning phase
               set_task_phase "$ISSUE" "planning"
               planner_launch_model="$planner_model"
@@ -12140,6 +12218,13 @@ monitor_issue_state() {
             [[ -z "$code_depth" ]] && code_depth=$(get_task_meta "$ISSUE" "codeDepth")
             [[ -z "$code_depth" ]] && code_depth="medium"
 
+            # Bounded relaunch admission (HOK-2924): hold during backoff,
+            # terminalize once the phase-launch budget is spent.
+            if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "coding" "$WIN"; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
+
             # Transition to coding phase
             set_task_phase "$ISSUE" "coding"
             coder_launch_model="$coder_model"
@@ -12338,6 +12423,13 @@ monitor_issue_state() {
             review_mode=$(read_phase_config "$FEATURE_DIR" "review" "mode")
             [[ -z "$review_mode" ]] && review_mode=$(get_task_meta "$ISSUE" "reviewMode")
             [[ -z "$review_mode" ]] && review_mode="static"
+
+            # Bounded relaunch admission (HOK-2924): hold during backoff,
+            # terminalize once the phase-launch budget is spent.
+            if ! phase_launch_gate "$ISSUE" "$FEATURE_DIR" "review" "$WIN"; then
+              active_count=$((active_count + 1))
+              return 0
+            fi
 
             # Transition to review phase
             set_task_phase "$ISSUE" "review"
