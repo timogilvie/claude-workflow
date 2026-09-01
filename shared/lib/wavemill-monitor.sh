@@ -8963,19 +8963,7 @@ dispatch_queued_children_for_parent() {
   done < <(jq -c '.[]' <<<"$children_json")
 }
 
-pr_state() {
-  local pr="$1"
-  _with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo ""
-}
-
-validate_pr_merge() {
-  local pr="$1"
-  [[ -z "$pr" ]] && return 1
-  local state
-  state=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo "")
-  [[ "$state" == "MERGED" ]] && return 0
-  return 1
-}
+# pr_state() and validate_pr_merge() are provided by wavemill-common.sh (HOK-2904).
 
 
 # ============================================================================
