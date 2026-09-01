@@ -525,24 +525,25 @@ The following subsystems have been modified since their specs were last updated:
     Recent PRs: #123, #124, #125
 
 Consider refreshing these specs before relying on them for implementation.
-Run: npx tsx tools/init-project-context.ts --force
+Run: npx tsx tools/init-project-context.ts --refresh
 ```
 
 ### Manual Refreshing
 
-To regenerate subsystem specs:
+To refresh subsystem navigation without replacing curated documentation:
 
 ```bash
-# Regenerate all subsystem specs
-npx tsx tools/init-project-context.ts --force
+# Refresh generated navigation blocks and the project-context index
+npx tsx tools/init-project-context.ts --refresh
 
 # This will:
 # 1. Re-detect subsystems from current codebase
-# 2. Regenerate all .wavemill/context/*.md files
-# 3. Update project-context.md with new subsystem links
+# 2. Update only marked generated-navigation blocks in existing specs
+# 3. Create discovery indexes for stable, previously undocumented areas
+# 4. Rebuild subsystem links while preserving project context and Recent Work
 ```
 
-**Note**: Manual edits to subsystem specs are preserved in version control, but will be overwritten by `--force`. Consider updating via PR instead.
+**Note**: `--refresh` preserves manual edits. The explicitly destructive `--force` option remains available for reinitialization and overwrites existing context.
 
 ### Best Practices
 

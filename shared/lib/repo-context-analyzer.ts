@@ -313,6 +313,9 @@ export function detectTestFrameworks(repoDir: string, packageJson?: any): string
     if (deps.cypress) frameworks.add('cypress');
   }
 
+  const scripts = Object.values(pkg.scripts || {}).join(' ');
+  if (/\bnode\s+--test\b/.test(scripts)) frameworks.add('node:test');
+
   return Array.from(frameworks);
 }
 

@@ -339,6 +339,7 @@ TESTS=(
   shared/lib/pre-pr-verification-gate.test.ts
   shared/lib/pre-pr-verification.test.ts
   shared/lib/project-context-compactor.test.ts
+  shared/lib/project-context-generator.test.ts
   shared/lib/prompt-hash.test.ts
   shared/lib/prompt-registry.test.ts
   shared/lib/prompt-utils.test.ts

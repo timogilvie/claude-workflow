@@ -80,6 +80,9 @@ function extractSubsystemName(content: string): string {
   match = content.match(/^# Concept:\s*(.+)$/m);
   if (match) return match[1].trim();
 
+  match = content.match(/^#\s+(.+)$/m);
+  if (match) return match[1].trim();
+
   return 'Unknown';
 }
 
