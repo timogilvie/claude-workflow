@@ -271,7 +271,7 @@ export interface ResolvedConflictResumeResult {
 }
 
 export interface ReadyRemediationLaunchResult {
-  status: 'launched' | 'skipped-in-flight' | 'skipped-max-attempts' | 'failed';
+  status: 'launched' | 'skipped-in-flight' | 'skipped-backoff' | 'skipped-max-attempts' | 'failed';
   detail: string;
   attemptNumber: number;
   launchHead?: string;
@@ -2064,6 +2064,8 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
               action = 'launched-remediation';
             } else if (launchResult.status === 'skipped-in-flight') {
               action = 'remediation-in-flight';
+            } else if (launchResult.status === 'skipped-backoff') {
+              action = 'remediation-backoff';
             } else if (launchResult.status === 'skipped-max-attempts') {
               action = 'remediation-exhausted';
             } else {

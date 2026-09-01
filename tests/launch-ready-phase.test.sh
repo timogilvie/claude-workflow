@@ -109,6 +109,10 @@ fi
 run_launch_case() {
   local test_case="$1"
   local case_dir="$TEST_TMP/$test_case"
+  # Each invocation starts from a clean state dir: the bounded-retry backoff
+  # (HOK-2924) would otherwise hold a re-run of the same case name because a
+  # previous invocation's attempt timestamp is still inside the window.
+  rm -rf "$case_dir"
   mkdir -p "$case_dir"
 
   CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
@@ -151,6 +155,16 @@ EOF
         ;;
       unknown_capped)
         printf "%s\n" "6" > "$STATE_DIR/.transient-mergeability-count"
+        ;;
+      remediation_backoff_hold)
+        printf "%s\n" "1" > "$STATE_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "abc123" > "$STATE_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "$(date +%s)" > "$STATE_DIR/.retry-ready-remediation-last-at"
+        ;;
+      remediation_head_reset)
+        printf "%s\n" "2" > "$STATE_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "oldsha" > "$STATE_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "$(date +%s)" > "$STATE_DIR/.retry-ready-remediation-last-at"
         ;;
       clean_after_unknown)
         printf "%s\n" "stale transient attention" > "$STATE_DIR/.needs-attention"
@@ -423,7 +437,7 @@ EOF
           printf "%s\n" "TypeError: ready crashed" >&2
           return 1
           ;;
-        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available)
+        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available|remediation_backoff_hold|remediation_head_reset)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
@@ -491,6 +505,11 @@ EOF
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
     printf "phase_used=%s\n" "$LAUNCH_AGENT_PHASE"
+    remediation_retry_count="$(cat "$STATE_DIR/.retry-ready-remediation-count" 2>/dev/null || echo "")"
+    remediation_retry_exhausted="absent"
+    [[ -f "$STATE_DIR/.retry-ready-remediation-exhausted" ]] && remediation_retry_exhausted="present"
+    printf "remediation_retry_count=%s\nremediation_retry_exhausted=%s\n" \
+      "$remediation_retry_count" "$remediation_retry_exhausted"
     recheck_count_file="absent"
     [[ -f "$STATE_DIR/.failed-ready-recheck-count" ]] && recheck_count_file="present"
     recheck_head_file="absent"
@@ -951,6 +970,19 @@ check_contains "remediation exhaustion writes failed stage result" "$output" "|r
 check_contains "remediation exhaustion writes terse attention file" "$output" "Remediation exhausted after 3 attempt(s)"
 check_contains "remediation exhaustion logs terse error" "$output" "Ready remediation exhausted"
 check_not_contains "remediation exhaustion skips json dump" "$output" "error_payload=  {\"prNumber\":304"
+check_contains "remediation exhaustion writes terminal sentinel" "$output" "remediation_retry_exhausted=present"
+
+echo "=== Remediation Bounded Retry (HOK-2924) ==="
+
+output="$(run_launch_case remediation_backoff_hold)"
+check_contains "remediation backoff holds inside window" "$output" "rc=5"
+check_contains "remediation backoff does not launch agent" "$output" "launch_calls=0"
+check_contains "remediation backoff logs the hold" "$output" "holding ready remediation"
+
+output="$(run_launch_case remediation_head_reset)"
+check_contains "new head re-enables remediation launch" "$output" "launch_calls=1"
+check_contains "new head restarts the attempt counter" "$output" "remediation_retry_count=1"
+check_contains "new head remediation returns in-progress" "$output" "rc=5"
 
 output="$(run_launch_case remediation_disabled)"
 check_contains "disabled remediation falls back to ready failure" "$output" "rc=1"

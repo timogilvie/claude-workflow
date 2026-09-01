@@ -2165,24 +2165,16 @@ ready_conflict_pr_is_clean() {
   return 1
 }
 
+# Source of truth is the bounded-retry bucket (HOK-2924); the JSON
+# remediationAttempts / remediationLaunchHead mirrors in .ready-result.json
+# are still written for dashboards and downstream tools but are no longer
+# read here — the bucket resets on a new head SHA, the JSON does not.
 ready_remediation_attempts() {
-  local feature_dir="$1"
-  local result_file="$feature_dir/.ready-result.json"
-  if [[ -f "$result_file" ]]; then
-    jq -r '.artifacts.remediationAttempts // 0' "$result_file" 2>/dev/null || echo "0"
-  else
-    echo "0"
-  fi
+  bounded_retry_count "$1" "ready-remediation"
 }
 
 ready_remediation_launch_head() {
-  local feature_dir="$1"
-  local result_file="$feature_dir/.ready-result.json"
-  if [[ -f "$result_file" ]]; then
-    jq -r '.artifacts.remediationLaunchHead // empty' "$result_file" 2>/dev/null || echo ""
-  else
-    echo ""
-  fi
+  bounded_retry_head "$1" "ready-remediation"
 }
 
 ready_remediation_config_json() {
@@ -6975,6 +6967,11 @@ _launch_ready_remediation_attempt() {
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
   local resolved_model
 
+  # Bounded-retry bucket (HOK-2924): every launch attempt counts, keyed to the
+  # head it launched from; the JSON remediationAttempts mirror below stays for
+  # dashboards and downstream tools.
+  bounded_retry_increment "$state_dir" "ready-remediation" "$current_head" >/dev/null
+
   remediation_agent=$(ready_remediation_agent_cmd "$wt_dir")
   [[ -z "$remediation_agent" ]] && remediation_agent="$current_agent"
   [[ -z "$remediation_agent" ]] && remediation_agent="$AGENT_CMD"
@@ -7091,9 +7088,23 @@ launch_ready_watchdog_remediation() {
     return 0
   fi
 
+  # Bounded-retry bucket shared with launch_ready_phase (HOK-2924): a fresh
+  # commit restores the budget; the ceiling terminalizes with a recorded
+  # reason; attempts inside the backoff window hold instead of relaunching.
+  bounded_retry_reset_if_new_head "$state_dir" "ready-remediation" "$current_head"
+  remediation_attempts=$(ready_remediation_attempts "$state_dir")
+
   if (( remediation_attempts >= max_attempts )); then
+    bounded_retry_mark_exhausted "$state_dir" "ready-remediation" \
+      "Ready remediation capped at ${remediation_attempts}/${max_attempts} attempts for PR #$pr_number: $failed_check_summary" || true
     jq -cn --arg detail "Ready remediation capped at ${remediation_attempts}/${max_attempts} attempts for PR #$pr_number." --argjson attempt "$remediation_attempts" \
       '{status:"skipped-max-attempts", detail:$detail, attemptNumber:$attempt}'
+    return 0
+  fi
+
+  if ! bounded_retry_due "$state_dir" "ready-remediation"; then
+    jq -cn --arg detail "Ready remediation backoff window open for PR #$pr_number; retry deferred." --argjson attempt "$remediation_attempts" \
+      '{status:"skipped-backoff", detail:$detail, attemptNumber:$attempt}'
     return 0
   fi
 
@@ -7368,6 +7379,8 @@ launch_ready_phase() {
       "verdict: ${verdict:-unknown}" \
       "$completed_artifacts_json"
     clear_failed_ready_recheck_state "$state_dir"
+    bounded_retry_clear "$state_dir" "ready-remediation"
+    bounded_retry_clear "$state_dir" "pending-ready-recheck"
     log "debug" "  $issue: Canonicalized ready labels for PR #$pr_number"
     log "debug" "  $issue: Ready checks completed (verdict: ${verdict:-unknown})"
     return 0
@@ -7414,6 +7427,11 @@ launch_ready_phase() {
       return 5
     fi
 
+    # A fresh commit is genuine new information: give the new head a full
+    # remediation budget (HOK-2924).
+    bounded_retry_reset_if_new_head "$state_dir" "ready-remediation" "$current_head"
+    remediation_attempts=$(ready_remediation_attempts "$state_dir")
+
     if (( remediation_attempts >= remediation_max_attempts )); then
       local exhausted_artifacts_json
       exhausted_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
@@ -7423,8 +7441,17 @@ launch_ready_phase() {
         "Ready remediation exhausted after ${remediation_attempts} attempt(s)" \
         "$exhausted_artifacts_json"
       write_ready_attention_file "$state_dir" "Remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number."
+      bounded_retry_mark_exhausted "$state_dir" "ready-remediation" \
+        "Ready remediation exhausted after ${remediation_attempts} attempt(s) for PR #$pr_number (failed checks: ${failed_check_names})" || true
       log_error "  Ready remediation exhausted for $issue (failed checks: ${failed_check_names})"
       return 1
+    fi
+
+    # Never relaunch on the next poll tick: honor the backoff window between
+    # remediation attempts (HOK-2924).
+    if ! bounded_retry_due "$state_dir" "ready-remediation"; then
+      log "debug" "  $issue: holding ready remediation for PR #$pr_number (backoff)"
+      return 5
     fi
 
     failed_check_summary=$(ready_failed_check_summary "$result")
