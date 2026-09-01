@@ -92,6 +92,7 @@ TESTS=(
   stage-state.test.sh
   startup-handoff.test.sh
   monitor-script-byte-identical.test.sh
+  transient-marker.test.sh
 )
 
 SHARD_INDEX=1

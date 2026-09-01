@@ -83,6 +83,7 @@ echo "=== Syntax Check (bash -n) ==="
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
   "$LIB_DIR"/bounded-retry.sh \
+  "$LIB_DIR"/transient-marker.sh \
   "$LIB_DIR"/terminal-reconciler.sh \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
@@ -129,6 +130,7 @@ for f in \
   "$REPO_DIR"/tests/safe-branch-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
+  "$REPO_DIR"/tests/transient-marker.test.sh \
   "$REPO_DIR"/tests/startup-terminal-prune.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
