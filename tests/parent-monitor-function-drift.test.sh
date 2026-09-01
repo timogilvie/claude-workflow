@@ -21,7 +21,10 @@ MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 # inherited by the mill and the monitor.
 # HOK-2905: challenge hard-failure resolution is gone from both local scopes;
 # the canonical monitor-semantics helper lives in shared/lib/wavemill-common.sh.
-EXPECTED_DIVERGENT=$'_with_timeout'
+# HOK-2906: _with_timeout is gone from both local scopes; the canonical
+# implementation lives in shared/lib/wavemill-common.sh, alongside
+# wavemill_git_remote_with_timeout.
+EXPECTED_DIVERGENT=""
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wavemill-parent-monitor-drift.XXXXXX")"
 trap 'rm -rf "$work_dir"' EXIT
@@ -63,9 +66,9 @@ identical_count="$(jq '.identical | length' "$baseline_json")"
 divergent_count="$(jq '.divergent | length' "$baseline_json")"
 divergent_names="$(jq -r '.divergent[].name' "$baseline_json" | sort)"
 
-assert_eq "$duplicated_count" "35" "duplicated parent/monitor function count changed"
+assert_eq "$duplicated_count" "34" "duplicated parent/monitor function count changed"
 assert_eq "$identical_count" "34" "byte-identical parent/monitor function count changed"
-assert_eq "$divergent_count" "1" "allowlisted divergent parent/monitor function count changed"
+assert_eq "$divergent_count" "0" "allowlisted divergent parent/monitor function count changed"
 assert_eq "$divergent_names" "$EXPECTED_DIVERGENT" "allowlisted divergent parent/monitor function names changed"
 
 mutated_monitor="$work_dir/mutated-identical-monitor.sh"
@@ -100,6 +103,6 @@ printf '%s' "$probe_function" >> "$new_duplicate_monitor"
 new_duplicate_json="$work_dir/new-duplicate.json"
 run_json "$new_duplicate_parent" "$new_duplicate_monitor" > "$new_duplicate_json"
 new_duplicate_count="$(jq '.duplicated | length' "$new_duplicate_json")"
-assert_eq "$new_duplicate_count" "36" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
+assert_eq "$new_duplicate_count" "35" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
 
 echo "parent-monitor-function-drift: ok"

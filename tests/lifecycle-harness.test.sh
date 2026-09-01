@@ -393,6 +393,7 @@ harness_common_route_overrides() {
   cat <<EOF
     FORCE_MODEL=""
     source "$REPO_DIR/shared/lib/wavemill-common.sh"
+    _with_timeout() { shift; "\$@"; }
     read_state_value() { printf "%s\\n" "\${1-}"; }
     get_task_phase() { printf "%s\\n" "\$CURRENT_PHASE"; }
     set_task_phase() { CURRENT_PHASE="\$2"; }
