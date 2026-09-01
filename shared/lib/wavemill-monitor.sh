@@ -8691,7 +8691,7 @@ cleanup_aborted_challenge_arm() {
     return 0
   fi
 
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "cleanup_aborted_challenge_arm" || true
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || true
 
   if [[ -n "$pr" ]]; then
     log "debug" "$issue: retaining remote branch ${state_branch:-task/${slug}} (aborted cleanup does not delete PR branches)"

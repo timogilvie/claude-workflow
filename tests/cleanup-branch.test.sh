@@ -110,7 +110,7 @@ fi
 
 if grep -Fq 'Refusing to delete protected branch: $task_branch' <<< "$safe_cleanup" \
   && grep -Fq 'safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner"' "$MILL_SCRIPT" \
-  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "cleanup_aborted_challenge_arm"' "$MONITOR_SCRIPT_FILE"; then
+  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm"' "$MONITOR_SCRIPT_FILE"; then
   pass "cleanup guards protected branches through shared helper"
 else
   fail "cleanup is missing protected branch guards"
