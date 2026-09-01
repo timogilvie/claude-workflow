@@ -6502,117 +6502,52 @@ write_transient_ready_attention_file() {
 
 # --- Failed-ready re-check budget (HOK-2893) ---------------------------------
 # The monitor re-launches ready checks whenever the stored status is `failed`.
-# These helpers bound that loop: a per-head attempt counter with exponential
-# backoff, an identical-failure-reason short-circuit, and a one-shot terminal
-# state. A new head SHA (fresh commit) or a ready pass wipes the budget.
-# All state lives in plain files in the ready state dir, mirroring the
-# .transient-mergeability-count idiom. Every helper that is invoked bare or
-# via command substitution returns 0 on all paths (the mill runs under set -e);
-# only mark_failed_ready_recheck_exhausted and failed_ready_recheck_due use
-# their exit status as a signal, and both are always called behind `if`.
+# These helpers bound that loop as thin wrappers around the shared
+# bounded-retry module (HOK-2924, bucket `failed-ready-recheck`), plus the
+# path-specific identical-failure-reason short-circuit. The bucket keeps its
+# pre-HOK-2924 file names (.failed-ready-recheck-*) so in-flight state
+# survives an upgrade. A new head SHA (fresh commit) or a ready pass wipes
+# the budget. Only mark_failed_ready_recheck_exhausted and
+# failed_ready_recheck_due use their exit status as a signal, and both are
+# always called behind `if`.
+
+# Legacy env overrides (READY_FAILED_RECHECK_BACKOFF*) predate the shared
+# helper and stay authoritative for this bucket; they are resolved inline in
+# each wrapper (the launch-ready-phase test extracts these functions one by
+# one, so wrappers must be self-contained). Non-numeric values fall back to
+# the shipped defaults.
 
 failed_ready_recheck_count() {
-  local state_dir="$1"
-  local count_file="$state_dir/.failed-ready-recheck-count"
-
-  if [[ ! -f "$count_file" ]]; then
-    echo "0"
-    return 0
-  fi
-
-  local count
-  count=$(cat "$count_file" 2>/dev/null || echo "0")
-  if [[ ! "$count" =~ ^[0-9]+$ ]]; then
-    echo "0"
-    return 0
-  fi
-
-  echo "$count"
+  bounded_retry_count "$1" "failed-ready-recheck"
 }
 
 clear_failed_ready_recheck_state() {
-  local state_dir="$1"
-  rm -f \
-    "$state_dir/.failed-ready-recheck-count" \
-    "$state_dir/.failed-ready-recheck-head" \
-    "$state_dir/.failed-ready-recheck-last-at" \
-    "$state_dir/.failed-ready-recheck-reason.json" \
-    "$state_dir/.failed-ready-recheck-exhausted"
+  bounded_retry_clear "$1" "failed-ready-recheck"
 }
 
-# A new commit is genuine new information: wipe the budget (and any exhausted
-# terminal state) so the fresh head gets a full set of attempts. An empty
-# current head means git failed — never reset on that.
 failed_ready_recheck_reset_if_new_head() {
-  local state_dir="$1" current_head="$2"
-  local head_file="$state_dir/.failed-ready-recheck-head"
-  local stored_head
-
-  [[ -n "$current_head" ]] || return 0
-  [[ -f "$head_file" ]] || return 0
-  stored_head=$(cat "$head_file" 2>/dev/null || echo "")
-  [[ -n "$stored_head" ]] || return 0
-  if [[ "$stored_head" != "$current_head" ]]; then
-    clear_failed_ready_recheck_state "$state_dir"
-  fi
-  return 0
+  bounded_retry_reset_if_new_head "$1" "failed-ready-recheck" "$2"
 }
 
 increment_failed_ready_recheck_count() {
-  local state_dir="$1" current_head="$2"
-  local count
-  count=$(failed_ready_recheck_count "$state_dir")
-  count=$((count + 1))
-  mkdir -p "$state_dir"
-  printf '%s\n' "$count" > "$state_dir/.failed-ready-recheck-count"
-  # An empty head means git failed; keep any previously recorded head so a
-  # later real commit still triggers the budget reset.
-  if [[ -n "$current_head" ]]; then
-    printf '%s\n' "$current_head" > "$state_dir/.failed-ready-recheck-head"
-  fi
-  printf '%s\n' "$(date +%s)" > "$state_dir/.failed-ready-recheck-last-at"
-  echo "$count"
+  bounded_retry_increment "$1" "failed-ready-recheck" "$2"
 }
 
 # Delay before attempt (count+1): min(base * 2^(count-1), cap).
-# Non-numeric env overrides fall back to the shipped defaults.
 failed_ready_recheck_backoff_seconds() {
-  local count="$1"
   local base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
   local cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
   [[ "$base" =~ ^[0-9]+$ ]] || base=120
   [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
-  [[ "$count" =~ ^[0-9]+$ ]] || count=1
-  (( count >= 1 )) || count=1
-
-  local delay="$base" i
-  for (( i = 1; i < count; i++ )); do
-    delay=$((delay * 2))
-    if (( delay >= cap )); then
-      delay="$cap"
-      break
-    fi
-  done
-  (( delay > cap )) && delay="$cap"
-  echo "$delay"
+  bounded_retry_backoff_seconds "$1" "$base" "$cap"
 }
 
 failed_ready_recheck_due() {
-  local state_dir="$1"
-  local last_at_file="$state_dir/.failed-ready-recheck-last-at"
-  local last_at now delay
-
-  if [[ ! -f "$last_at_file" ]]; then
-    return 0
-  fi
-  last_at=$(cat "$last_at_file" 2>/dev/null || echo "")
-  if [[ ! "$last_at" =~ ^[0-9]+$ ]]; then
-    return 0
-  fi
-
-  delay=$(failed_ready_recheck_backoff_seconds "$(failed_ready_recheck_count "$state_dir")")
-  now=$(date +%s)
-  (( now - last_at >= delay ))
+  local base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
+  local cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
+  [[ "$base" =~ ^[0-9]+$ ]] || base=120
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
+  bounded_retry_due "$1" "failed-ready-recheck" "$base" "$cap"
 }
 
 ready_failure_reason() {
@@ -6688,17 +6623,17 @@ failed_ready_recheck_identical_streak() {
 # watchdog, and eval consumers; a missing result file skips annotation.
 mark_failed_ready_recheck_exhausted() {
   local issue="$1" pr_number="$2" state_dir="$3"
-  local sentinel="$state_dir/.failed-ready-recheck-exhausted"
   local result_file="$state_dir/.ready-result.json"
   local attempts reason tmp
-
-  if [[ -f "$sentinel" ]]; then
-    return 1
-  fi
 
   attempts=$(failed_ready_recheck_count "$state_dir")
   reason=$(ready_failure_reason "$state_dir")
   [[ -n "$reason" ]] || reason="ready checks failed"
+
+  if ! bounded_retry_mark_exhausted "$state_dir" "failed-ready-recheck" \
+      "Failed-ready re-checks exhausted after ${attempts} attempt(s) for PR #$pr_number: $reason"; then
+    return 1
+  fi
 
   if [[ -f "$result_file" ]]; then
     tmp=$(mktemp "$state_dir/.ready-result.XXXXXX") || tmp=""
@@ -6718,8 +6653,6 @@ mark_failed_ready_recheck_exhausted() {
   write_ready_attention_file "$state_dir" \
     "Failed-ready re-checks exhausted after ${attempts} attempt(s) for PR #$pr_number: $reason"
   log_error "  Failed-ready re-checks exhausted for $issue after ${attempts} attempt(s) (PR #$pr_number): $reason"
-  mkdir -p "$state_dir"
-  : > "$sentinel"
   return 0
 }
 
@@ -6731,37 +6664,30 @@ mark_failed_ready_recheck_exhausted() {
 #   exhausted-quiet — already terminalized; hold silently until a new commit
 failed_ready_recheck_gate() {
   local state_dir="$1" current_head="$2"
-  local count limit streak identical_limit
-
-  failed_ready_recheck_reset_if_new_head "$state_dir" "$current_head"
-
-  if [[ -f "$state_dir/.failed-ready-recheck-exhausted" ]]; then
-    echo "exhausted-quiet"
-    return 0
-  fi
+  local disposition limit streak identical_limit base cap
 
   limit="${READY_FAILED_RECHECK_MAX_ATTEMPTS:-4}"
   [[ "$limit" =~ ^[0-9]+$ ]] || limit=4
-  count=$(failed_ready_recheck_count "$state_dir")
-  if (( count >= limit )); then
-    echo "exhausted"
-    return 0
+  base="${READY_FAILED_RECHECK_BACKOFF_SECONDS:-120}"
+  cap="${READY_FAILED_RECHECK_BACKOFF_CAP_SECONDS:-1800}"
+  [[ "$base" =~ ^[0-9]+$ ]] || base=120
+  [[ "$cap" =~ ^[0-9]+$ ]] || cap=1800
+  disposition=$(bounded_retry_gate "$state_dir" "failed-ready-recheck" "$current_head" "$limit" "$base" "$cap")
+
+  # Path-specific short-circuit: a provably deterministic failure (identical
+  # verdicts N times in a row) terminalizes even while a backoff window is
+  # still open — retrying cannot change the outcome.
+  if [[ "$disposition" == "proceed" || "$disposition" == "backoff" ]]; then
+    identical_limit="${READY_FAILED_RECHECK_IDENTICAL_LIMIT:-3}"
+    [[ "$identical_limit" =~ ^[0-9]+$ ]] || identical_limit=3
+    streak=$(failed_ready_recheck_identical_streak "$state_dir")
+    if (( identical_limit > 0 && streak >= identical_limit )); then
+      echo "exhausted"
+      return 0
+    fi
   fi
 
-  identical_limit="${READY_FAILED_RECHECK_IDENTICAL_LIMIT:-3}"
-  [[ "$identical_limit" =~ ^[0-9]+$ ]] || identical_limit=3
-  streak=$(failed_ready_recheck_identical_streak "$state_dir")
-  if (( identical_limit > 0 && streak >= identical_limit )); then
-    echo "exhausted"
-    return 0
-  fi
-
-  if ! failed_ready_recheck_due "$state_dir"; then
-    echo "backoff"
-    return 0
-  fi
-
-  echo "proceed"
+  echo "$disposition"
 }
 # --- end failed-ready re-check budget ----------------------------------------
 
