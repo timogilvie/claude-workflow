@@ -13003,6 +13003,7 @@ monitor_issue_state() {
     local resolved_phase ready_state_dir_path ready_status ready_verdict
     local launch_head current_head title launch_rc _conflict_cleared
     local recheck_disposition recheck_attempt recheck_limit
+    local pending_recheck_disposition pending_recheck_limit pending_recheck_reason
     _conflict_cleared=false
     resolved_phase=$(resolve_phase "$FEATURE_DIR")
     if [[ "$resolved_phase" == "aborted" ]]; then
@@ -13263,12 +13264,45 @@ monitor_issue_state() {
     # the second case, a successful remediation leaves status=running/verdict=fail
     # and the controller never re-evaluates CI.
     if [[ "$ready_status" == "running" ]] && { [[ "$ready_verdict" == "pending" ]] || [[ -n "$launch_head" && "$launch_head" != "$current_head" ]]; }; then
+      # Bound the pending-ready re-check loop (HOK-2924): the sibling of the
+      # failed-ready budget above. A refused launch preserves exactly the
+      # precondition that re-arms this branch, so without a ceiling it retries
+      # every poll tick forever. A new commit or a fresh ready verdict wipes
+      # the budget; failed launches back off, then terminalize.
+      pending_recheck_limit="${WAVEMILL_PENDING_READY_RECHECK_MAX_ATTEMPTS:-4}"
+      [[ "$pending_recheck_limit" =~ ^[0-9]+$ ]] || pending_recheck_limit=4
+      pending_recheck_disposition=$(bounded_retry_gate "$ready_state_dir_path" "pending-ready-recheck" "$current_head" "$pending_recheck_limit")
+      case "$pending_recheck_disposition" in
+        exhausted)
+          pending_recheck_reason=$(ready_failure_reason "$ready_state_dir_path")
+          [[ -n "$pending_recheck_reason" ]] || pending_recheck_reason="ready launch kept failing without a fresh verdict"
+          if bounded_retry_mark_exhausted "$ready_state_dir_path" "pending-ready-recheck" \
+              "Pending-ready re-checks exhausted after $(bounded_retry_count "$ready_state_dir_path" "pending-ready-recheck") attempt(s) for PR #$PR: $pending_recheck_reason"; then
+            write_ready_attention_file "$ready_state_dir_path" \
+              "Pending-ready re-checks exhausted for PR #$PR: $pending_recheck_reason. Waiting for a new commit or operator."
+            log "status" "⛔ $ISSUE → Pending-ready re-checks exhausted for PR #$PR; waiting for a new commit or operator"
+          fi
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        exhausted-quiet)
+          set_window_attention_state "$WIN" "needs-user"
+          return 0
+          ;;
+        backoff)
+          log "debug" "  $ISSUE: holding pending-ready re-check for PR #$PR (backoff)"
+          active_count=$((active_count + 1))
+          return 0
+          ;;
+      esac
+
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
       fi
 
+      bounded_retry_increment "$ready_state_dir_path" "pending-ready-recheck" "$current_head" >/dev/null
       if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
         launch_rc=0
       else
@@ -13281,25 +13315,40 @@ monitor_issue_state() {
         return 0
       fi
       if [[ "$launch_rc" -eq 3 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -eq 5 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -eq 4 || "$launch_rc" -eq 6 ]]; then
+        bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
         set_window_attention_state "$WIN" "clear"
         active_count=$((active_count + 1))
         return 0
       fi
       if [[ "$launch_rc" -ne 0 ]]; then
+        # Terminal cause (HOK-2915 shape): a review artifact the readiness
+        # gate can never accept cannot become passing by relaunching ready —
+        # unless it is an infra failure, which launch_ready_phase recovers by
+        # relaunching review. Abort on the first refusal instead of retrying.
+        if ! review_result_passes_ready_gate "$ready_state_dir_path" \
+            && ! review_result_infra_failure "$ready_state_dir_path"; then
+          if bounded_retry_mark_exhausted "$ready_state_dir_path" "pending-ready-recheck" \
+              "Ready launch refused for PR #$PR: review verdict does not pass the readiness gate (terminal until the review artifact changes)"; then
+            log "status" "⛔ $ISSUE → Ready launch refused by review gate for PR #$PR; not retrying (terminal cause)"
+          fi
+        fi
         log "status" "⚠ $ISSUE → Ready checks failed (PR #$PR)"
         set_window_attention_state "$WIN" "needs-user"
         return 0
       fi
+      bounded_retry_clear "$ready_state_dir_path" "pending-ready-recheck"
 
       log "status" "$ISSUE → Ready checks completed for PR #$PR"
       if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
