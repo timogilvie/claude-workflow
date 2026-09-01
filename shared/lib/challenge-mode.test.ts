@@ -449,7 +449,7 @@ test('plan-stage challenge preserves native OpenRouter planner routing with work
         prompt: 'Plan the implementation.',
         primaryModel: 'gpt-5.6-terra',
         challengeStage: 'plan',
-        forcedChallengerModel: 'qwen-3-coder',
+        suggestedChallengerModel: 'qwen-3-coder',
         repoDir,
         routeFn: () => ({
           planner: 'gpt-5.6-terra',
@@ -506,7 +506,7 @@ test('plan-stage challenge rejects qwen-3-coder when only patch-certified', () =
         prompt: 'Plan the implementation.',
         primaryModel: 'gpt-5.6-terra',
         challengeStage: 'plan',
-        forcedChallengerModel: 'qwen-3-coder',
+        suggestedChallengerModel: 'qwen-3-coder',
         repoDir,
         randomFn: () => 0,
         routeFn: () => ({
@@ -562,7 +562,7 @@ test('implementation-stage challenge retains native models with patch-coding opt
         issueId: 'HOK-2235',
         slug: 'native-coding-stage',
         primaryModel: 'gpt-5.6-terra',
-        forcedChallengerModel: 'qwen-3-coder',
+        suggestedChallengerModel: 'qwen-3-coder',
         repoDir,
         randomFn: () => 0,
       },
@@ -1033,7 +1033,7 @@ test('decideChallengeLaunch without recommendation is a plain random roll', () =
   const win = decideChallengeLaunch({ pool: ['a-model-1', 'b-model-2'], rate: 0.3, randomFn: () => 0.2 });
   assert.equal(win.launch, true);
   assert.equal(win.selectionPath, 'random-roll');
-  assert.equal(win.forcedChallengerModel, undefined);
+  assert.equal(win.suggestedChallengerModel, undefined);
 
   const lose = decideChallengeLaunch({ pool: ['a-model-1', 'b-model-2'], rate: 0.3, randomFn: () => 0.9 });
   assert.equal(lose.launch, false);
@@ -1054,7 +1054,7 @@ test('decideChallengeLaunch fires exploration recommendations regardless of base
   });
   assert.equal(decision.launch, true);
   assert.equal(decision.selectionPath, 'recommendation-driven');
-  assert.equal(decision.forcedChallengerModel, 'gpt-5.6-terra');
+  assert.equal(decision.suggestedChallengerModel, 'gpt-5.6-terra');
 });
 
 test('decideChallengeLaunch honors a reduced recommendationRate', () => {
@@ -1088,7 +1088,7 @@ test('decideChallengeLaunch keeps the base rate for low-confidence recommendatio
   });
   assert.equal(decision.launch, false);
   assert.equal(decision.selectionPath, 'recommendation-driven');
-  assert.equal(decision.forcedChallengerModel, 'gpt-5.6-terra');
+  assert.equal(decision.suggestedChallengerModel, 'gpt-5.6-terra');
 });
 
 test('decideChallengeLaunch drops unusable recommended challengers', () => {
@@ -1104,7 +1104,7 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
     randomFn: () => 0,
   });
   assert.equal(notInPool.launch, true);
-  assert.equal(notInPool.forcedChallengerModel, undefined);
+  assert.equal(notInPool.suggestedChallengerModel, undefined);
 
   const samePrimary = decideChallengeLaunch({
     pool: ['claude-sonnet-4-6', 'gpt-5.6-terra'],
@@ -1118,7 +1118,7 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
     },
     randomFn: () => 0,
   });
-  assert.equal(samePrimary.forcedChallengerModel, undefined);
+  assert.equal(samePrimary.suggestedChallengerModel, undefined);
 
   const disabled = decideChallengeLaunch({
     pool: ['claude-sonnet-4-6', 'gpt-5.6-terra', 'gpt-5.3-codex'],
@@ -1133,7 +1133,7 @@ test('decideChallengeLaunch drops unusable recommended challengers', () => {
     randomFn: () => 0,
   });
   assert.equal(disabled.launch, true);
-  assert.equal(disabled.forcedChallengerModel, undefined);
+  assert.equal(disabled.suggestedChallengerModel, undefined);
 });
 
 test('pickChallengeModels uses the forced challenger when usable', () => {
@@ -1144,7 +1144,7 @@ test('pickChallengeModels uses the forced challenger when usable', () => {
       issueId: 'HOK-990',
       slug: 'forced-challenger',
       primaryModel: 'claude-sonnet-4-6',
-      forcedChallengerModel: 'claude-opus-4-8',
+      suggestedChallengerModel: 'claude-opus-4-8',
       randomFn: () => 0, // would otherwise pick gpt-5.6-terra
     },
   );
@@ -1160,7 +1160,7 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       issueId: 'HOK-991',
       slug: 'forced-equals-primary',
       primaryModel: 'claude-sonnet-4-6',
-      forcedChallengerModel: 'claude-sonnet-4-6',
+      suggestedChallengerModel: 'claude-sonnet-4-6',
       randomFn: () => 0,
     },
   );
@@ -1173,7 +1173,7 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       issueId: 'HOK-992',
       slug: 'forced-not-in-pool',
       primaryModel: 'claude-sonnet-4-6',
-      forcedChallengerModel: 'claude-fable-5',
+      suggestedChallengerModel: 'claude-fable-5',
       randomFn: () => 0,
     },
   );
@@ -1186,7 +1186,7 @@ test('pickChallengeModels falls back to random when the forced challenger is unu
       issueId: 'HOK-994',
       slug: 'forced-disabled',
       primaryModel: 'claude-sonnet-4-6',
-      forcedChallengerModel: 'gpt-5.3-codex',
+      suggestedChallengerModel: 'gpt-5.3-codex',
       randomFn: () => 0,
     },
   );
@@ -1223,7 +1223,7 @@ test('pickChallengeWorkflowsWithContext threads the forced challenger through ro
       issueId: 'HOK-993',
       slug: 'forced-with-context',
       prompt: 'irrelevant',
-      forcedChallengerModel: 'claude-opus-4-8',
+      suggestedChallengerModel: 'claude-opus-4-8',
       randomFn: () => 0, // would otherwise pick gpt-5.6-terra
     },
     { bootstrap: null, expanded },
@@ -1305,7 +1305,7 @@ test('pickChallengeWorkflows varies only the reviewer for review-stage challenge
       prompt: 'Implement user authentication with OAuth2',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1352,7 +1352,7 @@ test('pickChallengeModels selects the least-used zero-record implementation chal
       issueId: 'HOK-997A',
       slug: 'least-used-implementation',
       primaryModel: 'claude-opus-4-6',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       recommendedChallengerModel: 'gpt-5.6-terra',
       agentMap: {
         'claude-sonnet-4-5-20250929': 'claude',
@@ -1392,7 +1392,7 @@ test('pickChallengeModels filters offered challengers through the implementation
       issueId: 'HOK-2920',
       slug: 'projection-filtered-implementation',
       primaryModel: 'claude-opus-4-6',
-      forcedChallengerModel: 'ox-alpha',
+      suggestedChallengerModel: 'ox-alpha',
       recommendedChallengerModel: 'ox-alpha',
       coverage: makeCoverage({
         implementation: {
@@ -1642,7 +1642,7 @@ test('coverage-aware selection falls forward when the recommended challenger is 
       issueId: 'HOK-997F',
       slug: 'fallforward',
       primaryModel: 'claude-opus-4-6',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       recommendedChallengerModel: 'gpt-5.6-terra',
       agentMap: {
         'claude-sonnet-4-5-20250929': 'claude',
@@ -1741,7 +1741,7 @@ test('implementation-stage pair remains unchanged when coder differs', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'implementation',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1770,7 +1770,7 @@ test('already-varied plan and review pairs remain single-variable', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'plan',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1795,7 +1795,7 @@ test('already-varied plan and review pairs remain single-variable', () => {
       prompt: 'irrelevant',
       primaryModel: 'claude-opus-4-6',
       challengeStage: 'review',
-      forcedChallengerModel: 'gpt-5.6-terra',
+      suggestedChallengerModel: 'gpt-5.6-terra',
       randomFn: () => 0,
       routeFn: mockRouteFn,
     },
@@ -1822,7 +1822,7 @@ test('pickChallengeWorkflows repairs a forced review challenger that matches the
       prompt: 'irrelevant',
       primaryModel: 'gpt-5.6-terra',
       challengeStage: 'review',
-      forcedChallengerModel: 'claude-opus-4-7',
+      suggestedChallengerModel: 'claude-opus-4-7',
       randomFn: () => 0,
       routeFn: () => ({
         planner: 'claude-opus-4-7',
@@ -1856,7 +1856,7 @@ test('pickChallengeModels returns null when no routing divergence can be created
       issueId: 'HOK-2301-B',
       slug: 'no-divergence',
       primaryModel: 'claude-opus-4-7',
-      forcedChallengerModel: 'claude-opus-4-7',
+      suggestedChallengerModel: 'claude-opus-4-7',
       randomFn: () => 0,
     },
   );
@@ -1882,7 +1882,7 @@ test('pickChallengeWorkflowsWithContext preserves route context while repairing 
       slug: 'context-repair',
       prompt: 'irrelevant',
       challengeStage: 'review',
-      forcedChallengerModel: 'claude-opus-4-7',
+      suggestedChallengerModel: 'claude-opus-4-7',
       randomFn: () => 0,
     },
     { bootstrap: null, expanded },
@@ -2143,7 +2143,7 @@ test('HOK-2569 OpenRouter v3 patch aliases pass canonical gate and challenge fil
           issueId: `HOK-2569-${alias}`,
           slug: `hok-2569-${alias}`,
           primaryModel: 'claude-opus-4-6',
-          forcedChallengerModel: alias,
+          suggestedChallengerModel: alias,
           repoDir,
           now: TEST_NOW,
           randomFn: () => 0,
@@ -2240,7 +2240,7 @@ test('HOK-2569 OpenRouter v3 patch aliases fail closed consistently for degraded
           issueId: `HOK-2569-${testCase.name}`,
           slug: `hok-2569-${testCase.name}`,
           primaryModel: 'claude-opus-4-6',
-          forcedChallengerModel: alias,
+          suggestedChallengerModel: alias,
           repoDir,
           now: TEST_NOW,
           randomFn: () => 0,
@@ -2269,7 +2269,7 @@ test('HOK-2569 OpenRouter implementation aliases reject when repo patch-coding o
         issueId: 'HOK-2569-OPT-OUT',
         slug: 'hok-2569-opt-out',
         primaryModel: 'claude-opus-4-6',
-        forcedChallengerModel: alias,
+        suggestedChallengerModel: alias,
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
@@ -2332,7 +2332,7 @@ test('repo-local native challenger is ignored even with patch-coding opt-in', ()
         issueId: 'NC-001B',
         slug: 'nc-certified-enabled',
         primaryModel: 'claude-opus-4-6',
-        forcedChallengerModel: 'native-patch-model',
+        suggestedChallengerModel: 'native-patch-model',
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
@@ -2675,7 +2675,7 @@ test('forced challenger set to uncertified native falls back to random pick', ()
         issueId: 'NC-007B',
         slug: 'nc-forced-challenger',
         primaryModel: 'claude-opus-4-6',
-        forcedChallengerModel: 'native-uncert',  // forced challenger is uncertified
+        suggestedChallengerModel: 'native-uncert',  // forced challenger is uncertified
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
@@ -2795,7 +2795,7 @@ test('plan-stage challenge rejects role-ineligible forced native challenger befo
         prompt: 'plan the implementation workflow',
         challengeStage: 'plan',
         primaryModel: 'claude-opus-4-6',
-        forcedChallengerModel: 'qwen-2.5-coder-32b',
+        suggestedChallengerModel: 'qwen-2.5-coder-32b',
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
