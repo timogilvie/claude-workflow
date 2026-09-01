@@ -169,15 +169,16 @@ function normalizeWriteArgs(
   argsOrOptions: PrLabelWriteArgs | PrStateLabelOptions,
   maybeOptions: PrStateLabelOptions,
 ): { args: PrLabelWriteArgs; options: PrStateLabelOptions } {
-  if (
-    'repo' in argsOrOptions &&
-    !('headSha' in argsOrOptions) &&
-    !('reason' in argsOrOptions)
-  ) {
+  if (isPrStateLabelOptions(argsOrOptions)) {
     return { args: {}, options: argsOrOptions };
   }
 
   return { args: argsOrOptions, options: maybeOptions };
+}
+
+function isPrStateLabelOptions(value: PrLabelWriteArgs | PrStateLabelOptions): value is PrStateLabelOptions {
+  const keys = Object.keys(value);
+  return keys.length <= 1 && keys.every((key) => key === 'repo');
 }
 
 function transitionPullRequestLabels(

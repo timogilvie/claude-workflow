@@ -6423,12 +6423,13 @@ clear_cross_pr_guard_ready_evidence() {
     fi
   fi
 
-  local attention_reason=""
+  local attention_reason="" attention_marker="$state_dir/.needs-attention"
   attention_reason="$(marker_reason "$state_dir/.needs-attention" 2>/dev/null || true)"
   if [[ -n "$attention_reason" ]] \
     && { [[ "$attention_reason" == *'Cross-PR revert guard'* ]] \
-      || [[ "$attention_reason" == *'without explicit acknowledgement'* ]]; }; then
-    marker_clear "$state_dir/.needs-attention"
+      || [[ "$attention_reason" == *'without explicit acknowledgement'* ]]; } \
+    && validate_ready_attention_marker "$state_dir" "ready_attention_reason_is_cross_pr_guard \"$attention_marker\""; then
+    clear_ready_attention "$state_dir"
   fi
 }
 
@@ -6583,6 +6584,52 @@ write_transient_ready_attention_file() {
 clear_ready_attention() {
   local state_dir="$1"
   marker_clear "$state_dir/.needs-attention"
+}
+
+validate_ready_attention_marker() {
+  local state_dir="$1" condition_cmd="${2:-true}"
+  local marker_path="$state_dir/.needs-attention"
+  [[ -f "$marker_path" ]] || return 3
+
+  local repo_dir head_sha rc
+  repo_dir=$(git -C "$state_dir" rev-parse --show-toplevel 2>/dev/null) || return 3
+  head_sha=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 3
+
+  if marker_validate "$marker_path" "$head_sha" "$condition_cmd"; then
+    return 0
+  fi
+  rc=$?
+  if [[ "$rc" -eq 1 || "$rc" -eq 2 ]]; then
+    marker_emit_finding "$marker_path" "ready attention" "$repo_dir"
+    clear_ready_attention "$state_dir"
+  fi
+  return "$rc"
+}
+
+ready_attention_reason_is_cross_pr_guard() {
+  local marker_path="$1" reason
+  reason="$(marker_reason "$marker_path" 2>/dev/null || true)"
+  [[ "$reason" == *'Cross-PR revert guard'* || "$reason" == *'without explicit acknowledgement'* ]]
+}
+
+validate_watchdog_stable_failure_marker() {
+  local state_dir="$1" verdict="${2:-}"
+  local marker_path="$state_dir/.ready-watchdog-stable-failure.json"
+  [[ -f "$marker_path" ]] || return 3
+
+  local repo_dir head_sha rc
+  repo_dir=$(git -C "$state_dir" rev-parse --show-toplevel 2>/dev/null) || return 3
+  head_sha=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 3
+
+  if marker_validate "$marker_path" "$head_sha" '[[ "$verdict" == "fail" ]]'; then
+    return 0
+  fi
+  rc=$?
+  if [[ "$rc" -eq 1 || "$rc" -eq 2 ]]; then
+    marker_emit_finding "$marker_path" "watchdog stable failure" "$repo_dir"
+    marker_clear "$marker_path"
+  fi
+  return "$rc"
 }
 
 # --- Failed-ready re-check budget (HOK-2893) ---------------------------------
@@ -6812,7 +6859,7 @@ ready_failure_is_actionable_for_remediation() {
   local actionable_names failed_check_name failed_check_name_lc
   local IFS=','
 
-  if [[ -f "$state_dir/.ready-watchdog-stable-failure.json" ]]; then
+  if validate_watchdog_stable_failure_marker "$state_dir" "$verdict"; then
     return 0
   fi
 
