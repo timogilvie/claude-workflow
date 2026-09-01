@@ -5,6 +5,10 @@ set -Eeuo pipefail
 # Import environment from env file
 source "$1"
 
+# Source marker lifecycle helpers
+WAVEMILL_LIB_DIR="${WAVEMILL_LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+source "$WAVEMILL_LIB_DIR/transient-marker.sh"
+
 run_linear_retry_drain_tick() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -2277,9 +2281,13 @@ run_ready_watchdog_tick() {
       if [[ -n "$slug" && -n "$branch" && -n "$base_branch" && -n "$pr_number" ]]; then
         state_dir=$(ready_state_dir "$wt_dir" "$slug")
         remediation_categories=$(printf '%s' "$finding" | jq -c '.remediationCategories // []' 2>/dev/null || echo '[]')
-        mkdir -p "$state_dir"
-        printf '%s\n' "$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}')" \
-          > "$state_dir/.ready-watchdog-stable-failure.json"
+        local detail_json
+        detail_json=$(jq -cn --argjson categories "$remediation_categories" --arg detail "$detail" '{categories:$categories, detail:$detail}' 2>/dev/null || echo '{}')
+        local head_sha
+        head_sha=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null) || head_sha=""
+        if [[ -n "$head_sha" ]]; then
+          marker_write "$state_dir/.ready-watchdog-stable-failure.json" --kind watchdog-stable-failure --head "$head_sha" --detail-json "$detail_json" --reason "$detail"
+        fi
         launch_ready_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$pr_number" >/dev/null 2>&1 || true
       fi
     fi
@@ -6324,8 +6332,11 @@ READY_TRANSIENT_MAX_ATTEMPTS=6
 
 write_ready_attention_file() {
   local state_dir="$1" message="$2"
-  mkdir -p "$state_dir"
-  printf '%s\n' "$message" > "$state_dir/.needs-attention"
+  local repo_dir
+  repo_dir=$(git -C "$state_dir" rev-parse --show-toplevel 2>/dev/null) || return 0
+  local head_sha
+  head_sha=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
+  marker_write "$state_dir/.needs-attention" --kind ready-attention --head "$head_sha" --reason "$message"
 }
 
 _write_cross_pr_diagnostic() {
@@ -6559,8 +6570,16 @@ clear_transient_mergeability_state() {
 
 write_transient_ready_attention_file() {
   local state_dir="$1" message="$2"
-  write_ready_attention_file "$state_dir" "$message"
-  : > "$state_dir/.needs-attention-transient"
+  local repo_dir
+  repo_dir=$(git -C "$state_dir" rev-parse --show-toplevel 2>/dev/null) || return 0
+  local head_sha
+  head_sha=$(git -C "$repo_dir" rev-parse HEAD 2>/dev/null) || return 0
+  marker_write "$state_dir/.needs-attention-transient" --kind ready-attention-transient --head "$head_sha" --reason "$message"
+}
+
+clear_ready_attention() {
+  local state_dir="$1"
+  marker_clear "$state_dir/.needs-attention"
 }
 
 # --- Failed-ready re-check budget (HOK-2893) ---------------------------------
