@@ -26,6 +26,7 @@ import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-c
 import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
+import { writeMarker, clearMarker, type MarkerHandle } from './transient-marker.ts';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
 import {
   classifyChallengeState,
@@ -1408,7 +1409,7 @@ async function recoverReadyState(
   deps: ReadyWatchdogDeps,
   note = 'Ready watchdog cleared stale local state and queued a re-check.',
 ): Promise<void> {
-  await rm(path.join(snapshot.readyStateDir, '.needs-attention'), { force: true });
+  clearMarker({ path: path.join(snapshot.readyStateDir, '.needs-attention'), kind: 'ready-attention' });
   await rm(path.join(snapshot.readyStateDir, '.conflict-detected'), { force: true });
   await rm(path.join(snapshot.readyStateDir, '.conflict-attention-head'), { force: true });
   await rm(path.join(snapshot.readyStateDir, '.conflict-attention-reported'), { force: true });
@@ -1452,7 +1453,12 @@ async function recoverReadyState(
 
 async function writeReadyAttention(snapshot: ReadyTaskSnapshot, detail: string): Promise<void> {
   const firstLine = detail.split(/\r?\n/, 1)[0]?.trim() || detail;
-  await writeFile(path.join(snapshot.readyStateDir, '.needs-attention'), `${firstLine}\n`, 'utf-8');
+  const markerPath = path.join(snapshot.readyStateDir, '.needs-attention');
+  const headSha = snapshot.currentHead || 'unknown';
+  writeMarker(
+    { path: markerPath, kind: 'ready-attention' },
+    { headSha, reason: firstLine },
+  );
 }
 
 async function writeAuditRecord(repoDir: string, record: ReadyWatchdogAuditRecord): Promise<void> {
