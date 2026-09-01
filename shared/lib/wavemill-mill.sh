@@ -1464,16 +1464,14 @@ cleanup_stale_tasks() {
       log "debug" "  Pruning $issue ($reason)"
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
-        if [[ -d "$worktree" ]]; then
-          execute git -C "$REPO_DIR" worktree remove "$worktree" --force 2>/dev/null || true
+        local cleanup_rc=0
+        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 20 ]]; then
+          log_warn "  $issue cleanup failed; keeping task state"
+          continue
         fi
-        if [[ "$reason" != "branch deleted" ]]; then
-          if [[ "$branch" == "main" || "$branch" == "master" ]]; then
-            log_warn "  Refusing to delete protected branch: $branch"
-          else
-            git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
-            git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
-          fi
+        if [[ "$cleanup_rc" -eq 0 && "$reason" != "branch deleted" && "$branch" != "main" && "$branch" != "master" ]]; then
+          git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
         fi
       fi
       # Remove from state file (dashboard will stop showing it)

@@ -73,7 +73,13 @@ HELPERS_FILE="$TEST_TMP/tmux_helpers.sh"
 } > "$HELPERS_FILE"
 
 CLEANUP_FILE="$TEST_TMP/cleanup_completed_task.sh"
-extract_function "$COMMON_SCRIPT" "cleanup_completed_task" > "$CLEANUP_FILE"
+{
+  extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_completed_task"
+} > "$CLEANUP_FILE"
 REMOTE_CLEANUP_FILE="$TEST_TMP/cleanup_remote_task_branch.sh"
 extract_function "$COMMON_SCRIPT" "cleanup_remote_task_branch" > "$REMOTE_CLEANUP_FILE"
 EXECUTE_FILE="$TEST_TMP/execute.sh"
@@ -194,6 +200,9 @@ EOF
       fi
       GIT_CALLS+="$*;"
       case "${1:-} ${2:-}" in
+        "status --porcelain")
+          return 0
+          ;;
         "worktree remove")
           ORDER+="worktree-remove;"
           [[ "$TEST_CASE" != "worktree-fails" ]]
@@ -211,6 +220,19 @@ EOF
         "show-ref --verify")
           [[ "$TEST_CASE" != "local-branch-absent" ]]
           return $?
+          ;;
+        "rev-parse --verify")
+          return 0
+          ;;
+        "merge-base --is-ancestor")
+          return 0
+          ;;
+        "rev-list --count")
+          printf "0\n"
+          return 0
+          ;;
+        "rev-list "*)
+          return 0
           ;;
         "ls-remote --exit-code")
           ORDER+="ls-remote;"
@@ -355,6 +377,9 @@ EOF
       if [[ "${1:-}" == "-C" ]]; then
         shift 2
       fi
+      case "${1:-} ${2:-}" in
+        "rev-list --count") printf "0\n" ;;
+      esac
       return 0
     }
     tmux() { return 1; }
