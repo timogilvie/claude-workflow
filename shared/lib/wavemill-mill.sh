@@ -1542,72 +1542,7 @@ invoke_first_wave_helper() {
 # ============================================================================
 # GITHUB API WITH RETRY AND VALIDATION
 # ============================================================================
-
-
-pr_state() {
-  local pr="$1"
-  gh pr view "$pr" --json state --jq .state 2>/dev/null || echo ""
-}
-
-
-# Get PR details with base branch validation
-pr_details() {
-  local pr="$1"
-  local output rc
-  output=$(gh pr view "$pr" --json state,baseRefName,statusCheckRollup 2>&1)
-  rc=$?
-  if [[ "$rc" -eq 0 ]]; then
-    printf '%s\n' "$output"
-    return 0
-  fi
-
-  # Fail closed: downstream ready logic must see an explicit check-read
-  # failure, never an empty successful check list.
-  jq -cn --arg pr "$pr" --arg reason "$output" --argjson exitCode "$rc" \
-    '{checkReadFailed:true, prNumber:($pr|tonumber? // $pr), errorType:"command-failed", exitCode:$exitCode, reason:$reason}'
-}
-
-
-# Check if PR is merged and ready for cleanup
-# Returns 0 if merged, 1 if not
-# Note: Once PR is merged, CI status is irrelevant for cleanup decisions
-validate_pr_merge() {
-  local pr="$1"
-  local details
-
-
-  details="$(pr_details "$pr" 2>/dev/null || echo "")"
-
-
-  if [[ -z "$details" ]]; then
-    log_error "Failed to fetch PR #$pr details"
-    return 1
-  fi
-
-
-  local state base_branch
-  state=$(echo "$details" | jq -r '.state' 2>/dev/null) || return 1
-  base_branch=$(echo "$details" | jq -r '.baseRefName' 2>/dev/null) || return 1
-
-
-  # Check 1: Must be MERGED (not CLOSED)
-  if [[ "$state" != "MERGED" ]]; then
-    log_warn "PR #$pr state is $state (not MERGED)"
-    return 1
-  fi
-
-
-  # Check 2: Must be merged to correct base branch
-  if [[ "$base_branch" != "$BASE_BRANCH" ]]; then
-    log_error "PR #$pr merged to wrong base: $base_branch (expected: $BASE_BRANCH)"
-    return 1
-  fi
-
-
-  # Once PR is merged, proceed with cleanup regardless of CI status.
-  # The merge has already happened; CI validation is for pre-merge safety.
-  return 0
-}
+# pr_state() and validate_pr_merge() are provided by wavemill-common.sh (HOK-2904).
 
 
 # ============================================================================

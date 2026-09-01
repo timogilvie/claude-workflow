@@ -3575,6 +3575,93 @@ remove_task_state() {
 }
 
 # ============================================================================
+# CANONICAL PR STATE AND MERGE VALIDATION HELPERS (HOK-2904)
+# ============================================================================
+# Before canonicalization, the parent mill queried GitHub without a timeout and
+# returned an empty string on failure, while the monitor bounded the state read
+# with API_TIMEOUT but used the same implicit empty-string uncertainty sentinel.
+# The canonical PR state vocabulary is explicit: MERGED, CLOSED, OPEN, UNKNOWN.
+# UNKNOWN covers GitHub errors, API_TIMEOUT expiry, empty output, and unexpected
+# state values. Callers compare against confirmed states, so unavailable GitHub
+# data never reads as a successful merge.
+pr_state() {
+  local pr="$1"
+  local state
+
+  if ! state=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state --jq .state 2>/dev/null); then
+    printf 'UNKNOWN\n'
+    return 0
+  fi
+
+  case "$state" in
+    MERGED|CLOSED|OPEN)
+      printf '%s\n' "$state"
+      ;;
+    *)
+      printf 'UNKNOWN\n'
+      ;;
+  esac
+}
+
+# Check if PR is merged and ready for cleanup.
+# Returns 0 only for a confirmed merge to BASE_BRANCH; every unreadable,
+# unknown, open, closed-unmerged, or wrong-base state fails closed.
+# Note: Once PR is merged, CI status is irrelevant for cleanup decisions.
+validate_pr_merge() {
+  local pr="$1"
+  [[ -z "$pr" ]] && return 1
+
+  local details
+  if ! details=$(_with_timeout "$API_TIMEOUT" gh pr view "$pr" --json state,baseRefName 2>/dev/null); then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "Failed to fetch PR #$pr details"
+    fi
+    return 1
+  fi
+
+  if [[ -z "$details" ]]; then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "Failed to fetch PR #$pr details"
+    fi
+    return 1
+  fi
+
+  local state base_branch
+  if ! state=$(printf '%s\n' "$details" | jq -r '.state' 2>/dev/null); then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "Failed to parse PR #$pr state"
+    fi
+    return 1
+  fi
+  if ! base_branch=$(printf '%s\n' "$details" | jq -r '.baseRefName' 2>/dev/null); then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "Failed to parse PR #$pr base branch"
+    fi
+    return 1
+  fi
+
+  # Check 1: Must be MERGED (not CLOSED or OPEN).
+  if [[ "$state" != "MERGED" ]]; then
+    if declare -F log_warn >/dev/null 2>&1; then
+      log_warn "PR #$pr state is $state (not MERGED)"
+    fi
+    return 1
+  fi
+
+  # Check 2: Must be merged to correct base branch.
+  if [[ "$base_branch" != "${BASE_BRANCH:-}" ]]; then
+    if declare -F log_error >/dev/null 2>&1; then
+      log_error "PR #$pr merged to wrong base: $base_branch (expected: ${BASE_BRANCH:-})"
+    fi
+    return 1
+  fi
+
+  # Once PR is merged, proceed with cleanup regardless of CI status.
+  # The merge has already happened; CI validation is for pre-merge safety.
+  return 0
+}
+
+# ============================================================================
 # CANONICAL LINEAR STATE HELPERS (HOK-2901)
 # ============================================================================
 # Single wall-clock cap for Linear-facing helpers. The monitor already defined

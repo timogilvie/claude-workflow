@@ -122,6 +122,7 @@ for f in \
   "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
   "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \
   "$REPO_DIR"/tests/task-phase-canonicalization.test.sh \
+  "$REPO_DIR"/tests/pr-state-merge-canonicalization.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
@@ -693,12 +694,6 @@ else
     pass "monitor preserves worktree when agent exits without PR"
   else
     fail "monitor still risks cleanup when agent exits without PR"
-  fi
-
-  if grep -qE '^pr_state\(\) \{' <<< "$HEREDOC_CONTENT"; then
-    pass "monitor defines pr_state helper"
-  else
-    fail "monitor is missing pr_state helper definition"
   fi
 
   if grep -q 'linear_set_state .*"In Review"' <<< "$HEREDOC_CONTENT" && grep -q 'get_linear_issue_id' <<< "$HEREDOC_CONTENT"; then

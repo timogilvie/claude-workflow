@@ -38,6 +38,7 @@ TESTS=(
   save-task-state-canonicalization.test.sh
   linear-state-canonicalization.test.sh
   task-phase-canonicalization.test.sh
+  pr-state-merge-canonicalization.test.sh
   native-agent-shell-operators.test.sh
   native-coding-commit.test.sh
   hook-write-context-guard.test.sh

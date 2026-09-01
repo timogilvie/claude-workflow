@@ -762,7 +762,7 @@ export type ChallengeSelectionPath = 'recommendation-driven' | 'random-roll';
 export interface ChallengeLaunchDecision {
   launch: boolean;
   selectionPath: ChallengeSelectionPath;
-  forcedChallengerModel?: string;
+  suggestedChallengerModel?: string;
   recommendation?: ChallengeRecommendation;
 }
 
@@ -835,7 +835,7 @@ export function decideChallengeLaunch(opts: {
   return {
     launch: randomFn() < effectiveRate,
     selectionPath: 'recommendation-driven',
-    ...(challengerUsable ? { forcedChallengerModel: challenger } : {}),
+    ...(challengerUsable ? { suggestedChallengerModel: challenger } : {}),
     recommendation,
   };
 }
@@ -847,7 +847,7 @@ export function pickChallengeModels(
     issueId: string;
     slug: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -863,7 +863,7 @@ export function pickChallengeModelsWithReason(
     issueId: string;
     slug: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
     randomFn?: () => number;
@@ -943,11 +943,11 @@ export function pickChallengeModelsWithReason(
     });
   }
 
-  // Reject a forced challenger that is an uncertified native
-  let forcedChallengerModel = opts.forcedChallengerModel;
-  if (forcedChallengerModel && opts.repoDir) {
+  // Reject a suggested challenger that is an uncertified native
+  let suggestedChallengerModel = opts.suggestedChallengerModel;
+  if (suggestedChallengerModel && opts.repoDir) {
     const { models, rejections, exclusions } = filterEligibleChallengeCandidates(
-      [forcedChallengerModel],
+      [suggestedChallengerModel],
       'implementation',
       opts.repoDir,
       opts.now,
@@ -958,11 +958,11 @@ export function pickChallengeModelsWithReason(
     }
     allExclusions.push(...exclusions);
     if (models.length === 0) {
-      forcedChallengerModel = undefined;
+      suggestedChallengerModel = undefined;
     }
   }
 
-  const challengerSelection = resolveChallengerModel(uniquePool, primaryModel, forcedChallengerModel, randomFn, {
+  const challengerSelection = resolveChallengerModel(uniquePool, primaryModel, suggestedChallengerModel, randomFn, {
     stage: 'implementation',
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
@@ -989,7 +989,7 @@ export function pickChallengeModelsWithReason(
       challengeStage: 'implementation',
     }, challengerSelection),
     uniquePool,
-    forcedChallengerModel,
+    suggestedChallengerModel,
     agentMap,
     defaultAgent,
     randomFn,
@@ -1165,7 +1165,7 @@ function primaryVariedModelForStage(pair: ChallengePairSelection, stage: Challen
 function finalizeChallengePair(
   pair: ChallengePairSelection,
   pool: string[],
-  forcedChallengerModel: string | undefined,
+  suggestedChallengerModel: string | undefined,
   agentMap: Record<string, string>,
   defaultAgent: string,
   randomFn: () => number,
@@ -1176,7 +1176,7 @@ function finalizeChallengePair(
   return finalizeChallengePairWithReason(
     pair,
     pool,
-    forcedChallengerModel,
+    suggestedChallengerModel,
     agentMap,
     defaultAgent,
     randomFn,
@@ -1189,7 +1189,7 @@ function finalizeChallengePair(
 function finalizeChallengePairWithReason(
   pair: ChallengePairSelection,
   pool: string[],
-  forcedChallengerModel: string | undefined,
+  suggestedChallengerModel: string | undefined,
   agentMap: Record<string, string>,
   defaultAgent: string,
   randomFn: () => number,
@@ -1222,7 +1222,7 @@ function finalizeChallengePairWithReason(
     allRejections.push(...stageRejections);
     allExclusions.push(...stageExclusions);
 
-    const challengerSelection = chooseDistinctStageModel(stagePool, primaryVaried, forcedChallengerModel, randomFn, {
+    const challengerSelection = chooseDistinctStageModel(stagePool, primaryVaried, suggestedChallengerModel, randomFn, {
       ...selectionOpts,
       stage,
     });
@@ -1262,7 +1262,7 @@ export function pickChallengeWorkflows(
     slug: string;
     prompt: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
@@ -1282,7 +1282,7 @@ export function pickChallengeWorkflowsWithReason(
     slug: string;
     prompt: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
@@ -1340,19 +1340,19 @@ export function pickChallengeWorkflowsWithReason(
   allExclusions.push(...stageExclusions);
 
   // Reject a forced challenger that is an uncertified native for this stage
-  let forcedChallengerModel = opts.forcedChallengerModel;
-  if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+  let suggestedChallengerModel = opts.suggestedChallengerModel;
+  if (suggestedChallengerModel && opts.repoDir) {
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([suggestedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
     allExclusions.push(...exclusions);
     if (models.length === 0) {
-      forcedChallengerModel = undefined;
+      suggestedChallengerModel = undefined;
     }
   }
 
-  const challengerSelection = resolveChallengerModel(certifiedPool, primaryVaried, forcedChallengerModel, randomFn, {
+  const challengerSelection = resolveChallengerModel(certifiedPool, primaryVaried, suggestedChallengerModel, randomFn, {
     stage,
     coverage: opts.coverage,
     rotationSeed: opts.rotationSeed,
@@ -1413,7 +1413,7 @@ export function pickChallengeWorkflowsWithReason(
       },
     }, challengerSelection),
     certifiedPool,
-    forcedChallengerModel,
+    suggestedChallengerModel,
     agentMap,
     defaultAgent,
     randomFn,
@@ -1479,7 +1479,7 @@ function buildPairFromRouteSnapshot(
     issueId: string;
     slug: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
@@ -1500,7 +1500,7 @@ function buildPairFromRouteSnapshotWithReason(
     issueId: string;
     slug: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
@@ -1533,7 +1533,7 @@ function buildPairFromRouteSnapshotWithReason(
       issueId: opts.issueId,
       slug: opts.slug,
       primaryModel: requestedPrimaryCoder,
-      forcedChallengerModel: opts.forcedChallengerModel,
+      suggestedChallengerModel: opts.suggestedChallengerModel,
       agentMap: opts.agentMap,
       defaultAgent: opts.defaultAgent,
       randomFn: opts.randomFn,
@@ -1552,7 +1552,7 @@ function buildPairFromRouteSnapshotWithReason(
     const result = finalizeChallengePairWithReason(
       applyRouteSnapshot(selection.pair, route, agentMap, defaultAgent, opts.repoDir, fallback),
       pool,
-      opts.forcedChallengerModel,
+      opts.suggestedChallengerModel,
       agentMap,
       defaultAgent,
       opts.randomFn || Math.random,
@@ -1596,22 +1596,22 @@ function buildPairFromRouteSnapshotWithReason(
   allExclusions.push(...stageExclusions);
 
   // Reject a forced challenger that is an uncertified native for this stage
-  let forcedChallengerModel = opts.forcedChallengerModel;
-  if (forcedChallengerModel && opts.repoDir) {
-    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([forcedChallengerModel], stage, opts.repoDir, opts.now);
+  let suggestedChallengerModel = opts.suggestedChallengerModel;
+  if (suggestedChallengerModel && opts.repoDir) {
+    const { models, rejections, exclusions } = filterEligibleChallengeCandidates([suggestedChallengerModel], stage, opts.repoDir, opts.now);
     if (rejections.length > 0) {
       allRejections.push(...rejections);
     }
     allExclusions.push(...exclusions);
     if (models.length === 0) {
-      forcedChallengerModel = undefined;
+      suggestedChallengerModel = undefined;
     }
   }
 
   const challengerSelection = resolveChallengerModel(
     certifiedPool,
     primaryVaried,
-    forcedChallengerModel,
+    suggestedChallengerModel,
     opts.randomFn || Math.random,
     {
       stage,
@@ -1645,7 +1645,7 @@ function buildPairFromRouteSnapshotWithReason(
       challengerSelection,
     ),
     certifiedPool,
-    forcedChallengerModel,
+    suggestedChallengerModel,
     agentMap,
     defaultAgent,
     opts.randomFn || Math.random,
@@ -1669,7 +1669,7 @@ export function pickChallengeWorkflowsWithContext(
     slug: string;
     prompt: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
@@ -1694,7 +1694,7 @@ export function pickChallengeWorkflowsWithContextAndReason(
     slug: string;
     prompt: string;
     primaryModel?: string;
-    forcedChallengerModel?: string;
+    suggestedChallengerModel?: string;
     challengeStage?: ChallengeStage;
     agentMap?: Record<string, string>;
     defaultAgent?: string;
