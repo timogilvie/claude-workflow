@@ -178,7 +178,7 @@ export function formatDriftWarning(result: DriftCheckResult): string {
   }
 
   lines.push('Consider refreshing these specs before relying on them for implementation.');
-  lines.push('Run: npx tsx tools/init-project-context.ts --force');
+  lines.push('Run: npx tsx tools/init-project-context.ts --refresh');
   lines.push('');
 
   return lines.join('\n');

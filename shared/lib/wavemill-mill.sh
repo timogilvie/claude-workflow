@@ -1823,7 +1823,7 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
       echo ""
       if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
         log "info" "Refreshing subsystem docs..."
-        npx tsx tools/init-project-context.ts --force "$REPO_DIR"
+        npx tsx tools/init-project-context.ts --refresh "$REPO_DIR"
         echo ""
         log "info" "Refresh complete. Re-displaying task list..."
       else

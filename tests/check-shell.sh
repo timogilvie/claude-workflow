@@ -2291,7 +2291,7 @@ else
     fail "mill script is missing docs refresh hotkey support"
   fi
 
-  if grep -q 'npx tsx tools/init-project-context.ts --force "\$REPO_DIR"' "$MILL_SCRIPT" \
+  if grep -q 'npx tsx tools/init-project-context.ts --refresh "\$REPO_DIR"' "$MILL_SCRIPT" \
     && grep -q 'Subsystem docs are up to date' "$MILL_SCRIPT"; then
     pass "mill script refreshes docs and handles clean state"
   else

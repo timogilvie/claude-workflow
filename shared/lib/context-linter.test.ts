@@ -88,6 +88,11 @@ test('lintSubsystemSpecs finds orphaned, missing, stale, contradiction, and cons
       '.wavemill/context/orphaned-spec.md',
       `# Subsystem: Orphaned Spec
 
+## Key Files
+| File | Role | Notes |
+|---|---|---|
+| \`shared/removed/no-longer-exists.ts\` | Implementation | TypeScript |
+
 ## Related Subsystems
 - [Foo](shared-foo.md)
 `,
