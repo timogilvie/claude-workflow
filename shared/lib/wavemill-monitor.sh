@@ -190,43 +190,6 @@ _update_effective_max_parallel() {
 # type 'q' or select tasks.  This value caps individual calls.
 API_TIMEOUT="${API_TIMEOUT:-30}"
 
-# Run a command with a hard wall-clock timeout (works on macOS without coreutils).
-# Returns at the earlier of: command completion or timeout expiry.
-# Usage: _with_timeout <seconds> <command> [args...]
-_with_timeout() {
-  local secs=$1
-  shift
-
-  if command -v timeout &>/dev/null; then
-    timeout "$secs" "$@"
-    return $?
-  fi
-  if command -v gtimeout &>/dev/null; then
-    gtimeout "$secs" "$@"
-    return $?
-  fi
-
-  # Fallback: background process + fire-and-forget watchdog.
-  # Redirect watchdog output to /dev/null so it doesn't hold file
-  # descriptors open inside $() command substitutions.
-  "$@" &
-  local cmd_pid=$!
-  ( sleep "$secs" && kill "$cmd_pid" 2>/dev/null ) >/dev/null 2>&1 &
-  local wd_pid=$!
-
-  # Wait ONLY for the actual command — returns as soon as it exits.
-  # Do NOT wait for the watchdog: on macOS, killing the watchdog subshell
-  # does not kill its child `sleep`, so `wait $wd_pid` blocks for the full
-  # timeout duration even when the command finished quickly.
-  wait "$cmd_pid" 2>/dev/null
-  local rc=$?
-
-  # Best-effort cleanup of the watchdog (fire-and-forget).
-  kill "$wd_pid" 2>/dev/null || true
-
-  return "$rc"
-}
-
 # Load shared agent launch adapters used by launch_task()
 if [[ ! -f "$LIB_DIR/agent-adapters.sh" ]]; then
   log_error "Missing adapter library: $LIB_DIR/agent-adapters.sh"
