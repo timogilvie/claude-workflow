@@ -82,6 +82,7 @@ echo "=== Syntax Check (bash -n) ==="
 
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
+  "$LIB_DIR"/bounded-retry.sh \
   "$LIB_DIR"/terminal-reconciler.sh \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
@@ -133,6 +134,9 @@ for f in \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
   "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
+  "$REPO_DIR"/tests/bounded-retry.test.sh \
+  "$REPO_DIR"/tests/handle-phase-launch-result.test.sh \
+  "$REPO_DIR"/tests/challenge-eval-soft-retry.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \

@@ -2,6 +2,13 @@
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
+# Bounded-retry invariant helpers (HOK-2924): every relaunch path counts
+# attempts, backs off, terminalizes at a ceiling, and resets on a new head SHA
+# through this one module. Sourced here so the mill, monitor, and startup
+# runner all inherit the same implementation.
+# shellcheck source=bounded-retry.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded-retry.sh"
+
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
