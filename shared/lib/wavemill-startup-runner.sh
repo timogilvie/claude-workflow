@@ -297,10 +297,10 @@ reset_startup_phase_artifacts() {
     "$feature_dir/plan.md"
 }
 
-remove_task_state() {
-  local issue="$1"
-  state_mutate "$STATE_FILE" 'del(.tasks[$issue]) | .updated = (now | todate)' --arg issue "$issue"
-}
+# remove_task_state() is provided by wavemill-common.sh (HOK-2903), sourced
+# above. The canonical copy always returns 0 and warns through log_warn when
+# defined; this scope's former copy propagated state_mutate's exit code, but
+# every call site here already discarded it via `|| true`.
 
 set_task_phase_local() {
   local issue="$1" phase="$2"
