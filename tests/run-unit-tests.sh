@@ -9,14 +9,21 @@ set -euo pipefail
 #   bash tests/run-unit-tests.sh --shard 2/3     # run shard 2 of 3
 #   bash tests/run-unit-tests.sh --list          # print selected tests and exit
 #
-# Shards are assigned round-robin rather than in contiguous blocks. Cost is
-# heavily skewed -- a handful of files that spawn subprocesses dominate, and
-# they cluster together in the list -- so contiguous blocks would land them all
-# in one shard.
+# Shards are assigned by measured weight, not list position: the registered
+# list is piped to tools/ci-test-timings.ts, which partitions deterministically
+# by median runtimes (tests/timings/unit-weights.json). Cost is heavily skewed
+# -- a handful of files that spawn subprocesses dominate -- so position-based
+# assignment of any kind cannot balance it. A partitioner failure fails the
+# shard loudly; selection must never silently change.
 #
 # Each shard hands its whole subset to a single 'node --test' invocation, which
 # parallelizes across cores internally; sharding adds a second level on top by
 # giving each shard its own runner.
+#
+# Per-file wall time is recorded to a JSON artifact (default
+# test-timings/unit-shard-<n>.json, override with WAVEMILL_TEST_TIMINGS_FILE)
+# via tests/lib/file-timing-reporter.mjs so CI can rebalance shards from real
+# data. Human-readable output (spec reporter on stdout) is unchanged.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -390,6 +397,8 @@ TESTS=(
   tools/openrouter-smoke.test.ts
   tools/plan-launch-priority-certifications.test.ts
   tools/reap-stale-challengers.test.ts
+  shared/lib/test-partitioner.test.ts
+  tools/ci-test-timings.test.ts
 )
 
 SHARD_INDEX=1
@@ -424,11 +433,21 @@ if (( SHARD_TOTAL < 1 || SHARD_INDEX < 1 || SHARD_INDEX > SHARD_TOTAL )); then
 fi
 
 SELECTED=()
-for i in "${!TESTS[@]}"; do
-  if (( i % SHARD_TOTAL == SHARD_INDEX - 1 )); then
-    SELECTED+=("${TESTS[$i]}")
+if (( SHARD_TOTAL > 1 )); then
+  # Weighted deterministic assignment. `set -o pipefail` is active, so a
+  # partitioner failure (missing/malformed manifest, bad shard spec) fails
+  # here instead of silently changing which tests run.
+  if ! assignment="$(printf '%s\n' "${TESTS[@]}" \
+      | npx tsx "$REPO_DIR/tools/ci-test-timings.ts" assign --suite unit --shard "${SHARD_INDEX}/${SHARD_TOTAL}")"; then
+    echo "run-unit-tests.sh: shard assignment failed for ${SHARD_INDEX}/${SHARD_TOTAL}" >&2
+    exit 1
   fi
-done
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && SELECTED+=("$line")
+  done <<< "$assignment"
+else
+  SELECTED=( "${TESTS[@]}" )
+fi
 
 # A shard with no work is a configuration error, not a silent pass.
 if (( ${#SELECTED[@]} == 0 )); then
@@ -461,5 +480,13 @@ else
   echo "=== Unit tests (${#TESTS[@]} files) ==="
 fi
 
+TIMINGS_FILE="${WAVEMILL_TEST_TIMINGS_FILE:-$REPO_DIR/test-timings/unit-shard-${SHARD_INDEX}.json}"
+mkdir -p "$(dirname "$TIMINGS_FILE")"
+
 cd "$REPO_DIR"
-exec node --test "${SELECTED[@]}"
+WAVEMILL_TEST_SUITE=unit WAVEMILL_TEST_SHARD="$SHARD_INDEX" \
+  exec node --test \
+    --test-reporter=spec --test-reporter-destination=stdout \
+    --test-reporter="$SCRIPT_DIR/lib/file-timing-reporter.mjs" \
+    --test-reporter-destination="$TIMINGS_FILE" \
+    "${SELECTED[@]}"

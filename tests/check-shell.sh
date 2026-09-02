@@ -144,6 +144,7 @@ for f in \
   "$REPO_DIR"/tests/challenge-eval-soft-retry.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \
+  "$REPO_DIR"/tests/run-custom-tests.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \

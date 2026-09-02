@@ -74,8 +74,40 @@ jobs:
       - name: Run shell test shard
         run: bash tests/run-shell-suite.sh --shard ${{ matrix.shard }}/4
 
+  # Unit and custom shard counts are validated by `ci-test-timings.ts check`
+  # in test:preflight: the matrix values, the /M in the job name, and the /M in
+  # the --shard argument must all agree, and the weighted assignment computed
+  # from tests/timings/*-weights.json must satisfy the 130%-of-median balance
+  # rule. Changing a shard count here without rebalancing fails preflight.
   unit:
-    name: Unit Tests (shard ${{ matrix.shard }}/3)
+    name: Unit Tests (shard ${{ matrix.shard }}/5)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run unit test shard
+        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/5
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-timings-unit-${{ matrix.shard }}
+          path: test-timings/*.json
+          if-no-files-found: warn
+
+  custom:
+    name: Custom Harness Tests (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -90,23 +122,16 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
-      - name: Run unit test shard
-        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/3
+      - name: Run custom harness test shard
+        run: bash tests/run-custom-tests.sh --shard ${{ matrix.shard }}/3
 
-  custom:
-    name: Custom Harness Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Setup
-        uses: ./.github/actions/setup
-
-      - name: Run custom harness tests
-        run: npm run test:custom
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-timings-custom-${{ matrix.shard }}
+          path: test-timings/*.json
+          if-no-files-found: warn
 
   smoke:
     name: Smoke and Config Tests

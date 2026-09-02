@@ -74,3 +74,7 @@ test-reg-*/
 
 # Python
 __pycache__/
+
+# Per-run CI test timing artifacts (uploaded from CI; checked-in weight
+# manifests live in tests/timings/ instead)
+test-timings/
