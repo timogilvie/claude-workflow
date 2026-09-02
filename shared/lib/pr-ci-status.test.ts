@@ -157,6 +157,110 @@ test('fetchPrCiStatus returns unknown on malformed JSON', async () => {
   assert.equal(result.readError?.errorType, 'malformed-json');
 });
 
+test('fetchPrCiStatus never evaluates checks from a superseded head (REQ-F4)', async () => {
+  // The PR #1301 scenario: the caller pushed new000, but GitHub still reports
+  // the old head old000 with a cancelled rollup. The cancelled run belongs to
+  // the superseded head and must neither block nor satisfy readiness.
+  const deps: Partial<PrCiStatusDeps> = {
+    resolveOwnerRepo: () => undefined,
+    getIntegrationRequiredChecks: () => ['Shell and Unit Tests'],
+    execFile: async () => ({
+      stdout: JSON.stringify({
+        headRefOid: 'old000',
+        state: 'OPEN',
+        statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'CANCELLED' }],
+      }),
+      stderr: '',
+    }),
+  };
+
+  const result = await fetchPrCiStatus(1301, '/repo', deps, { expectedHeadSha: 'new000' });
+
+  assert.equal(result.conclusion, 'pending');
+  assert.equal(result.readError?.errorType, 'head-mismatch');
+  assert.match(result.readError?.reason ?? '', /old000/);
+  assert.match(result.readError?.reason ?? '', /new000/);
+  assert.equal(result.headSha, 'old000');
+  assert.deepEqual(result.failing, []);
+  assert.deepEqual(result.checks, []);
+});
+
+test('fetchPrCiStatus evaluates normally when the expected head matches (REQ-F4)', async () => {
+  const deps: Partial<PrCiStatusDeps> = {
+    resolveOwnerRepo: () => undefined,
+    getIntegrationRequiredChecks: () => ['Shell and Unit Tests'],
+    execFile: async () => ({
+      stdout: JSON.stringify({
+        headRefOid: 'new000',
+        state: 'OPEN',
+        statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      }),
+      stderr: '',
+    }),
+  };
+
+  const result = await fetchPrCiStatus(1301, '/repo', deps, { expectedHeadSha: 'new000', requireChecks: true });
+
+  assert.equal(result.conclusion, 'pass');
+  assert.equal(result.headSha, 'new000');
+  assert.equal(result.readError, undefined);
+});
+
+test('fetchPrCiStatus treats a missing headRefOid as a head mismatch when a head is expected', async () => {
+  const deps: Partial<PrCiStatusDeps> = {
+    resolveOwnerRepo: () => undefined,
+    getIntegrationRequiredChecks: () => [],
+    execFile: async () => ({
+      stdout: JSON.stringify({
+        state: 'OPEN',
+        statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+      }),
+      stderr: '',
+    }),
+  };
+
+  const result = await fetchPrCiStatus(1301, '/repo', deps, { expectedHeadSha: 'new000' });
+
+  assert.equal(result.conclusion, 'pending');
+  assert.equal(result.readError?.errorType, 'head-mismatch');
+  assert.match(result.readError?.reason ?? '', /unknown/);
+});
+
+test('a cancelled check on the current head fails and names the required context (REQ-F5)', async () => {
+  const deps: Partial<PrCiStatusDeps> = {
+    resolveOwnerRepo: () => undefined,
+    getIntegrationRequiredChecks: () => ['Shell and Unit Tests'],
+    execFile: async () => ({
+      stdout: JSON.stringify({
+        headRefOid: 'cur000',
+        state: 'OPEN',
+        statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'CANCELLED' }],
+      }),
+      stderr: '',
+    }),
+  };
+
+  const result = await fetchPrCiStatus(1301, '/repo', deps, { expectedHeadSha: 'cur000', requireChecks: true });
+
+  assert.equal(result.conclusion, 'fail');
+  assert.deepEqual(result.failing, ['Shell and Unit Tests']);
+});
+
+test('no checks reported on the expected head remains pending', async () => {
+  const deps: Partial<PrCiStatusDeps> = {
+    resolveOwnerRepo: () => undefined,
+    getIntegrationRequiredChecks: () => ['Shell and Unit Tests'],
+    execFile: async () => ({
+      stdout: JSON.stringify({ headRefOid: 'cur000', state: 'OPEN', statusCheckRollup: [] }),
+      stderr: '',
+    }),
+  };
+
+  const result = await fetchPrCiStatus(1301, '/repo', deps, { expectedHeadSha: 'cur000', requireChecks: true });
+
+  assert.equal(result.conclusion, 'pending');
+});
+
 test('fetchPrCiStatus evaluates in-progress rollup as pending', async () => {
   const deps: Partial<PrCiStatusDeps> = {
     resolveOwnerRepo: () => undefined,
