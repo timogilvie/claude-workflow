@@ -83,3 +83,17 @@ enable the model-specific section only for the attributed subset. No new Phase 2
 issue is required from this measurement because the candidate-repo gate is met;
 the remaining no-signal gap is a reporting and instrumentation limitation unless
 the program chooses to require IDE provenance capture.
+
+## Decision Log Entry (HOK-2791)
+
+**Date**: 2026-09-02  
+**Decision**: Keep the Phase 2 numeric gate at ≥60% agent/model attribution coverage on at least 6 external repos, with refined phrasing.
+
+**Verdict**: The Phase 2 exit criterion is achievable. 11 of 15 candidate repos met or exceeded 60% union coverage. Overall attribution across the 236 sampled PRs was 74.6%.
+
+**Key Findings**:
+- Attribution is dominated by GitHub-hosted signals (bot author + branch prefix)
+- Co-authored-by trailers are rare (2.5%), supporting expected CLI vs IDE signal divergence
+- 25.4% remain unattributed across the sampled PRs, representing either human-authored PRs or IDE-driven agent work without visible signals
+
+**Recommendation**: Keep the gate as stated above. Do not generalize to all public repos. For reporting, use "all PRs, with agent-attributed PRs highlighted" as the default framing; enable model-specific sections only for attributed PRs. No new Phase 2 issue required.
