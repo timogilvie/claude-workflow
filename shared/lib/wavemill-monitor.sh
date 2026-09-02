@@ -5127,6 +5127,41 @@ quarantine_completed_coding_pane() {
   return 0
 }
 
+# Reap a planning agent that finished its phase but did not exit (HOK-2921 /
+# REQ-F4). Called at the .plan-approved transition so the next poll's coding
+# launch finds an idle pane rather than typing into a live REPL. Unlike
+# quarantine_completed_coding_pane this does NOT kill the window — the
+# operator may have the plan scrollback open and the same window is reused
+# for coding. Only known agent CLIs are terminated: if the pane's foreground
+# command is a shell (agent already exited, or the operator recovered the
+# window), the reap is a no-op. Failure never blocks the phase transition.
+reap_completed_planning_pane() {
+  local issue="$1" feature_dir="$2" worktree="${3:-}"
+  local slug target fg_cmd
+
+  [[ "${WAVEMILL_SKIP_PLANNING_REAP:-0}" == "1" ]] && return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+
+  slug="$(basename "$feature_dir")"
+  [[ -n "$worktree" ]] || worktree="$(dirname "$(dirname "$feature_dir")")"
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$worktree" 2>/dev/null || true)"
+  [[ -n "$target" ]] || return 0
+
+  if _pane_is_dead_or_idle "$(_tmux_target_join "$SESSION" "$target")"; then
+    return 0
+  fi
+  fg_cmd="$(_pane_current_command "$(_tmux_target_join "$SESSION" "$target")")"
+  if _pane_command_is_shell "$fg_cmd"; then
+    return 0
+  fi
+
+  log "status" "$issue → reaping completed planning agent ($fg_cmd) before coding launch"
+  if ! agent_terminate_in_pane "$SESSION" "$target" 10; then
+    log_warn "$issue → planning agent in $target did not exit cleanly; coding launch will force pane preparation"
+  fi
+  return 0
+}
+
 _ensure_task_window_exists() {
   local session="$1" issue="$2" slug="$3" wt_dir="$4" lifecycle_phase="${5:-}"
   local target canonical feature_dir expected_replacement="false" expected_marker_replacement="false" new_window_rc=0
@@ -5447,6 +5482,31 @@ _restore_inflight_task_window_if_missing() {
   return 0
 }
 
+# Run a phase-launch command with stderr captured to a tmpfile so a failure's
+# log line carries the real error text instead of only ERR-trap line numbers
+# (HOK-2921 / REQ-F5). Captured stderr is replayed to the caller's stderr
+# after the launch returns, so nothing is lost from the existing streams.
+#
+# Usage: _run_phase_launch <phase> <launch-command> [args...]
+# Returns: the launch command's exit code
+_run_phase_launch() {
+  local phase="$1"
+  shift
+  local launch_stderr rc=0
+  launch_stderr="$(mktemp -t "wavemill-launch-${phase}-XXXXXX" 2>/dev/null || true)"
+  if [[ -z "$launch_stderr" ]]; then
+    "$@"
+    return $?
+  fi
+  "$@" 2>"$launch_stderr" || rc=$?
+  [[ -s "$launch_stderr" ]] && cat "$launch_stderr" >&2
+  if (( rc != 0 )) && [[ -s "$launch_stderr" ]]; then
+    log_warn "$(tail -n 20 "$launch_stderr" 2>/dev/null | sed "s/^/  ${phase}-launch stderr: /")"
+  fi
+  rm -f "$launch_stderr"
+  return "$rc"
+}
+
 # Launch an agent in a tmux window, ensuring any previous agent is terminated first.
 # This is the single point of control for all phase launches — it guarantees:
 #   1. Previous agent is killed (Ctrl-C + wait for shell)
@@ -5502,6 +5562,18 @@ _launch_agent_in_pane() {
   esc_linear_issue=${linear_issue//\'/\'\\\'\'}
   esc_varied_stage=${varied_launch_stage//\'/\'\\\'\'}
   esc_varied_model=${varied_launch_model//\'/\'\\\'\'}
+
+  # Prepare the pane BEFORE the export send-keys (HOK-2921 / REQ-F3): if a
+  # previous agent still holds the pane, the export text would be typed into
+  # its REPL instead of executed by the shell. agent_launch_interactive calls
+  # agent_prepare_pane_for_launch again below; that second call is a fast
+  # no-op once the pane is idle.
+  local prepare_rc=0
+  agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd" || prepare_rc=$?
+  if [[ "$prepare_rc" -eq 2 ]]; then
+    return "$prepare_rc"
+  fi
+
   tmux send-keys -t "$target" \
     "export WAVEMILL_SESSION='$esc_session' WAVEMILL_ISSUE='$esc_issue' WAVEMILL_LINEAR_ISSUE='$esc_linear_issue' WAVEMILL_SLUG='$esc_slug' WAVEMILL_FEATURE_SLUG='$esc_slug' WAVEMILL_FEATURE_DIR='$feature_dir' WAVEMILL_CHALLENGE_VARIED_STAGE='$esc_varied_stage' WAVEMILL_CHALLENGE_VARIED_MODEL='$esc_varied_model'" C-m
 
@@ -12486,7 +12558,7 @@ monitor_issue_state() {
               record_planning_launch_route_snapshot "$FEATURE_DIR" "$planner_launch_model" "$planner_agent" "$plan_depth" "effective-route"
               write_stage_result_with_history "$FEATURE_DIR" "planning" "running" "$planner_agent" "$planner_launch_model"
 
-              launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
+              _run_phase_launch planning launch_planning_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$planner_launch_model" "$planner_agent" "$plan_depth"
               local launch_rc=$?
               if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "planning" "routing" "$launch_rc" "$WIN" "$planner_agent" "$planner_launch_model"; then
                 return 0
@@ -12711,7 +12783,7 @@ monitor_issue_state() {
             coding_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             write_stage_result_with_history "$FEATURE_DIR" "coding" "running" "$coder_agent" "$coder_launch_model" "" "" "$coding_started_at"
 
-            launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
+            _run_phase_launch coding launch_coding_phase "$ISSUE" "$SLUG" "$title" "$WT_DIR" "$BRANCH" "$BASE_BRANCH" "$coder_launch_model" "$coder_agent" "$code_depth"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "coding" "planning" "$launch_rc" "$WIN" "$coder_agent" "$coder_launch_model"; then
                 return 0
@@ -12756,6 +12828,9 @@ monitor_issue_state() {
               fi
               log "status" "$ISSUE → Plan approved (via .plan-approved marker), marking as completed"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
+              # A planning agent that announced completion but kept running would
+              # swallow the next launch's send-keys (HOK-2921 / REQ-F4).
+              reap_completed_planning_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" || true
               # Next iteration will detect resolved_phase == "coding" and launch coding
               active_count=$((active_count + 1))
               return 0
@@ -12781,6 +12856,9 @@ monitor_issue_state() {
               fi
               log "status" "$ISSUE → User approved plan (via .plan-approved marker)"
               approve_plan "$FEATURE_DIR" "$current_agent" ""
+              # A planning agent that announced completion but kept running would
+              # swallow the next launch's send-keys (HOK-2921 / REQ-F4).
+              reap_completed_planning_pane "$ISSUE" "$FEATURE_DIR" "${WORKTREE_ROOT}/${SLUG}" || true
               # Now completed — next poll iteration will pick up and launch coding
               active_count=$((active_count + 1))
               return 0
@@ -12905,7 +12983,7 @@ monitor_issue_state() {
             # Record review stage as running (HOK-1177)
             write_stage_result_with_history "$FEATURE_DIR" "review" "running" "$reviewer_agent" "$reviewer_launch_model"
 
-            launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_launch_model" "$reviewer_agent" "$review_mode"
+            _run_phase_launch review launch_review_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$reviewer_launch_model" "$reviewer_agent" "$review_mode"
             local launch_rc=$?
             if ! handle_phase_launch_result "$ISSUE" "$FEATURE_DIR" "review" "coding" "$launch_rc" "$WIN" "$reviewer_agent" "$reviewer_launch_model"; then
               return 0
