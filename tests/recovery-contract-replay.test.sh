@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MILL_SCRIPT="$REPO_DIR/shared/lib/wavemill-mill.sh"
+MONITOR_SCRIPT="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
 PASS=0
 FAIL=0
@@ -21,7 +21,7 @@ extract_function() {
       depth -= gsub(/\}/, "}")
       if (depth == 0) exit
     }
-  ' "$MILL_SCRIPT"
+  ' "$MONITOR_SCRIPT"
 }
 
 echo "=== Recovery Contract Replay ==="
@@ -58,6 +58,14 @@ if grep -Fq 'write_stage_result_with_history' <<<"$prepare_body" \
   pass "restore verifies the recovered stage record before launch"
 else
   fail "restore does not verify the recovered stage record before launch"
+fi
+
+if grep -Fq 'artifacts_json' <<<"$prepare_body" \
+  && grep -Fq 'preservesPriorVerdict' <<<"$prepare_body" \
+  && grep -Fq '"$artifacts_json"' <<<"$prepare_body"; then
+  pass "recovery launch preserves prior review verdict artifacts"
+else
+  fail "recovery launch does not preserve prior review verdict artifacts"
 fi
 
 if grep -Fq '_prepare_recovery_phase_launch' <<<"$body" \

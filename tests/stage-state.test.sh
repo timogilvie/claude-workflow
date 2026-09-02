@@ -145,6 +145,21 @@ check_stage_complete() {
   return 1
 }
 
+review_result_has_final_evidence() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (($review.exitCode | type) == "number") and
+      (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
+      (($review.iterations | type) == "number" and $review.iterations >= 1) and
+      (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+  ' "$review_file" >/dev/null 2>&1
+}
+
 check_stage_awaiting_user() {
   local feature_dir="$1" stage="$2"
   local status
@@ -284,7 +299,7 @@ resolve_phase() {
   fi
 
   # Review
-  if check_stage_complete "$feature_dir" "review"; then
+  if check_stage_complete "$feature_dir" "review" && review_result_has_final_evidence "$feature_dir"; then
     _persist_phase "$feature_dir" "ready"
     echo "ready"
     return 0
@@ -716,6 +731,9 @@ mkdir -p "$FD27"
 write_stage_result "$FD27" "planning" "completed" "claude" "opus"
 write_stage_result "$FD27" "coding" "completed" "claude" "opus"
 write_stage_result "$FD27" "review" "completed" "claude" "opus"
+jq '.artifacts = {"type":"review","prNumber":27,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}' \
+  "$FD27/.review-result.json" > "$FD27/.review-result.json.tmp"
+mv "$FD27/.review-result.json.tmp" "$FD27/.review-result.json"
 check "review completed → ready" "ready" "$(resolve_phase "$FD27")"
 
 # Test 31: Ready completed
@@ -1099,6 +1117,10 @@ mkdir -p "$FD56"
 write_stage_result "$FD56" "review" "running" "claude" "claude-opus-4-6"
 check "review keepalive uses running stage result" "active" "$(simulate_review_keepalive "$FD56")"
 write_stage_result "$FD56" "review" "completed" "claude" "claude-opus-4-6"
+check "verdict-less review completion stays review" "review" "$(resolve_phase "$FD56")"
+jq '.artifacts = {"type":"review","prNumber":77,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}' \
+  "$FD56/.review-result.json" > "$FD56/.review-result.json.tmp"
+mv "$FD56/.review-result.json.tmp" "$FD56/.review-result.json"
 check "review completion resolves to ready" "ready" "$(resolve_phase "$FD56")"
 
 # Test 57: Regression - pane-alive state would not block coding completion

@@ -8,6 +8,9 @@ setup_dep_queue_monitor_dispatches_child_on_parent_pr() {
   PR="9001"
   PR_BY_ISSUE["$ISSUE"]="$PR"
   PR_STATUS="OPEN"
+  cat > "$FEATURE_DIR/.review-result.json" <<'JSON'
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":9001,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+JSON
 
   cat > "$STATE_FILE" <<'JSON'
 {
