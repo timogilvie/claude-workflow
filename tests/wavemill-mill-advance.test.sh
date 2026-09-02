@@ -91,8 +91,14 @@ for fn in \
   resolve_phase \
   resolve_stage_result_model \
   write_stage_result \
+  write_stage_result_with_history \
   wavemill_run_tsx_tool \
+  monitor_command_timestamp \
   normalize_prompt_command_reply \
+  review_result_has_final_evidence \
+  review_result_missing_final_evidence \
+  review_artifacts_with_pr_number \
+  clear_review_gate_attention \
   blocked_completion_current_head \
   blocked_completion_commit_matches_head \
   wavemill_owned_feature_artifact_path \
@@ -112,6 +118,7 @@ for fn in \
   quarantine_completed_coding_pane \
   complete_coding_advance \
   handle_advance_command \
+  handle_re_review_command \
   execute_or_defer_monitor_command
 do
   extracted="$(extract_function <(printf '%s\n' "$HEREDOC_CONTENT") "$fn")"
@@ -130,12 +137,36 @@ resolve_stage_result_model() {
 
 write_stage_result() {
   local feature_dir="$1" stage="$2" status="$3"
+  local artifacts_json="${7:-}" artifacts_fragment=""
+  if [[ -n "$artifacts_json" ]] && jq empty <<<"$artifacts_json" >/dev/null 2>&1; then
+    artifacts_fragment=",\"artifacts\":$artifacts_json"
+  fi
   cat > "$feature_dir/.${stage}-result.json" <<EOF
-{"stage":"$stage","status":"$status"}
+{"stage":"$stage","status":"$status"$artifacts_fragment}
 EOF
 }
 
 _write_stage_result_trace_event() { :; }
+marker_reason() {
+  local path="$1"
+  [[ -f "$path" ]] || return 0
+  jq -r '.reason // empty' "$path" 2>/dev/null || head -1 "$path" 2>/dev/null || true
+}
+marker_clear() { rm -f "$1"; }
+read_phase_config() { printf "\n"; }
+resolve_phase_model() { printf "%s\n" "${2:-$3}"; }
+find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-}"; }
+pr_state() { printf "%s\n" "${PR_STATUS:-OPEN}"; }
+launch_review_calls=0
+launch_review_phase() {
+  launch_review_calls=$((launch_review_calls + 1))
+  return "${REVIEW_LAUNCH_RC:-0}"
+}
+set_task_phase() { :; }
+write_ready_attention_file() {
+  mkdir -p "$1"
+  printf '%s\n' "$2" > "$1/.needs-attention"
+}
 
 log_lines=()
 warn_lines=()
@@ -160,6 +191,9 @@ reset_harness() {
   MONITOR_COMMAND_STATUS=""
   MONITOR_COMMAND_DEFER_EVENT=""
   MONITOR_COMMAND_DEFER_REASON=""
+  launch_review_calls=0
+  FOUND_PR=""
+  REVIEW_LAUNCH_RC=0
 }
 
 init_state() {
@@ -173,12 +207,15 @@ EOF
 
 write_task_state() {
   local issue="$1" slug="$2" worktree="$3" phase="$4"
+  local pr="${5:-}"
   jq -n \
     --arg issue "$issue" \
     --arg slug "$slug" \
     --arg worktree "$worktree" \
     --arg phase "$phase" \
-    '{tasks: {($issue): {slug: $slug, worktree: $worktree, phase: $phase}}}' > "$STATE_FILE"
+    --arg branch "task/$slug" \
+    --arg pr "$pr" \
+    '{tasks: {($issue): ({slug: $slug, worktree: $worktree, branch: $branch, phase: $phase} + (if $pr != "" then {pr: $pr} else {} end))}}' > "$STATE_FILE"
 }
 
 write_coding_result() {
@@ -244,9 +281,19 @@ run_advance_quiet() {
   run_advance "$event" 2>/dev/null
 }
 
+run_rereview() {
+  local event="$1" free_slots="${2:-1}"
+  reset_harness
+  execute_or_defer_monitor_command "new" "$event" "11" "$free_slots" "" "" "" ""
+}
+
 SCENARIO_DIR="$TMP_DIR/scenario"
 mkdir -p "$SCENARIO_DIR"
 STATE_FILE="$SCENARIO_DIR/state.json"
+SESSION="advance-command-test"
+AGENT_CMD="codex"
+BASE_BRANCH="main"
+PR_STATUS="OPEN"
 init_state "$STATE_FILE"
 
 # Success
@@ -371,6 +418,90 @@ for bad_event in "advance" "advance hok-1639" "advance HOK-1 extra"; do
   assert_eq "usage invalid for $bad_event" "invalid" "$MONITOR_COMMAND_STATUS"
   assert_contains "usage message for $bad_event" "usage: advance <issue-id>" "${warn_lines[*]}"
 done
+
+# Re-review command success and validation
+WORKTREE_REREVIEW="$SCENARIO_DIR/worktree-rereview"
+FEATURE_REREVIEW="$WORKTREE_REREVIEW/features/rereview-slug"
+mkdir -p "$FEATURE_REREVIEW"
+setup_git_worktree "$WORKTREE_REREVIEW"
+write_task_state "HOK-2012" "rereview-slug" "$WORKTREE_REREVIEW" "ready" "912"
+cat > "$FEATURE_REREVIEW/.review-result.json" <<'EOF'
+{
+  "stage": "review",
+  "status": "completed",
+  "artifacts": {
+    "type": "review",
+    "prNumber": 912,
+    "exitCode": 1,
+    "verdict": "not_ready",
+    "iterations": 1,
+    "blockerCount": 1,
+    "history": ["kept"]
+  }
+}
+EOF
+printf '%s\n' 'Review verdict does not pass readiness gate for PR #912.' > "$FEATURE_REREVIEW/.needs-attention"
+run_rereview "re-review HOK-2012"
+assert_eq "re-review handled" "handled" "$MONITOR_COMMAND_STATUS"
+assert_eq "re-review launches review" "1" "$launch_review_calls"
+assert_eq "re-review resets review status" "running" "$(jq -r '.status' "$FEATURE_REREVIEW/.review-result.json")"
+assert_eq "re-review preserves prior verdict in audit" "not_ready" "$(jq -r '.previousReviewResult.artifacts.verdict' "$FEATURE_REREVIEW/.review-rerun-request.json")"
+assert_eq "re-review preserves prior history in audit" "kept" "$(jq -r '.previousReviewResult.artifacts.history[0]' "$FEATURE_REREVIEW/.review-rerun-request.json")"
+assert_file_missing "re-review clears stale review-gate attention" "$FEATURE_REREVIEW/.needs-attention"
+
+run_rereview "re-review HOK-2012" 0
+assert_eq "re-review no slots defers" "deferred" "$MONITOR_COMMAND_STATUS"
+assert_eq "re-review deferred event" "re-review HOK-2012" "$MONITOR_COMMAND_DEFER_EVENT"
+
+init_state "$STATE_FILE"
+run_rereview "re-review HOK-9999"
+assert_eq "re-review unknown invalid" "invalid" "$MONITOR_COMMAND_STATUS"
+assert_contains "re-review unknown message" "HOK-9999 is not tracked" "${warn_lines[*]}"
+
+WORKTREE_REREVIEW_NOPR="$SCENARIO_DIR/worktree-rereview-nopr"
+FEATURE_REREVIEW_NOPR="$WORKTREE_REREVIEW_NOPR/features/rereview-nopr-slug"
+mkdir -p "$FEATURE_REREVIEW_NOPR"
+setup_git_worktree "$WORKTREE_REREVIEW_NOPR"
+write_task_state "HOK-2013" "rereview-nopr-slug" "$WORKTREE_REREVIEW_NOPR" "review"
+cat > "$FEATURE_REREVIEW_NOPR/.review-result.json" <<'EOF'
+{"stage":"review","status":"completed","artifacts":{"type":"review","exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+EOF
+run_rereview "re-review HOK-2013"
+assert_eq "re-review no PR invalid" "invalid" "$MONITOR_COMMAND_STATUS"
+assert_contains "re-review no PR message" "has no open PR" "${warn_lines[*]}"
+
+WORKTREE_REREVIEW_CLOSED="$SCENARIO_DIR/worktree-rereview-closed"
+FEATURE_REREVIEW_CLOSED="$WORKTREE_REREVIEW_CLOSED/features/rereview-closed-slug"
+mkdir -p "$FEATURE_REREVIEW_CLOSED"
+setup_git_worktree "$WORKTREE_REREVIEW_CLOSED"
+write_task_state "HOK-2014" "rereview-closed-slug" "$WORKTREE_REREVIEW_CLOSED" "ready" "914"
+cat > "$FEATURE_REREVIEW_CLOSED/.review-result.json" <<'EOF'
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":914,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+EOF
+PR_STATUS="CLOSED"
+run_rereview "re-review HOK-2014"
+assert_eq "re-review closed PR invalid" "invalid" "$MONITOR_COMMAND_STATUS"
+assert_contains "re-review closed PR message" "is not open" "${warn_lines[*]}"
+
+WORKTREE_REREVIEW_PHASE="$SCENARIO_DIR/worktree-rereview-phase"
+FEATURE_REREVIEW_PHASE="$WORKTREE_REREVIEW_PHASE/features/rereview-phase-slug"
+mkdir -p "$FEATURE_REREVIEW_PHASE"
+setup_git_worktree "$WORKTREE_REREVIEW_PHASE"
+write_task_state "HOK-2015" "rereview-phase-slug" "$WORKTREE_REREVIEW_PHASE" "coding" "915"
+write_coding_result "$FEATURE_REREVIEW_PHASE" "running"
+run_rereview "re-review HOK-2015"
+assert_eq "re-review wrong phase invalid" "invalid" "$MONITOR_COMMAND_STATUS"
+assert_contains "re-review wrong phase message" "re-review only works for review or ready tasks" "${warn_lines[*]}"
+
+WORKTREE_REREVIEW_RUNNING="$SCENARIO_DIR/worktree-rereview-running"
+FEATURE_REREVIEW_RUNNING="$WORKTREE_REREVIEW_RUNNING/features/rereview-running-slug"
+mkdir -p "$FEATURE_REREVIEW_RUNNING"
+setup_git_worktree "$WORKTREE_REREVIEW_RUNNING"
+write_task_state "HOK-2016" "rereview-running-slug" "$WORKTREE_REREVIEW_RUNNING" "review" "916"
+write_stage_result "$FEATURE_REREVIEW_RUNNING" "review" "running"
+run_rereview "re-review HOK-2016"
+assert_eq "re-review running invalid" "invalid" "$MONITOR_COMMAND_STATUS"
+assert_contains "re-review running message" "review is already running" "${warn_lines[*]}"
 
 # Audit-before-advance
 WORKTREE_AUDIT_FAIL="$SCENARIO_DIR/worktree-audit-fail"

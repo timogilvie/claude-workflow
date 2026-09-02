@@ -1567,6 +1567,42 @@ else
   fail "ready rows still render stale planning approval detail"
 fi
 
+printf '%s\n' 'Review verdict does not pass readiness gate for PR #414 (status=completed, exitCode=missing).' \
+  > "$WORKTREES_DIR/ready-task/features/ready-task/.needs-attention"
+BEHAVIOR_READY_REVIEW_STALE="$TMP_DIR/behavior-ready-review-stale.json"
+cat > "$BEHAVIOR_READY_REVIEW_STALE" <<'EOF'
+{
+  "pane": {
+    "HOK-1311-ready-task": "15",
+    "HOK-1312-active-task": "16"
+  },
+  "reported": {
+    "HOK-1312": "blocked by scope guard"
+  },
+  "planning": {},
+  "pr": {
+    "task/ready-task": "414|OPEN",
+    "task/active-task": "415|OPEN"
+  },
+  "checks": {
+    "task/ready-task": "pass",
+    "task/active-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_READY_REVIEW_STALE="$TMP_DIR/output-ready-review-stale.txt"
+run_render "$STATE_FILE_READY_PLANNING_STALE" "$WORKTREES_DIR" "$BEHAVIOR_READY_REVIEW_STALE" "$OUTPUT_READY_REVIEW_STALE"
+rm -f "$WORKTREES_DIR/ready-task/features/ready-task/.needs-attention"
+
+if grep -q '⚡ ACTIVE (2)' "$OUTPUT_READY_REVIEW_STALE" \
+  && ! grep -q 'Review verdict does not pass readiness gate' "$OUTPUT_READY_REVIEW_STALE" \
+  && ! grep -q 'blocked by scope guard' "$OUTPUT_READY_REVIEW_STALE"; then
+  pass "ready rows suppress stale review-gate detail"
+else
+  fail "ready rows still render stale review-gate detail"
+fi
+
 echo ""
 echo "=== wavemill-status pr_checks rollup handling ==="
 

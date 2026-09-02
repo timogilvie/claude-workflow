@@ -21,6 +21,16 @@ check_contains() {
   fi
 }
 
+check_not_contains() {
+  local name="$1" haystack="$2" needle="$3"
+  if [[ "$haystack" == *"$needle"* ]]; then
+    echo "    unexpected: $needle"
+    fail "$name"
+  else
+    pass "$name"
+  fi
+}
+
 TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
@@ -63,9 +73,14 @@ extract_function "$MONITOR_SCRIPT_FILE" "failed_ready_recheck_identical_streak" 
 extract_function "$MONITOR_SCRIPT_FILE" "mark_failed_ready_recheck_exhausted" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "failed_ready_recheck_gate" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_passes_ready_gate" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_has_final_evidence" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_missing_final_evidence" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_infra_failure" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_queue_field" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_artifacts_with_pr_number" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "record_review_pr_reconciliation" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "clear_review_gate_attention" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "launch_review_for_missing_evidence" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "resolve_pair_on_primary_merge" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "cleanup_merged_primary_challenge_task" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "monitor_issue_state" >> "$MONITOR_FUNC_FILE"
@@ -120,6 +135,7 @@ run_monitor_case() {
     ATTENTION_STATE=""
     SET_PHASE_TO=""
     READY_LAUNCH_COUNT=0
+    REVIEW_LAUNCH_COUNT=0
     RESTORE_COUNT=0
     CLEANUP_COUNT=0
     INVOKE_COUNT=1
@@ -135,6 +151,9 @@ run_monitor_case() {
     FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
     READY_DIR="$FEATURE_DIR/ready"
     mkdir -p "$READY_DIR"
+    cat > "$FEATURE_DIR/.review-result.json" <<JSON
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":321,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+JSON
     printf "{\"title\":\"Monitor ready transition\"}\n" > "/tmp/${SESSION}-${ISSUE}-issue.json"
 
     BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
@@ -344,6 +363,22 @@ JSON
         FOUND_PR="321"
         CURRENT_PHASE="coding"
         ;;
+      discovered_pr_missing_review_evidence)
+        unset "PR_BY_ISSUE[$ISSUE]"
+        PR=""
+        FOUND_PR="321"
+        CURRENT_PHASE="coding"
+        rm -f "$FEATURE_DIR/.review-result.json"
+        ;;
+      discovered_pr_verdictless_stub)
+        unset "PR_BY_ISSUE[$ISSUE]"
+        PR=""
+        FOUND_PR="321"
+        CURRENT_PHASE="coding"
+        cat > "$FEATURE_DIR/.review-result.json" <<JSON
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":321}}
+JSON
+        ;;
       ready_stale_main_advanced)
         CURRENT_PHASE="ready"
         READY_STATUS="completed"
@@ -456,6 +491,13 @@ JSON
       READY_LAUNCH_ARGS="$*"
       return "$READY_LAUNCH_RC"
     }
+    launch_review_phase() {
+      REVIEW_LAUNCH_COUNT=$((REVIEW_LAUNCH_COUNT + 1))
+      REVIEW_LAUNCH_ARGS="$*"
+      return 0
+    }
+    read_phase_config() { printf "\n"; }
+    resolve_phase_model() { printf "%s\n" "${2:-$3}"; }
     check_stage_aborted() { [[ "$ABORTED" == "true" ]]; }
     restore_review_task_window() {
       RESTORE_COUNT=$((RESTORE_COUNT + 1))
@@ -505,15 +547,17 @@ JSON
     transient_attention="absent"
     [[ -f "$READY_DIR/.needs-attention-transient" ]] && transient_attention="present"
     transient_count="$(cat "$READY_DIR/.transient-mergeability-count" 2>/dev/null || echo "")"
-    printf "phase=%s\nattention=%s\nready_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nlogs=%s\n" \
+    printf "phase=%s\nattention=%s\nready_launches=%s\nreview_launches=%s\nrestore_calls=%s\ncleanup_count=%s\nactive_count=%s\nwrite_stage=%s\nready_args=%s\nreview_args=%s\nattention_calls=%s\nbypass_warn_count=%s\nsave_task_state_status=%s\nneeds_attention=%s\ntransient_attention=%s\ntransient_count=%s\nlogs=%s\n" \
       "$CURRENT_PHASE" \
       "$ATTENTION_STATE" \
       "$READY_LAUNCH_COUNT" \
+      "$REVIEW_LAUNCH_COUNT" \
       "$RESTORE_COUNT" \
       "$CLEANUP_COUNT" \
       "$active_count" \
       "$stage_summary" \
       "${READY_LAUNCH_ARGS:-}" \
+      "${REVIEW_LAUNCH_ARGS:-}" \
       "$WRITE_READY_ATTENTION_CALLS" \
       "$bypass_warn_count" \
       "$save_task_state_status" \
@@ -629,8 +673,8 @@ check_contains "ready pass clears pending recheck budget" "$pending_recheck_pass
 
 pending_recheck_terminal_output="$(run_monitor_case pending_recheck_terminal_review_gate)"
 check_contains "unacceptable review artifact launches once" "$pending_recheck_terminal_output" "ready_launches=1"
-check_contains "unacceptable review artifact terminalizes immediately" "$pending_recheck_terminal_output" "pending_sentinel=present"
-check_contains "unacceptable review artifact logs terminal cause" "$pending_recheck_terminal_output" "refused by review gate"
+check_contains "verdictless review artifact does not terminalize pending recheck" "$pending_recheck_terminal_output" "pending_sentinel=absent"
+check_not_contains "verdictless review artifact is recoverable" "$pending_recheck_terminal_output" "refused by review gate"
 check_contains "unacceptable review artifact flags user" "$pending_recheck_terminal_output" "attention=needs-user"
 
 ready_conflict_merged_output="$(run_monitor_case ready_conflict_merged)"
@@ -669,6 +713,19 @@ discovered_pr_from_coding_output="$(run_monitor_case discovered_pr_from_coding)"
 check_contains "newly discovered PR moves stale coding phase to ready" "$discovered_pr_from_coding_output" "phase=ready"
 check_contains "newly discovered PR launches ready immediately" "$discovered_pr_from_coding_output" "ready_launches=1"
 check_contains "newly discovered PR does not restore review window first" "$discovered_pr_from_coding_output" "restore_calls=0"
+
+discovered_pr_missing_review_output="$(run_monitor_case discovered_pr_missing_review_evidence)"
+check_contains "PR without review artifact stays in review" "$discovered_pr_missing_review_output" "phase=review"
+check_contains "PR without review artifact launches review" "$discovered_pr_missing_review_output" "review_launches=1"
+check_contains "PR without review artifact does not launch ready" "$discovered_pr_missing_review_output" "ready_launches=0"
+check_contains "PR without review artifact records running review" "$discovered_pr_missing_review_output" "|review|running|"
+check_contains "PR without review artifact records missing evidence" "$discovered_pr_missing_review_output" '"missingReviewEvidence":true'
+
+discovered_pr_stub_output="$(run_monitor_case discovered_pr_verdictless_stub)"
+check_contains "PR with verdictless stub stays in review" "$discovered_pr_stub_output" "phase=review"
+check_contains "PR with verdictless stub launches review" "$discovered_pr_stub_output" "review_launches=1"
+check_contains "PR with verdictless stub does not launch ready" "$discovered_pr_stub_output" "ready_launches=0"
+check_contains "PR with verdictless stub marks missing evidence" "$discovered_pr_stub_output" '"missingReviewEvidence":true'
 
 ready_stale_main_advanced_output="$(run_monitor_case ready_stale_main_advanced)"
 check_contains "stale ready (main advanced) re-runs ready checks" "$ready_stale_main_advanced_output" "ready_launches=1"

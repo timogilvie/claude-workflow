@@ -136,7 +136,12 @@ for fn in \
   ready_remediation_launch_head \
   inject_depends_on_pr_block \
   dispatch_queued_children_for_parent \
+  review_result_has_final_evidence \
+  review_result_missing_final_evidence \
   review_artifacts_with_pr_number \
+  record_review_pr_reconciliation \
+  clear_review_gate_attention \
+  launch_review_for_missing_evidence \
   clear_transient_mergeability_state \
   reroute_expanded_packets_for_coding_handoff \
   handle_expanded_reroute_handoff_failure \
@@ -416,10 +421,14 @@ run_lifecycle_scenario() {
     write_stage_result() {
       local feature_dir="$1" stage="$2" status="$3"
       local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+      local artifacts_fragment=""
       mkdir -p "$feature_dir"
       printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" "$WRITE_STAGE_CALLS" "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
+      if [[ -n "$artifacts_json" ]] && jq empty <<<"$artifacts_json" >/dev/null 2>&1; then
+        artifacts_fragment=",\"artifacts\":$artifacts_json"
+      fi
       cat > "$feature_dir/.${stage}-result.json" <<JSON
-{"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"}
+{"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"$artifacts_fragment}
 JSON
     }
     # Keep stage-history writes observable through the scenario stage recorder.
