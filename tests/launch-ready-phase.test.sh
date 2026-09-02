@@ -89,6 +89,8 @@ extract_function "$MONITOR_SCRIPT_FILE" "log_ready_unparseable_result" >> "$LAUN
 extract_function "$MONITOR_SCRIPT_FILE" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_passes_ready_gate" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_has_final_evidence" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_missing_final_evidence" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_infra_failure" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "increment_review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
@@ -201,6 +203,24 @@ EOF
       infra_retry_scope_unverifiable)
         cat > "$STATE_DIR/.review-result.json" <<EOF
 {"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":1,"failureCategory":"review-scope-unverifiable","terminalReason":"review_complete"}}
+EOF
+        ;;
+      verdictless_completed_recovery)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"missingReviewEvidence":true}}
+EOF
+        ;;
+      missing_review_recovery)
+        rm -f "$STATE_DIR/.review-result.json"
+        ;;
+      verdictless_running_recovery)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"running","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"recoveryReplay":{"status":"running","preservesPriorVerdict":true}}}
+EOF
+        ;;
+      infra_retry_running_preserved_failure)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"running","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"failureCategory":"native-runtime-unavailable","history":["prior"]}}
 EOF
         ;;
       review_not_ready_no_category)
@@ -1086,6 +1106,26 @@ check_contains "scope unverifiable retries review" "$output" "rc=6"
 check_contains "scope unverifiable launches review" "$output" "review_launch_calls=1"
 check_contains "scope unverifiable increments infra retry" "$output" "infra_retry_count=1"
 
+output="$(run_launch_case verdictless_completed_recovery)"
+check_contains "verdictless completed retries review" "$output" "rc=6"
+check_contains "verdictless completed launches review" "$output" "review_launch_calls=1"
+check_contains "verdictless completed increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case missing_review_recovery)"
+check_contains "missing review retries review" "$output" "rc=6"
+check_contains "missing review launches review" "$output" "review_launch_calls=1"
+check_contains "missing review increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case verdictless_running_recovery)"
+check_contains "verdictless running retries review" "$output" "rc=6"
+check_contains "verdictless running launches review" "$output" "review_launch_calls=1"
+check_contains "verdictless running increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_running_preserved_failure)"
+check_contains "running preserved infra verdict retries review" "$output" "rc=6"
+check_contains "running preserved infra verdict launches review" "$output" "review_launch_calls=1"
+check_contains "running preserved infra verdict increments infra retry" "$output" "infra_retry_count=1"
+
 # HOK-2889 (other direction): a plain not_ready with no failure category is a
 # genuine review failure and must refuse without any infra retry.
 output="$(run_launch_case review_not_ready_no_category)"
@@ -1093,6 +1133,7 @@ check_contains "plain not_ready refuses ready" "$output" "rc=1"
 check_contains "plain not_ready does not launch review" "$output" "review_launch_calls=0"
 check_not_contains "plain not_ready does not increment infra retry" "$output" "infra_retry_count=1"
 check_contains "plain not_ready writes readiness attention" "$output" "Review verdict does not pass readiness gate"
+check_contains "plain not_ready marks failed verdict" "$output" "verdictState=failed"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"

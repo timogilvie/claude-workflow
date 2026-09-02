@@ -303,13 +303,34 @@ is_ready_conflicted() {
   [[ -f "$worktree/features/$slug/.conflict-detected" ]]
 }
 
+is_stale_ready_gate_detail_for_phase() {
+  local task_phase="${1:-}" agent_state="${2:-}" detail="${3:-}"
+
+  [[ "$agent_state" == "running" ]] || return 1
+  [[ "$task_phase" == "review" || "$task_phase" == "ready" ]] || return 1
+  case "$detail" in
+    Review\ verdict\ does\ not\ pass\ readiness\ gate*|\
+    Review\ recorded\ no\ verdict*|\
+    *blocked\ by\ scope\ guard*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 ready_attention_detail() {
   local worktree="$1" slug="$2"
+  local task_phase="${3:-}" agent_state="${4:-}"
   local feature_dir="$worktree/features/$slug"
   local attention_file="$feature_dir/.needs-attention"
+  local detail
 
   [[ -f "$attention_file" ]] || return 0
-  head -1 "$attention_file" 2>/dev/null | tr -d '\r'
+  detail="$(head -1 "$attention_file" 2>/dev/null | tr -d '\r')"
+  if is_stale_ready_gate_detail_for_phase "$task_phase" "$agent_state" "$detail"; then
+    return 0
+  fi
+  printf '%s\n' "$detail"
 }
 
 truncate_blocked_completion_summary() {
@@ -1186,7 +1207,7 @@ is_actionable_state() {
     return
   fi
 
-  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  attention_detail=$(ready_attention_detail "$worktree" "$slug" "$task_phase" "$agent_state")
   if [[ -n "$attention_detail" ]]; then
     echo "actionable"
     return
@@ -1316,6 +1337,9 @@ render_task_row() {
     reported=$(agent_hook_detail "$issue")
     [[ -z "$reported" ]] && reported=$(agent_reported_status "$issue")
     if is_stale_planning_detail_for_phase "$task_phase" "$reported"; then
+      reported=""
+    fi
+    if is_stale_ready_gate_detail_for_phase "$task_phase" "$agent_state" "$reported"; then
       reported=""
     fi
     case "$agent_state:$reported" in
@@ -1448,7 +1472,7 @@ render_task_row() {
   printf "%-10s  %4s  %-22s  %6s  %-12b  %-11b  %b${EL}\n" \
     "$issue" "$pane" "$ds" "$t" "$phase_str" "$st_str" "$pr_str" >> "$FRAME"
 
-  attention_detail=$(ready_attention_detail "$worktree" "$slug")
+  attention_detail=$(ready_attention_detail "$worktree" "$slug" "$task_phase" "$agent_state")
   if [[ "$agent_state" != "running" && "$task_phase" == "ready" ]]; then
     if [[ -n "$attention_detail" ]]; then
       reported="$attention_detail"
