@@ -2407,11 +2407,11 @@ reconciliation_project_prompt() {
   local validate_out reason
   if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
     reason=$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")
-    write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($reason) for PR #$pr_number; refusing autonomous recovery launch."
+    write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($reason) for PR #$pr_number - refusing autonomous recovery launch."
     return 1
   fi
   if ! npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" project --feature-dir "$state_dir" > "$prompt_file" 2>/dev/null; then
-    write_ready_attention_file "$state_dir" "Reconciliation capsule projection failed for PR #$pr_number; refusing autonomous recovery launch."
+    write_ready_attention_file "$state_dir" "Reconciliation capsule projection failed for PR #$pr_number - refusing autonomous recovery launch."
     return 1
   fi
   return 0
@@ -2476,7 +2476,7 @@ reconciliation_mark_review_stale() {
   if [[ -f "$review_file" ]]; then
     state_mutate "$review_file" \
       '.status = "stale" | .detail = $detail | .staleReviewHead = $old_head' \
-      --arg detail "Review verdict at $old_head is stale after reconciliation commit $new_head; re-review required for PR #$pr_number" \
+      --arg detail "Review verdict at $old_head is stale after reconciliation commit $new_head - re-review required for PR #$pr_number" \
       --arg old_head "$old_head" || return 1
   fi
   npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" finalize-attempt \
@@ -7697,8 +7697,8 @@ _launch_ready_remediation_attempt() {
       --detail "Ready-check failure on PR #$pr_number: $failed_check_summary" \
       --failing-checks-json "$recon_checks_json" \
       2>/dev/null) || {
-      write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number; refusing ready remediation launch."
-      log_error "  $issue: reconciliation capsule unavailable; refusing ready remediation launch for PR #$pr_number"
+      write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number - refusing ready remediation launch."
+      log_error "  $issue: reconciliation capsule unavailable - refusing ready remediation launch for PR #$pr_number"
       return 1
     }
     recon_fingerprint=$(jq -r '.failureFingerprint // empty' <<< "$recon_incident_out" 2>/dev/null || echo "")
@@ -7748,7 +7748,7 @@ _launch_ready_remediation_attempt() {
     # Capsule projection first (stable foundation prefix, then the volatile
     # incident), followed by the narrow remediation process instructions.
     if ! reconciliation_project_prompt "$state_dir" "$pr_number" "$prompt_file.capsule"; then
-      log_error "  $issue: reconciliation capsule projection failed; refusing ready remediation launch for PR #$pr_number"
+      log_error "  $issue: reconciliation capsule projection failed - refusing ready remediation launch for PR #$pr_number"
       return 1
     fi
     cat "$prompt_file" >> "$prompt_file.capsule"
@@ -7925,7 +7925,7 @@ launch_ready_phase() {
     recon_new_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
     reconciliation_mark_review_stale "$state_dir" "$pr_number" "$recon_old_head" "$recon_new_head" || true
     strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
-    log "status" "  ♻ $issue: reconciliation commit ${recon_new_head:0:7} invalidates review at ${recon_old_head:0:7}; relaunching review for PR #$pr_number"
+    log "status" "  ♻ $issue: reconciliation commit ${recon_new_head:0:7} invalidates review at ${recon_old_head:0:7} - relaunching review for PR #$pr_number"
     launch_review_for_missing_evidence "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$state_dir" "$current_agent" || recon_review_rc=$?
     if [[ "$recon_review_rc" -eq 0 ]]; then
       return 6
@@ -8040,14 +8040,14 @@ launch_ready_phase() {
         ${recon_base_sha:+--base "$recon_base_sha"} \
         --detail "PR #$pr_number reports merge conflicts against $base_branch (GitHub mergeable: CONFLICTED)." \
         2>/dev/null) || {
-        write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number; refusing conflict reconciliation launch."
-        log_error "  $issue: reconciliation capsule unavailable; refusing conflict launch for PR #$pr_number"
+        write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number - refusing conflict reconciliation launch."
+        log_error "  $issue: reconciliation capsule unavailable - refusing conflict launch for PR #$pr_number"
         return 1
       }
       recon_fingerprint=$(jq -r '.failureFingerprint // empty' <<< "$recon_incident_out" 2>/dev/null || echo "")
       reconciliation_reset_retry_if_new_fingerprint "$state_dir" "ready-remediation" "$recon_fingerprint"
       if ! reconciliation_project_prompt "$state_dir" "$pr_number" "$prompt_file.capsule"; then
-        log_error "  $issue: reconciliation capsule projection failed; refusing conflict launch for PR #$pr_number"
+        log_error "  $issue: reconciliation capsule projection failed - refusing conflict launch for PR #$pr_number"
         return 1
       fi
       cat "$prompt_file" >> "$prompt_file.capsule"
