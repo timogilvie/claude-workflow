@@ -27,6 +27,23 @@ run_linear_retry_drain_tick() {
   npx tsx "$TOOLS_DIR/linear-retry-drain.ts" drain --max-entries 10 >/dev/null 2>&1 || true
 }
 
+# Classify a failure for reconciliation (HOK-2936): delegates to ready-watchdog.ts
+# classifyForReconciliation to distinguish stale_base, transient CI, deterministic CI,
+# merge conflicts, and ambiguous failures (REQ-F3: only LLM on deterministic/conflict).
+classify_for_reconciliation() {
+  local merge_status="$1" failed_check_summary="$2" checks_run="$3" checks_passed="$4"
+  (cd "$REPO_DIR" && npx tsx -e "
+import { classifyForReconciliation } from './shared/lib/ready-watchdog.ts';
+const classification = classifyForReconciliation({
+  mergeStatus: '$merge_status',
+  failedCheckSummary: '$failed_check_summary',
+  checksRun: $checks_run,
+  checksPassed: $checks_passed,
+});
+console.log(classification);
+  " 2>/dev/null) || echo "ambiguous"
+}
+
 # Logging functions - defined early so they're available for all error handling
 _log_level_num() {
   case "$1" in
@@ -7689,10 +7706,12 @@ _launch_ready_remediation_attempt() {
   # refuses the launch with a typed needs-user reason (REQ-F4).
   recon_enabled=$(post_pr_reconciliation_enabled "$wt_dir")
   if [[ "$recon_enabled" == "true" ]]; then
+    local recon_classification
+    recon_classification=$(classify_for_reconciliation "$merge_status" "$failed_check_summary" "$checks_run" "$checks_passed")
     recon_checks_json=$(jq -c 'map({name: .})' <<< "$failed_check_names_json" 2>/dev/null || echo '[]')
     recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
       --feature-dir "$state_dir" \
-      --classification ci_deterministic_safe \
+      --classification "$recon_classification" \
       ${current_head:+--head "$current_head"} \
       --detail "Ready-check failure on PR #$pr_number: $failed_check_summary" \
       --failing-checks-json "$recon_checks_json" \
@@ -8030,12 +8049,13 @@ launch_ready_phase() {
       # (HOK-2936): stable foundation projection first, current incident and
       # narrow conflict instructions after. An invalid capsule refuses the
       # launch with a typed needs-user reason instead of guessing context.
-      local recon_head recon_base_sha recon_incident_out recon_fingerprint
+      local recon_head recon_base_sha recon_incident_out recon_fingerprint recon_classification
       recon_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
       recon_base_sha=$(git -C "$wt_dir" rev-parse "origin/$base_branch" 2>/dev/null || echo "")
+      recon_classification=$(classify_for_reconciliation "$merge_status" "" "0" "0")
       recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
         --feature-dir "$state_dir" \
-        --classification merge_conflict \
+        --classification "$recon_classification" \
         ${recon_head:+--head "$recon_head"} \
         ${recon_base_sha:+--base "$recon_base_sha"} \
         --detail "PR #$pr_number reports merge conflicts against $base_branch (GitHub mergeable: CONFLICTED)." \
