@@ -1768,9 +1768,41 @@ format_backstage_service_status() {
     disabled) printf '%b' "${D}disabled${N}" ;;
     needs-user) printf '%b' "${R}needs-user${N}" ;;
     stalled) printf '%b' "${R}${status}${N}" ;;
+    alive-not-progressing) printf '%b' "${Y}${status}${N}" ;;
     missing-*|stale-*|backstage-missing) printf '%b' "${Y}${status}${N}" ;;
     *) printf '%b' "${D}${status}${N}" ;;
   esac
+}
+
+# Progress-vs-liveness (HOK-2919): a service that reports progressState
+# "stalled" is alive (its heartbeat is current) but not moving state. Rewrites
+# a would-be "healthy" status so the header distinguishes the two; services
+# without progress fields render unchanged. Echoes the effective status.
+backstage_effective_service_status() {
+  local health_file="$1" service="$2" status="${3:-unknown}"
+  local progress_state
+  progress_state="$(jq -r --arg service "$service" '.services[$service].progressState // empty' "$health_file" 2>/dev/null || true)"
+  if [[ "$progress_state" == "stalled" && "$status" == "healthy" ]]; then
+    printf 'alive-not-progressing'
+  else
+    printf '%s' "$status"
+  fi
+}
+
+# Age suffix for the last real progress event of a service, shown alongside
+# the heartbeat age when the service is alive but not progressing. Returns 1
+# (prints nothing) when the service has no progress fields.
+format_backstage_progress_age() {
+  local health_file="$1" service="$2"
+  local progress_state last_progress_at progress_age
+  progress_state="$(jq -r --arg service "$service" '.services[$service].progressState // empty' "$health_file" 2>/dev/null || true)"
+  [[ "$progress_state" == "stalled" ]] || return 1
+  last_progress_at="$(jq -r --arg service "$service" '.services[$service].lastProgressAt // empty' "$health_file" 2>/dev/null || true)"
+  if progress_age="$(format_backstage_heartbeat_age "$last_progress_at" 2>/dev/null)"; then
+    printf 'progress %s' "$progress_age"
+    return 0
+  fi
+  return 1
 }
 
 format_backstage_heartbeat_age() {
@@ -1805,7 +1837,7 @@ queue_health_dashboard_status() {
 }
 
 backstage_health_dashboard_line() {
-  local state_file="${1:-}" state_dir health_file tend_status observer_status observer_instance_count heartbeat_at heartbeat_age queue_status_line tend_failure_count
+  local state_file="${1:-}" state_dir health_file tend_status observer_status observer_instance_count heartbeat_at heartbeat_age queue_status_line tend_failure_count progress_age
   [[ -n "$state_file" ]] || return 1
   state_dir="$(dirname "$state_file" 2>/dev/null || echo '')"
   [[ -n "$state_dir" ]] || return 1
@@ -1816,16 +1848,22 @@ backstage_health_dashboard_line() {
   observer_status="$(jq -r '.services.observer.status // empty' "$health_file" 2>/dev/null || true)"
   [[ -n "$tend_status$observer_status" ]] || return 1
 
-  printf 'Tend: %b' "$(format_backstage_service_status "${tend_status:-unknown}")"
+  tend_status="$(backstage_effective_service_status "$health_file" 'tend' "${tend_status:-unknown}")"
+  printf 'Tend: %b' "$(format_backstage_service_status "$tend_status")"
   heartbeat_at="$(jq -r '.services.tend.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
   if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
-    printf ' (%s)' "$heartbeat_age"
+    if progress_age="$(format_backstage_progress_age "$health_file" 'tend' 2>/dev/null)"; then
+      printf ' (tick %s, %s)' "$heartbeat_age" "$progress_age"
+    else
+      printf ' (%s)' "$heartbeat_age"
+    fi
   fi
   tend_failure_count="$(jq -r '.services.tend.failureCount // 0' "$health_file" 2>/dev/null || echo 0)"
   if [[ "$tend_failure_count" =~ ^[0-9]+$ ]] && (( tend_failure_count > 0 )); then
     printf ' retrying:%s' "$tend_failure_count"
   fi
   if [[ -n "$observer_status" ]]; then
+    observer_status="$(backstage_effective_service_status "$health_file" 'observer' "$observer_status")"
     printf ' │ Observer: %b' "$(format_backstage_service_status "$observer_status")"
     observer_instance_count="$(jq -r '.services.observer.instanceCount // empty' "$health_file" 2>/dev/null || true)"
     if [[ "$observer_instance_count" =~ ^[0-9]+$ ]] && (( observer_instance_count > 1 )); then
@@ -1833,7 +1871,11 @@ backstage_health_dashboard_line() {
     fi
     heartbeat_at="$(jq -r '.services.observer.heartbeatAt // empty' "$health_file" 2>/dev/null || true)"
     if heartbeat_age="$(format_backstage_heartbeat_age "$heartbeat_at" 2>/dev/null)"; then
-      printf ' (%s)' "$heartbeat_age"
+      if progress_age="$(format_backstage_progress_age "$health_file" 'observer' 2>/dev/null)"; then
+        printf ' (tick %s, %s)' "$heartbeat_age" "$progress_age"
+      else
+        printf ' (%s)' "$heartbeat_age"
+      fi
     fi
   else
     printf ' │ Observer: %b' "$(format_backstage_service_status "disabled")"

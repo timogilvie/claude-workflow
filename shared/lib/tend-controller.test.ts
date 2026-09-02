@@ -2126,7 +2126,7 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
       assert.equal(mergeAttempts, 2);
       assert.deepEqual(sleeps, [30_000]);
-      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
+      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,mergeable,statusCheckRollup,headRefOid,baseRefOid/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
     } finally {
       options.cleanup();

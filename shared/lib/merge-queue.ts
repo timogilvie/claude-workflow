@@ -1,3 +1,7 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { mutateJsonState } from './state-mutex.ts';
+
 export type MergeQueueState = 'ready' | 'ready-stale' | 'merge-candidate';
 export type MergeQueueCiConclusion = 'pass' | 'fail' | 'pending' | 'unknown' | 'none';
 
@@ -28,6 +32,121 @@ export interface MergeQueuePr {
   workflowStatus?: string;
   prState?: string;
   ci?: MergeQueueCiState;
+  /** Progress-only telemetry mirrored from the lane-progress record (HOK-2919). */
+  lastProgressAt?: string;
+  laneWaitSeconds?: number;
+  laneHoldSeconds?: number;
+  rebaseCount?: number;
+  ciRestartCount?: number;
+}
+
+/**
+ * Named state transitions that count as real merge-lane progress for a PR.
+ * Ordinary poll ticks must never be recorded — only these transitions update
+ * `lastProgressAt` (HOK-2919 progress-vs-liveness).
+ */
+export type LaneProgressEvent =
+  | 'lane-entered'
+  | 'merge-attempt'
+  | 'rebase'
+  | 'ci-restart'
+  | 'stale-base-refresh'
+  | 'retry-scheduled'
+  | 'merged';
+
+/**
+ * Durable per-PR lane residence telemetry. Written by the tend process (which
+ * performs rebases, CI restarts, and merges) and mirrored into the merge-queue
+ * ready artifacts by the mill monitor so both views can explain queue
+ * residence. Also the data source for HOK-2936's reconciliation capsule.
+ */
+export interface LaneProgressRecord {
+  prNumber: number;
+  /** First time any lane event was recorded for this PR (lane entry). */
+  enteredLaneAt?: string;
+  /** Timestamp of the most recent real state transition (never a poll tick). */
+  lastProgressAt?: string;
+  lastEvent?: LaneProgressEvent;
+  /** Seconds between lane entry and the most recent progress event. */
+  laneHoldSeconds?: number;
+  /** Seconds between ready verdict and lane entry, when readyAt is known. */
+  laneWaitSeconds?: number;
+  rebaseCount?: number;
+  ciRestartCount?: number;
+  mergeAttemptCount?: number;
+}
+
+/** Directory holding all per-PR strict-lane state (retry budget, progress). */
+export function mergeLaneStateDir(prNumber: number | string, repoDir: string): string {
+  return join(repoDir, '.wavemill', 'merge-lane', String(prNumber));
+}
+
+export function laneProgressPath(prNumber: number | string, repoDir: string): string {
+  return join(mergeLaneStateDir(prNumber, repoDir), 'progress.json');
+}
+
+/**
+ * Record one lane-progress event for a PR. Uses the shared JSON state mutex so
+ * concurrent tend/monitor writers serialize. Counter fields only move on their
+ * matching events; `lastProgressAt` moves on every recorded event.
+ */
+export async function recordLaneProgress(
+  prNumber: number,
+  repoDir: string,
+  event: LaneProgressEvent,
+  options: { now?: string; readyAt?: string } = {},
+): Promise<LaneProgressRecord> {
+  const now = options.now ?? new Date().toISOString();
+  return mutateJsonState<LaneProgressRecord>(
+    laneProgressPath(prNumber, repoDir),
+    (current) => {
+      const record: LaneProgressRecord = { ...(current ?? { prNumber }) };
+      record.prNumber = prNumber;
+      if (!record.enteredLaneAt) {
+        record.enteredLaneAt = now;
+        const readyAtMs = timestampMs(options.readyAt);
+        const enteredMs = timestampMs(now);
+        if (readyAtMs > 0 && enteredMs >= readyAtMs) {
+          record.laneWaitSeconds = Math.round((enteredMs - readyAtMs) / 1000);
+        }
+      }
+      record.lastProgressAt = now;
+      record.lastEvent = event;
+      const enteredMs = timestampMs(record.enteredLaneAt);
+      const nowMs = timestampMs(now);
+      if (enteredMs > 0 && nowMs >= enteredMs) {
+        record.laneHoldSeconds = Math.round((nowMs - enteredMs) / 1000);
+      }
+      if (event === 'rebase' || event === 'stale-base-refresh') {
+        record.rebaseCount = (record.rebaseCount ?? 0) + 1;
+      }
+      if (event === 'ci-restart' || event === 'stale-base-refresh') {
+        record.ciRestartCount = (record.ciRestartCount ?? 0) + 1;
+      }
+      if (event === 'merge-attempt') {
+        record.mergeAttemptCount = (record.mergeAttemptCount ?? 0) + 1;
+      }
+      return record;
+    },
+    { createIfMissing: true, initial: { prNumber } },
+  );
+}
+
+/** Read the lane-progress record, or null when absent/unreadable. */
+export function readLaneProgress(prNumber: number | string, repoDir: string): LaneProgressRecord | null {
+  const path = laneProgressPath(prNumber, repoDir);
+  if (!existsSync(path)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    if (!parsed || typeof parsed !== 'object' || typeof (parsed as LaneProgressRecord).prNumber !== 'number') {
+      return null;
+    }
+    return parsed as LaneProgressRecord;
+  } catch {
+    return null;
+  }
 }
 
 export const TERMINAL_WORKFLOW_STATUSES = new Set(['merged', 'completed-external', 'aborted']);
