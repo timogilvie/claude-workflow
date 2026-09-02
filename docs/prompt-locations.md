@@ -47,6 +47,7 @@ Runtime code should prefer typed lookup through `shared/lib/resource-retrieval.t
 - `docs/routing-contract.md`: bootstrap, expanded, and authoritative execution route lifecycle for mill-mode routing.
 - `shared/lib/wavemill-orchestrator.sh`: deprecated compatibility wrapper that delegates to `wavemill-startup-runner.sh`.
 - `codex/prompts/*.md` plus `codex/src/commands/workflow.js`: intentional Codex-native parallel workflow; these prompts are not built through `shared/lib/agent-adapters.sh`.
+- **Post-PR reconciliation prompts (HOK-2936)**: `build_ready_remediation_prompt` and `build_conflict_resolution_prompt` in `shared/lib/agent-adapters.sh` remain the narrow process instructions. When `ready.postPrReconciliation.enabled` is true, `shared/lib/wavemill-monitor.sh` prepends the capsule projection produced by `tools/reconciliation-capsule.ts project` (backed by `shared/lib/reconciliation-context.ts`). The projection contract is **stable prefix first, volatile suffix last**: the immutable task foundation (byte-stable per task, cacheable by provider prompt caches) is serialized before the review identity, current incident, and attempt history. Large artifacts (task packet, execution contract, logs) are referenced by digest-checked path with on-demand inspection commands, never inlined. See `.wavemill/context/tools-prompts.md`.
 
 ## Typed Lookup Status
 

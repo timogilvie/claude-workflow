@@ -357,6 +357,9 @@
       "Smoke and Config Tests": "npm run test:smoke && npm run test:config",
       "Native Launch Certification": "npm run test:native-launch-certification",
       "Lifecycle Integration Tests": "npm run test:lifecycle"
+    },
+    "postPrReconciliation": {
+      "enabled": false
     }
   },
   "integration": {

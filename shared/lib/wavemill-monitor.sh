@@ -2317,6 +2317,173 @@ ready_remediation_agent_cmd() {
   jq -r '.agentCmd // empty' <<< "$remediation_json" 2>/dev/null || echo ""
 }
 
+# ── Post-PR reconciliation capsule (HOK-2936) ────────────────────────────────
+# Durable, head-keyed recovery context so a fresh agent can repair
+# deterministic CI failures or merge conflicts without the original pane.
+# Default-off; the capsule on disk is the correctness boundary — never tmux
+# scrollback, a live process, or provider session resume.
+
+post_pr_reconciliation_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
+  local user_json='{}' repo_json='{}' local_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '
+    ({ready:{postPrReconciliation:{enabled:false}}} * $user * $repo * $local).ready.postPrReconciliation
+    ' 2>/dev/null || echo '{"enabled":false}'
+}
+
+post_pr_reconciliation_enabled() {
+  local wt_dir="$1"
+  local recon_json
+  recon_json=$(post_pr_reconciliation_config_json "$wt_dir")
+  jq -r 'if .enabled == true then "true" else "false" end' <<< "$recon_json" 2>/dev/null || echo "false"
+}
+
+reconciliation_feature_task_packet() {
+  local state_dir="$1"
+  local candidate
+  for candidate in "$state_dir/task-packet-header.md" "$state_dir/task-packet.md"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  printf '\n'
+  return 0
+}
+
+# Build/refresh the durable capsule. Only called after the PR is open and the
+# review readiness gate passed, so the recorded review head is genuine final
+# evidence. The foundation is immutable after first write; only the review
+# identity is refreshed here. Best-effort: launch-time gating enforces safety.
+reconciliation_capsule_refresh() {
+  local state_dir="$1" wt_dir="$2" pr_number="$3" branch="$4" base_branch="$5"
+  local issue="$6" slug="$7" title="$8"
+  local review_head review_verdict task_packet build_out
+
+  review_result_has_final_evidence "$state_dir" || return 1
+  review_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+  review_verdict=$(jq -r '
+    (.artifacts // {}) as $a
+    | (if ($a.type // "") == "review" then $a else ($a.review // {}) end).verdict // empty
+  ' "$state_dir/.review-result.json" 2>/dev/null || echo "")
+  task_packet="$(reconciliation_feature_task_packet "$state_dir")"
+
+  if ! build_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" build \
+      --feature-dir "$state_dir" \
+      --task-id "$issue" \
+      --title "$title" \
+      --slug "$slug" \
+      --branch "$branch" \
+      --base-branch "$base_branch" \
+      --pr "$pr_number" \
+      ${review_head:+--review-head "$review_head"} \
+      ${review_verdict:+--review-verdict "$review_verdict"} \
+      ${task_packet:+--task-packet "$task_packet"} \
+      2>/dev/null); then
+    log_warn "  $issue: could not refresh reconciliation capsule: $(jq -r '.reason // "unknown"' <<< "$build_out" 2>/dev/null || echo "unknown")"
+    return 1
+  fi
+  return 0
+}
+
+# Validate the capsule and write the projected recovery prompt (byte-stable
+# foundation prefix first, volatile incident suffix last) to $prompt_file.
+# Missing/malformed/oversized/digest-mismatched capsules surface a typed
+# needs-user reason and refuse the launch (REQ-F4).
+reconciliation_project_prompt() {
+  local state_dir="$1" pr_number="$2" prompt_file="$3"
+  local validate_out reason
+  if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
+    reason=$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")
+    write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($reason) for PR #$pr_number; refusing autonomous recovery launch."
+    return 1
+  fi
+  if ! npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" project --feature-dir "$state_dir" > "$prompt_file" 2>/dev/null; then
+    write_ready_attention_file "$state_dir" "Reconciliation capsule projection failed for PR #$pr_number; refusing autonomous recovery launch."
+    return 1
+  fi
+  return 0
+}
+
+# Retry identity is (PR, head SHA, failure fingerprint) (REQ-F5). The head key
+# lives in the shared bounded-retry bucket (HOK-2924); the fingerprint
+# companion file shares the bucket's file prefix so bounded_retry_clear
+# removes it symmetrically. A changed fingerprint starts a new episode.
+reconciliation_reset_retry_if_new_fingerprint() {
+  local state_dir="$1" bucket="$2" fingerprint="$3"
+  local fp_file="$state_dir/.retry-${bucket}-fingerprint" stored=""
+  [[ -n "$fingerprint" ]] || return 0
+  [[ -f "$fp_file" ]] && stored=$(cat "$fp_file" 2>/dev/null || echo "")
+  if [[ -n "$stored" && "$stored" != "$fingerprint" ]]; then
+    bounded_retry_clear "$state_dir" "$bucket"
+  fi
+  mkdir -p "$state_dir"
+  printf '%s\n' "$fingerprint" > "$fp_file"
+  return 0
+}
+
+# Record one bounded attempt per launch (REQ-F7). Best-effort telemetry.
+reconciliation_record_attempt() {
+  local state_dir="$1" agent="$2" model="$3" head="$4"
+  local provider
+  provider=$(jq -r '.coding.provider // empty' "$state_dir/.phase-config.json" 2>/dev/null || echo "")
+  npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" record-attempt \
+    --feature-dir "$state_dir" \
+    ${agent:+--agent "$agent"} \
+    ${model:+--model "$model"} \
+    ${provider:+--provider "$provider"} \
+    ${head:+--head "$head"} \
+    --launch-mode fresh \
+    --outcome launched >/dev/null 2>&1 || true
+  return 0
+}
+
+# A worker commit past the recorded review head invalidates the old verdict
+# (REQ-F6). Only fires once at least one reconciliation attempt was recorded,
+# so ordinary pre-reconciliation flows are untouched.
+reconciliation_review_invalidated_by_commit() {
+  local state_dir="$1" wt_dir="$2"
+  local capsule="$state_dir/.reconciliation-context.json"
+  local review_head current_head attempts
+  [[ -f "$capsule" ]] || return 1
+  review_head=$(jq -r '.review.reviewHeadSha // empty' "$capsule" 2>/dev/null || echo "")
+  attempts=$(jq -r '.attempts | length' "$capsule" 2>/dev/null || echo "0")
+  [[ -n "$review_head" ]] || return 1
+  [[ "$attempts" =~ ^[0-9]+$ ]] && (( attempts > 0 )) || return 1
+  current_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+  [[ -n "$current_head" ]] || return 1
+  [[ "$current_head" != "$review_head" ]]
+}
+
+# Mark the review result stale against its recorded head so the ready gate
+# refuses wm:ready until a fresh review passes at the new head, and finalize
+# the launching attempt with the pushed commit.
+reconciliation_mark_review_stale() {
+  local state_dir="$1" pr_number="$2" old_head="$3" new_head="$4"
+  local review_file="$state_dir/.review-result.json"
+  if [[ -f "$review_file" ]]; then
+    state_mutate "$review_file" \
+      '.status = "stale" | .detail = $detail | .staleReviewHead = $old_head' \
+      --arg detail "Review verdict at $old_head is stale after reconciliation commit $new_head; re-review required for PR #$pr_number" \
+      --arg old_head "$old_head" || return 1
+  fi
+  npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" finalize-attempt \
+    --feature-dir "$state_dir" --outcome commit_pushed --result-commit "$new_head" >/dev/null 2>&1 || true
+  return 0
+}
+
 phase_should_remain_active_without_pr() {
   local feature_dir="$1" phase="$2" slug="$3"
 
@@ -7515,7 +7682,28 @@ _launch_ready_remediation_attempt() {
   local remediation_attempt_number="${16}" remediation_max_attempts="${17}"
   local failed_check_names_json="${18}" failed_check_summary="${19}" ready_result_file="${20}"
   local remediation_agent prompt_file launch_rc remediation_artifacts_json remediation_failed_artifacts_json
-  local resolved_model
+  local resolved_model recon_enabled recon_incident_out recon_fingerprint recon_checks_json
+
+  # Post-PR reconciliation capsule gate (HOK-2936): update the incident and
+  # validate the capsule before consuming any retry budget. An invalid capsule
+  # refuses the launch with a typed needs-user reason (REQ-F4).
+  recon_enabled=$(post_pr_reconciliation_enabled "$wt_dir")
+  if [[ "$recon_enabled" == "true" ]]; then
+    recon_checks_json=$(jq -c 'map({name: .})' <<< "$failed_check_names_json" 2>/dev/null || echo '[]')
+    recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
+      --feature-dir "$state_dir" \
+      --classification ci_deterministic_safe \
+      ${current_head:+--head "$current_head"} \
+      --detail "Ready-check failure on PR #$pr_number: $failed_check_summary" \
+      --failing-checks-json "$recon_checks_json" \
+      2>/dev/null) || {
+      write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number; refusing ready remediation launch."
+      log_error "  $issue: reconciliation capsule unavailable; refusing ready remediation launch for PR #$pr_number"
+      return 1
+    }
+    recon_fingerprint=$(jq -r '.failureFingerprint // empty' <<< "$recon_incident_out" 2>/dev/null || echo "")
+    reconciliation_reset_retry_if_new_fingerprint "$state_dir" "ready-remediation" "$recon_fingerprint"
+  fi
 
   # Bounded-retry bucket (HOK-2924): every launch attempt counts, keyed to the
   # head it launched from; the JSON remediationAttempts mirror below stays for
@@ -7556,10 +7744,24 @@ _launch_ready_remediation_attempt() {
     "$failed_check_summary" \
     "$ready_result_file" > "$prompt_file"
 
+  if [[ "$recon_enabled" == "true" ]]; then
+    # Capsule projection first (stable foundation prefix, then the volatile
+    # incident), followed by the narrow remediation process instructions.
+    if ! reconciliation_project_prompt "$state_dir" "$pr_number" "$prompt_file.capsule"; then
+      log_error "  $issue: reconciliation capsule projection failed; refusing ready remediation launch for PR #$pr_number"
+      return 1
+    fi
+    cat "$prompt_file" >> "$prompt_file.capsule"
+    mv "$prompt_file.capsule" "$prompt_file"
+  fi
+
   _launch_agent_in_pane "$win" "$remediation_agent" "$resolved_model" "$prompt_file" "$slug" "$issue" "coding"
   launch_rc=$?
 
   if [[ "$launch_rc" -eq 0 ]]; then
+    if [[ "$recon_enabled" == "true" ]]; then
+      reconciliation_record_attempt "$state_dir" "$remediation_agent" "$resolved_model" "$current_head"
+    fi
     remediation_artifacts_json=$(jq -cn \
       --arg merge_status "${merge_status:-UNKNOWN}" \
       --arg launch_head "$current_head" \
@@ -7712,6 +7914,29 @@ launch_ready_phase() {
     pending_log_level="info"
   fi
 
+  # A reconciliation commit invalidates the prior review verdict (HOK-2936
+  # REQ-F6): mark it stale against its recorded head and relaunch review
+  # before any ready pass can restore wm:ready.
+  if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" == "true" ]] \
+    && reconciliation_review_invalidated_by_commit "$state_dir" "$wt_dir" \
+    && review_result_passes_ready_gate "$state_dir"; then
+    local recon_old_head recon_new_head recon_review_rc=0
+    recon_old_head=$(jq -r '.review.reviewHeadSha // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || echo "")
+    recon_new_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+    reconciliation_mark_review_stale "$state_dir" "$pr_number" "$recon_old_head" "$recon_new_head" || true
+    strip_ready_label_if_review_not_passed "$wt_dir" "$pr_number" "$state_dir" || true
+    log "status" "  ♻ $issue: reconciliation commit ${recon_new_head:0:7} invalidates review at ${recon_old_head:0:7}; relaunching review for PR #$pr_number"
+    launch_review_for_missing_evidence "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$state_dir" "$current_agent" || recon_review_rc=$?
+    if [[ "$recon_review_rc" -eq 0 ]]; then
+      return 6
+    fi
+    if [[ "$recon_review_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+      return 2
+    fi
+    write_ready_attention_file "$state_dir" "Review invalidated by reconciliation commit, but re-review could not be launched for PR #$pr_number."
+    return 1
+  fi
+
   if ! review_result_passes_ready_gate "$state_dir"; then
     local review_summary
     review_summary="$(review_result_summary "$state_dir")"
@@ -7723,6 +7948,10 @@ launch_ready_phase() {
     write_ready_attention_file "$state_dir" "Review verdict does not pass readiness gate for PR #$pr_number ($review_summary)."
     log_error "  $issue: refusing ready phase for PR #$pr_number; $review_summary"
     return 1
+  fi
+
+  if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" == "true" ]]; then
+    reconciliation_capsule_refresh "$state_dir" "$wt_dir" "$pr_number" "$branch" "$base_branch" "$issue" "$slug" "$title" || true
   fi
 
   clear_review_infra_retry_state "$state_dir"
@@ -7796,11 +8025,42 @@ launch_ready_phase() {
 
     prompt_file="/tmp/${SESSION}-${issue}-conflict-prompt.txt"
     build_conflict_resolution_prompt "$pr_number" "$branch" "$wt_dir" "$status_file" "$base_branch" > "$prompt_file"
+    if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" == "true" ]]; then
+      # Fresh-agent conflict reconciliation from the durable capsule
+      # (HOK-2936): stable foundation projection first, current incident and
+      # narrow conflict instructions after. An invalid capsule refuses the
+      # launch with a typed needs-user reason instead of guessing context.
+      local recon_head recon_base_sha recon_incident_out recon_fingerprint
+      recon_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+      recon_base_sha=$(git -C "$wt_dir" rev-parse "origin/$base_branch" 2>/dev/null || echo "")
+      recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
+        --feature-dir "$state_dir" \
+        --classification merge_conflict \
+        ${recon_head:+--head "$recon_head"} \
+        ${recon_base_sha:+--base "$recon_base_sha"} \
+        --detail "PR #$pr_number reports merge conflicts against $base_branch (GitHub mergeable: CONFLICTED)." \
+        2>/dev/null) || {
+        write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($(jq -r '.reason // "unknown"' <<< "$recon_incident_out" 2>/dev/null || echo "unknown")) for PR #$pr_number; refusing conflict reconciliation launch."
+        log_error "  $issue: reconciliation capsule unavailable; refusing conflict launch for PR #$pr_number"
+        return 1
+      }
+      recon_fingerprint=$(jq -r '.failureFingerprint // empty' <<< "$recon_incident_out" 2>/dev/null || echo "")
+      reconciliation_reset_retry_if_new_fingerprint "$state_dir" "ready-remediation" "$recon_fingerprint"
+      if ! reconciliation_project_prompt "$state_dir" "$pr_number" "$prompt_file.capsule"; then
+        log_error "  $issue: reconciliation capsule projection failed; refusing conflict launch for PR #$pr_number"
+        return 1
+      fi
+      cat "$prompt_file" >> "$prompt_file.capsule"
+      mv "$prompt_file.capsule" "$prompt_file"
+    fi
     _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue" "coding"
     launch_rc=$?
 
     if [[ "$launch_rc" -eq 0 ]]; then
       launch_head=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")
+      if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" == "true" ]]; then
+        reconciliation_record_attempt "$state_dir" "$current_agent" "$current_model" "$launch_head"
+      fi
       local conflict_artifacts_json
       conflict_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
         "{\"type\":\"ready\",\"prNumber\":$pr_number,\"mergeConflict\":\"CONFLICTED\",\"launchHead\":\"$launch_head\"}" \
