@@ -8,6 +8,31 @@ on:
   schedule:
     - cron: '0 6 * * *'
 
+# Cancel superseded pull-request runs, and only those (HOK-2938).
+#
+# - pull_request events group by workflow + PR number, so a second push to the
+#   same PR cancels the prior in-progress run. Different PRs have different
+#   numbers and therefore different groups; they never affect each other.
+# - Every other event (push to main/auto/integration, schedule,
+#   workflow_dispatch) is keyed by github.run_id, which is unique per run, so
+#   those runs never share a group with anything and can never be cancelled or
+#   queued behind another run. Grouping pushes by ref instead would let a burst
+#   of pushes cancel a *pending* protected-branch run (GitHub allows at most
+#   one running + one pending run per group even with cancel-in-progress
+#   false), which is exactly the merge lane's behavior pattern.
+# - cancel-in-progress is event-conditional as defense in depth: it evaluates
+#   true only for pull_request events.
+# - Cancellation only affects queued/in_progress runs; a completed run's
+#   conclusion is never rewritten. github.event.pull_request.number is stable
+#   across reopen/synchronize, so a reopened PR reuses its own group.
+#
+# Guarded by tools/check-ci-concurrency.ts (runs in test:preflight); behavior
+# and the operational validation recipe are documented in
+# docs/ci-concurrency.md.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('{0}-pr-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
