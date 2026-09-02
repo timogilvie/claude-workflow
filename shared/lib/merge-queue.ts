@@ -250,14 +250,20 @@ export function computeConflictGroups(prs: MergeQueuePr[]): MergeQueuePr[][] {
 }
 
 export function isCandidateStuck(
-  candidate: Pick<MergeQueuePr, 'candidateLastProgressAt' | 'candidatePromotedAt' | 'mergeRetryInProgressUntil'>,
+  candidate: Pick<MergeQueuePr, 'candidateLastProgressAt' | 'candidatePromotedAt' | 'mergeRetryInProgressUntil' | 'lastProgressAt'>,
   now: string,
   config: Pick<MergeQueueConfigResolved, 'stuckTimeoutSeconds'>,
 ): boolean {
   if (timestampMs(candidate.mergeRetryInProgressUntil) > timestampMs(now)) {
     return false;
   }
-  const lastProgress = timestampMs(candidate.candidateLastProgressAt) || timestampMs(candidate.candidatePromotedAt);
+  // lastProgressAt is tend's lane-progress stamp (rebases, CI restarts,
+  // stale-base refreshes). A candidate tend is actively recovering must not be
+  // demoted as stuck by the independent queue process (HOK-2919).
+  const lastProgress = Math.max(
+    timestampMs(candidate.candidateLastProgressAt),
+    timestampMs(candidate.lastProgressAt),
+  ) || timestampMs(candidate.candidatePromotedAt);
   if (lastProgress <= 0) return false;
   return timestampMs(now) - lastProgress >= config.stuckTimeoutSeconds * 1000;
 }

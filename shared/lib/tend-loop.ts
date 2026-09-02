@@ -234,12 +234,14 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   let lastDecisionSignature: string | null = null;
   const readyUnmergedTracker = new Map<number, { firstSeenMs: number; lastEmittedMs: number }>();
 
-  const noteDecisionProgress = (decision: TendDecision, at: string): void => {
+  const noteDecisionProgress = (decision: TendDecision, at: string): boolean => {
     const signature = decisionSignature(decision);
-    if (lastDecisionSignature !== null && signature !== lastDecisionSignature) {
+    const progressed = lastDecisionSignature !== null && signature !== lastDecisionSignature;
+    if (progressed) {
       lastProgressAt = at;
     }
     lastDecisionSignature = signature;
+    return progressed;
   };
 
   const trackReadyUnmerged = (decision: TendDecision, at: string): void => {
@@ -279,11 +281,16 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       const decision = await deps.selectNextCandidate({ repoDir: options.repoDir });
       pollCompletedAt = deps.now().toISOString();
       const pollMetadata = { iteration, pollStartedAt, pollCompletedAt };
-      noteDecisionProgress(decision, pollCompletedAt);
+      const decisionProgressed = noteDecisionProgress(decision, pollCompletedAt);
       trackReadyUnmerged(decision, pollCompletedAt);
 
       if (decision.nextPR === null) {
-        idleBlockedStreak = decision.blocked.length > 0 ? idleBlockedStreak + 1 : 0;
+        // A changed lane signature (PRs entering/leaving, gates changing) is
+        // real state movement and restarts the stall count; only an unchanged
+        // blocked lane accumulates toward the stall thresholds.
+        idleBlockedStreak = decision.blocked.length === 0
+          ? 0
+          : decisionProgressed ? 1 : idleBlockedStreak + 1;
         const progressState: TendProgressState = idleBlockedStreak >= TEND_IDLE_STALL_HIGH_ITERATIONS
           ? 'stalled'
           : decision.blocked.length > 0 ? 'progressing' : 'idle';
