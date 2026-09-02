@@ -4708,7 +4708,7 @@ resolve_phase() {
   fi
 
   # Review
-  if check_stage_complete "$feature_dir" "review"; then
+  if check_stage_complete "$feature_dir" "review" && review_result_has_final_evidence "$feature_dir"; then
     _persist_phase "$feature_dir" "ready"
     echo "ready"
     return 0
@@ -5238,9 +5238,30 @@ _stop_task_recovery_contract_unavailable() {
 _prepare_recovery_phase_launch() {
   local issue="$1" slug="$2" phase="$3" feature_dir="$4" wt_dir="$5"
   local agent="$6" model="$7" contract_payload="$8" lifecycle_phase="${9:-}"
-  local win contract_title resolved_window
+  local win contract_title resolved_window artifacts_json=""
+
+  if [[ -f "$feature_dir/.${phase}-result.json" ]]; then
+    artifacts_json="$(jq -c --arg phase "$phase" '
+      if ((.artifacts // null) | type) == "object" then
+        .artifacts
+        | if $phase == "review" then
+            . + {
+              recoveryReplay: {
+                status: "running",
+                preservesPriorVerdict: true
+              }
+            }
+          else
+            .
+          end
+      else
+        empty
+      end
+    ' "$feature_dir/.${phase}-result.json" 2>/dev/null || true)"
+  fi
 
   if ! write_stage_result_with_history "$feature_dir" "$phase" "running" "$agent" "$model" "Recovery replay of persisted execution contract" \
+      "$artifacts_json" \
     || ! jq -e --arg phase "$phase" '.stage == $phase and .status == "running"' "$feature_dir/.${phase}-result.json" >/dev/null 2>&1; then
     log_warn "$issue → failed to record recovered $phase stage"
     return 1
@@ -6938,10 +6959,45 @@ review_result_passes_ready_gate() {
   ' "$review_file" >/dev/null 2>&1
 }
 
-review_result_infra_failure() {
+review_result_has_final_evidence() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
   [[ -f "$review_file" ]] || return 1
+
+  jq -e '
+    (.artifacts // {}) as $artifacts
+    | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | (($review.exitCode | type) == "number") and
+      (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
+      (($review.iterations | type) == "number" and $review.iterations >= 1) and
+      (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_result_missing_final_evidence() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 0
+
+  review_result_has_final_evidence "$feature_dir" && return 1
+
+  jq -e '
+    (.status == "completed" or .status == "running") and (
+      (.artifacts // {}) as $artifacts
+      | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+      | (($review.verdict // "") != "not_ready")
+    )
+  ' "$review_file" >/dev/null 2>&1
+}
+
+review_result_infra_failure() {
+  local feature_dir="$1"
+  local review_file="$feature_dir/.review-result.json"
+  [[ -f "$review_file" ]] || return 0
+
+  if review_result_missing_final_evidence "$feature_dir"; then
+    return 0
+  fi
 
   jq -e '
     (.artifacts // {}) as $artifacts
@@ -7037,7 +7093,7 @@ review_result_summary() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
   if [[ ! -f "$review_file" ]]; then
-    printf '%s\n' "review result missing"
+    printf '%s\n' "status=missing, verdictState=no-verdict-recorded"
     return 0
   fi
 
@@ -7045,8 +7101,25 @@ review_result_summary() {
     . as $root
     | (.artifacts // {}) as $artifacts
     | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
-    | [
+      | [
         "status=" + ($root.status // "unknown"),
+        "verdictState=" + (
+          if (
+            (($review.exitCode | type) == "number") and
+            (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
+            (($review.iterations | type) == "number" and $review.iterations >= 1) and
+            (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+          ) then
+            if (
+              ($root.status == "completed") and
+              ($review.exitCode == 0) and
+              ($review.verdict == "ready") and
+              ((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) == 0)
+            ) then "passed" else "failed" end
+          else
+            "no-verdict-recorded"
+          end
+        ),
         "exitCode=" + (($review.exitCode // "missing") | tostring),
         "verdict=" + (($review.verdict // "missing") | tostring),
         "iterations=" + (($review.iterations // "missing") | tostring),
@@ -7066,16 +7139,90 @@ review_artifacts_with_pr_number() {
     jq -c --argjson pr_number "$pr_number" '
       (.artifacts // {type:"review"}) as $artifacts
       | if (($artifacts | type) != "object") then
-          {type:"review", prNumber:$pr_number}
+          {type:"review", prNumber:$pr_number, missingReviewEvidence:true, evidence:"missing-review-verdict"}
         elif (($artifacts.type // "") == "review") then
-          $artifacts + {type:"review", prNumber:$pr_number}
+          ($artifacts + {type:"review", prNumber:$pr_number}) as $review
+          | if (
+              (($review.exitCode | type) == "number") and
+              (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
+              (($review.iterations | type) == "number" and $review.iterations >= 1) and
+              (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+            ) then
+              $review
+            else
+              $review + {missingReviewEvidence:true, evidence:($review.evidence // "missing-review-verdict")}
+            end
         else
-          $artifacts + {review:(($artifacts.review // {}) + {prNumber:$pr_number})}
+          (($artifacts.review // {}) + {prNumber:$pr_number}) as $review
+          | $artifacts + {
+              review: (
+                if (
+                  (($review.exitCode | type) == "number") and
+                  (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
+                  (($review.iterations | type) == "number" and $review.iterations >= 1) and
+                  (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+                ) then
+                  $review
+                else
+                  $review + {missingReviewEvidence:true, evidence:($review.evidence // "missing-review-verdict")}
+                end
+              )
+            }
         end
     ' "$review_file" 2>/dev/null && return 0
   fi
 
-  jq -cn --argjson pr_number "$pr_number" '{type:"review", prNumber:$pr_number}'
+  jq -cn --argjson pr_number "$pr_number" \
+    '{type:"review", prNumber:$pr_number, missingReviewEvidence:true, evidence:"missing-review-result"}'
+}
+
+record_review_pr_reconciliation() {
+  local feature_dir="$1" pr_number="$2" current_agent="${3:-}" model="${4:-}"
+  local artifacts_json
+  artifacts_json="$(review_artifacts_with_pr_number "$feature_dir" "$pr_number")"
+
+  if review_result_has_final_evidence "$feature_dir"; then
+    write_stage_result "$feature_dir" "review" "completed" "$current_agent" "$model" "PR #$pr_number" "$artifacts_json"
+    return 0
+  fi
+
+  write_stage_result "$feature_dir" "review" "running" "$current_agent" "$model" \
+    "PR #$pr_number exists, but no review verdict is recorded; re-review required" "$artifacts_json"
+  return 1
+}
+
+clear_review_gate_attention() {
+  local feature_dir="$1" marker_path reason
+  marker_path="$feature_dir/.needs-attention"
+  [[ -f "$marker_path" ]] || return 0
+  reason="$(marker_reason "$marker_path" 2>/dev/null || true)"
+  case "$reason" in
+    Review\ verdict\ does\ not\ pass\ readiness\ gate*|\
+    Review\ recorded\ no\ verdict*|\
+    *missing\ review\ verdict*)
+      marker_clear "$marker_path"
+      ;;
+  esac
+}
+
+launch_review_for_missing_evidence() {
+  local issue="$1" slug="$2" title="$3" wt_dir="$4" branch="$5" base_branch="$6" feature_dir="$7" current_agent="${8:-}"
+  local reviewer_agent reviewer_model review_mode rc=0
+
+  reviewer_agent="$(read_phase_config "$feature_dir" "review" "agent" 2>/dev/null || true)"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerAgent // .tasks[$i].agent // ""')"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="${current_agent:-$AGENT_CMD}"
+
+  reviewer_model="$(read_phase_config "$feature_dir" "review" "model" 2>/dev/null || true)"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // .tasks[$i].model // ""')"
+  reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
+
+  review_mode="$(read_phase_config "$feature_dir" "review" "mode" 2>/dev/null || true)"
+  [[ -n "$review_mode" ]] || review_mode="static"
+
+  clear_review_gate_attention "$feature_dir"
+  launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$base_branch" "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  return "$rc"
 }
 
 strip_ready_label_if_review_not_passed() {
@@ -7319,6 +7466,7 @@ launch_ready_phase() {
 
   clear_review_infra_retry_state "$state_dir"
   clear_challenger_transient_retry_state "$state_dir"
+  marker_clear "$state_dir/.needs-attention"
   log "$pending_log_level" "  $issue: Launching ready phase (PR #$pr_number)"
 
   if ! cross_pr_revert_gate_allows_merge "$issue" "$state_dir" "$wt_dir" "$pr_number" "$base_branch"; then
@@ -11306,6 +11454,10 @@ monitor_defer_command() {
       kind="more"
       args_json='[]'
       ;;
+    re-review\ *)
+      kind="re-review"
+      args_json=$(printf '%s\n' "${event#re-review }" | jq -Rsc 'split("\n") | map(select(length > 0))')
+      ;;
     *)
       kind="unknown"
       args_json='[]'
@@ -11701,6 +11853,160 @@ handle_advance_command() {
   MONITOR_COMMAND_STATUS="handled"
 }
 
+handle_re_review_command() {
+  local event="$1" free_slots="${2:-1}"
+  local payload issue slug worktree branch feature_dir current_phase task_phase review_status
+  local pr pr_state_value title issue_json audit_path audit_timestamp prior_json audit_tmp
+  local current_agent reviewer_agent reviewer_model review_mode base_branch artifacts_json rc=0
+
+  MONITOR_COMMAND_STATUS="noop"
+  MONITOR_COMMAND_DEFER_EVENT=""
+  MONITOR_COMMAND_DEFER_REASON=""
+
+  payload="${event#re-review }"
+  if [[ "$payload" == "$event" ]]; then
+    log_warn "usage: re-review <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  set -- $payload
+  if (( $# != 1 )); then
+    log_warn "usage: re-review <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+  issue="$1"
+
+  if [[ ! "$issue" =~ ^[A-Z][A-Z0-9]+-[0-9]+(_c)?$ ]]; then
+    log_warn "usage: re-review <issue-id>"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  if (( free_slots <= 0 )); then
+    MONITOR_COMMAND_STATUS="deferred"
+    MONITOR_COMMAND_DEFER_EVENT="$event"
+    MONITOR_COMMAND_DEFER_REASON="no_slots_available"
+    return 0
+  fi
+
+  slug=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].slug // empty')
+  worktree=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].worktree // empty')
+  branch=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].branch // empty')
+  if [[ -z "$slug" || -z "$worktree" || -z "$branch" ]]; then
+    log_warn "$issue is not tracked"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  feature_dir="$worktree/features/$slug"
+  if [[ ! -d "$feature_dir" ]]; then
+    log_warn "$issue is not tracked (missing feature dir: $feature_dir)"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  current_phase=$(resolve_phase "$feature_dir")
+  task_phase=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].phase // empty')
+  if [[ "$current_phase" != "review" && "$current_phase" != "ready" ]]; then
+    if [[ -n "$task_phase" && "$task_phase" != "$current_phase" ]]; then
+      log_warn "$issue is in phase $current_phase (state: $task_phase); re-review only works for review or ready tasks"
+    else
+      log_warn "$issue is in phase $current_phase; re-review only works for review or ready tasks"
+    fi
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  review_status=$(read_stage_status "$feature_dir" "review")
+  if [[ "$review_status" == "running" ]]; then
+    log_warn "$issue review is already running"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  pr=$(read_state_value "" --arg issue "$issue" '.tasks[$issue].pr // .tasks[$issue].pullRequest // empty')
+  if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+    pr="$(find_pr_for_branch "$branch" 2>/dev/null || true)"
+  fi
+  if [[ ! "$pr" =~ ^[0-9]+$ ]]; then
+    log_warn "$issue has no open PR to re-review"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+  pr_state_value="$(pr_state "$pr" 2>/dev/null || true)"
+  if [[ "$pr_state_value" != "OPEN" ]]; then
+    log_warn "$issue PR #$pr is not open; re-review skipped"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+
+  title=$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')
+  if [[ -z "$title" ]]; then
+    issue_json=$(cat "/tmp/${SESSION}-${issue}-issue.json" 2>/dev/null || echo "{}")
+    title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+  fi
+
+  audit_path="$feature_dir/.review-rerun-request.json"
+  audit_timestamp="$(monitor_command_timestamp)"
+  prior_json="null"
+  if [[ -f "$feature_dir/.review-result.json" ]]; then
+    prior_json="$(jq -c '.' "$feature_dir/.review-result.json" 2>/dev/null || printf 'null')"
+  fi
+  audit_tmp=$(mktemp) || {
+    log_warn "$issue could not record re-review request"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  }
+  if ! jq -n \
+    --arg timestamp "$audit_timestamp" \
+    --arg issue "$issue" \
+    --argjson prNumber "$pr" \
+    --arg reason "manual re-review via mill input" \
+    --argjson prior "$prior_json" \
+    '{timestamp:$timestamp, issue:$issue, prNumber:$prNumber, reason:$reason, previousReviewResult:$prior}' > "$audit_tmp"; then
+    rm -f "$audit_tmp"
+    log_warn "$issue could not record re-review request"
+    MONITOR_COMMAND_STATUS="invalid"
+    return 0
+  fi
+  mv "$audit_tmp" "$audit_path"
+
+  current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
+  reviewer_agent="$(read_phase_config "$feature_dir" "review" "agent" 2>/dev/null || true)"
+  [[ -n "$reviewer_agent" ]] || reviewer_agent="${current_agent:-$AGENT_CMD}"
+  reviewer_model="$(read_phase_config "$feature_dir" "review" "model" 2>/dev/null || true)"
+  [[ -n "$reviewer_model" ]] || reviewer_model="$(read_state_value "" --arg i "$issue" '.tasks[$i].reviewerModel // .tasks[$i].model // ""')"
+  reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
+  review_mode="$(read_phase_config "$feature_dir" "review" "mode" 2>/dev/null || true)"
+  [[ -n "$review_mode" ]] || review_mode="static"
+  base_branch="$(read_state_value "" --arg i "$issue" '.tasks[$i].baseBranch // empty')"
+  [[ -n "$base_branch" ]] || base_branch="${BASE_BRANCH:-main}"
+
+  artifacts_json="$(review_artifacts_with_pr_number "$feature_dir" "$pr" | jq -c --arg timestamp "$audit_timestamp" --arg issue "$issue" \
+    '. + {manualRereview:{requestedAt:$timestamp, issue:$issue}}')"
+  write_stage_result_with_history "$feature_dir" "review" "running" "$reviewer_agent" "$reviewer_model" \
+    "Manual re-review requested for PR #$pr" "$artifacts_json"
+  set_task_phase "$issue" "review"
+  clear_review_gate_attention "$feature_dir"
+
+  launch_review_phase "$issue" "$slug" "$title" "$worktree" "$branch" "$base_branch" "$reviewer_model" "$reviewer_agent" "$review_mode" || rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    log "status" "$issue -> re-review launched for PR #$pr"
+    MONITOR_COMMAND_STATUS="handled"
+    return 0
+  fi
+  if [[ "$rc" -eq 2 ]] && check_stage_aborted "$feature_dir"; then
+    set_task_phase "$issue" "aborted"
+    MONITOR_COMMAND_STATUS="handled"
+    return 0
+  fi
+  write_ready_attention_file "$feature_dir" "Could not launch manual re-review for PR #$pr (rc=$rc)."
+  log_warn "$issue re-review launch failed for PR #$pr (rc=$rc)"
+  MONITOR_COMMAND_STATUS="invalid"
+}
+
 execute_or_defer_monitor_command() {
   local source="$1" event="$2" event_offset="$3" free_slots="$4" queue_plan_json="$5" avail_unblocked="$6" avail_blocked="$7" select_from="$8"
 
@@ -11724,6 +12030,9 @@ execute_or_defer_monitor_command() {
       ;;
     advance|advance\ *)
       handle_advance_command "$event"
+      ;;
+    re-review|re-review\ *)
+      handle_re_review_command "$event" "$free_slots"
       ;;
     select\ *)
       handle_select_command "$event" "$free_slots" "$select_from"
@@ -11787,6 +12096,7 @@ normalize_prompt_command_reply() {
     more) printf '%s\n' "m" ;;
     quit) printf '%s\n' "q" ;;
     advance\ *) printf '%s\n' "$event" ;;
+    re-review\ *) printf '%s\n' "$event" ;;
     unknown\ *) printf '%s\n' "unknown ${event#unknown }" ;;
     *) printf '%s\n' "" ;;
   esac
@@ -11939,21 +12249,37 @@ monitor_issue_state() {
         inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
       fi
 
-      local review_artifacts_json
-      review_artifacts_json="$(review_artifacts_with_pr_number "$FEATURE_DIR" "$PR")"
-      write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "$review_artifacts_json"
-      dispatch_queued_children_for_parent "$ISSUE" "$PR"
-      set_task_phase "$ISSUE" "review"
-
       local title launch_rc
-      set_task_phase "$ISSUE" "ready"
-      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
-      fi
       title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
       if [[ -z "$title" ]]; then
         issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
         title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+      fi
+
+      if record_review_pr_reconciliation "$FEATURE_DIR" "$PR" "$current_agent" ""; then
+        dispatch_queued_children_for_parent "$ISSUE" "$PR"
+        set_task_phase "$ISSUE" "review"
+        set_task_phase "$ISSUE" "ready"
+        if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+          wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
+        fi
+      else
+        set_task_phase "$ISSUE" "review"
+        if launch_review_for_missing_evidence "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$FEATURE_DIR" "$current_agent"; then
+          set_window_attention_state "$WIN" "clear"
+        else
+          launch_rc=$?
+          if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+            log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during review launch"
+            set_task_phase "$ISSUE" "aborted"
+            set_window_attention_state "$WIN" "needs-user"
+            return 0
+          fi
+          write_ready_attention_file "$FEATURE_DIR" "Could not relaunch review for PR #$PR after missing review verdict evidence (rc=$launch_rc)."
+          set_window_attention_state "$WIN" "needs-user"
+        fi
+        active_count=$((active_count + 1))
+        return 0
       fi
 
       if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then
@@ -12722,12 +13048,18 @@ monitor_issue_state() {
               if [[ -n "$depends_on_pr_meta" ]]; then
                 inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
               fi
-              write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$pr_number")"
-              dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
-              if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-                wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
+              if record_review_pr_reconciliation "$FEATURE_DIR" "$pr_number" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+                dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
+                if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+                  wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
+                fi
+                review_status="completed"
+              else
+                set_task_phase "$ISSUE" "review"
+                set_window_attention_state "$WIN" "clear"
+                active_count=$((active_count + 1))
+                return 0
               fi
-              review_status="completed"
             elif emit_native_terminal_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
               return 0
             elif emit_native_launch_failure_attention "$ISSUE" "$FEATURE_DIR" "review" "$WIN" "$WIN_TARGET" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
@@ -12770,18 +13102,37 @@ monitor_issue_state() {
             if [[ -n "$depends_on_pr_meta" ]]; then
               inject_depends_on_pr_block "$ISSUE" "$pr_number" "$depends_on_pr_meta"
             fi
-            write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")" "PR #$pr_number" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$pr_number")"
-            dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
-
-            # Transition to ready phase
-            set_task_phase "$ISSUE" "ready"
-            if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-              wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
-            fi
             title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
             if [[ -z "$title" ]]; then
               issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
               title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+            fi
+
+            if record_review_pr_reconciliation "$FEATURE_DIR" "$pr_number" "$current_agent" "$(resolve_stage_result_model "$FEATURE_DIR" "review" "claude-sonnet-5")"; then
+              dispatch_queued_children_for_parent "$ISSUE" "$pr_number"
+
+              # Transition to ready phase
+              set_task_phase "$ISSUE" "ready"
+              if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+                wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$pr_number" || true
+              fi
+            else
+              set_task_phase "$ISSUE" "review"
+              if launch_review_for_missing_evidence "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$FEATURE_DIR" "$current_agent"; then
+                set_window_attention_state "$WIN" "clear"
+              else
+                local relaunch_rc=$?
+                if [[ "$relaunch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+                  log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during review launch"
+                  set_task_phase "$ISSUE" "aborted"
+                  set_window_attention_state "$WIN" "needs-user"
+                  return 0
+                fi
+                write_ready_attention_file "$FEATURE_DIR" "Could not relaunch review for PR #$pr_number after missing review verdict evidence (rc=$relaunch_rc)."
+                set_window_attention_state "$WIN" "needs-user"
+              fi
+              active_count=$((active_count + 1))
+              return 0
             fi
             if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$pr_number"; then
               local launch_rc=0
@@ -13155,16 +13506,40 @@ monitor_issue_state() {
         if [[ -n "$depends_on_pr_meta" ]]; then
           inject_depends_on_pr_block "$ISSUE" "$PR" "$depends_on_pr_meta"
         fi
-        write_stage_result "$FEATURE_DIR" "review" "completed" "$current_agent" "" "PR #$PR" "$(review_artifacts_with_pr_number "$FEATURE_DIR" "$PR")"
-        dispatch_queued_children_for_parent "$ISSUE" "$PR"
-        set_task_phase "$ISSUE" "ready"
-        if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-          wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
-        fi
         title=$(read_state_value "" --arg i "$ISSUE" '.tasks[$i].title // ""')
         if [[ -z "$title" ]]; then
           issue_json=$(cat "/tmp/${SESSION}-${ISSUE}-issue.json" 2>/dev/null || echo "{}")
           title=$(echo "$issue_json" | jq -r '.title // "Task"' 2>/dev/null || echo "Task")
+        fi
+
+        if record_review_pr_reconciliation "$FEATURE_DIR" "$PR" "$current_agent" ""; then
+          dispatch_queued_children_for_parent "$ISSUE" "$PR"
+          set_task_phase "$ISSUE" "ready"
+          if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+            wavemill_reconcile_terminal "$SESSION" "$ISSUE" "review_complete" "$PR" || true
+          fi
+        else
+          set_task_phase "$ISSUE" "review"
+          if [[ "$review_status" == "running" ]]; then
+            set_window_attention_state "$WIN" "clear"
+            active_count=$((active_count + 1))
+            return 0
+          fi
+          if launch_review_for_missing_evidence "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$FEATURE_DIR" "$current_agent"; then
+            set_window_attention_state "$WIN" "clear"
+          else
+            launch_rc=$?
+            if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$FEATURE_DIR"; then
+              log_task "status" "$ISSUE" "⛔ $ISSUE → Workflow aborted during review launch"
+              set_task_phase "$ISSUE" "aborted"
+              set_window_attention_state "$WIN" "needs-user"
+              return 0
+            fi
+            write_ready_attention_file "$FEATURE_DIR" "Could not relaunch review for PR #$PR after missing review verdict evidence (rc=$launch_rc)."
+            set_window_attention_state "$WIN" "needs-user"
+          fi
+          active_count=$((active_count + 1))
+          return 0
         fi
 
         if launch_ready_phase "$ISSUE" "$SLUG" "$title" "${WORKTREE_ROOT}/${SLUG}" "$BRANCH" "$BASE_BRANCH" "$PR"; then

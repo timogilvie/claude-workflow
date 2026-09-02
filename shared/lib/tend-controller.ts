@@ -100,7 +100,7 @@ export interface GhPrListEntry {
 export type HealthChecker = (integrationBranch: string, repoDir: string) => Promise<IntegrationHealth>;
 export type PrFetcher = (integrationBranch: string, repoDir: string) => Promise<GhPrListEntry[]>;
 export interface CheckWaitResult {
-  outcome: 'pass' | 'fail' | 'timeout';
+  outcome: 'pass' | 'fail' | 'timeout' | 'head-changed';
   summary: string;
 }
 
@@ -153,6 +153,11 @@ const PASSING_CHECK_CONCLUSIONS = new Set(['success', 'skipped', 'neutral']);
 const FAILING_CHECK_BUCKETS = new Set(['fail', 'cancel']);
 const PASSING_CHECK_BUCKETS = new Set(['pass', 'skipping']);
 const CHECK_POLL_INTERVAL_MS = 30_000;
+// Consecutive polls the PR head may differ from the expected head before
+// waitForChecks concludes the head was genuinely superseded ('head-changed')
+// rather than GitHub read-after-write lag, which self-heals within a poll or
+// two of the force-push.
+const HEAD_MISMATCH_MAX_POLLS = 3;
 const TRANSIENT_REQUIRED_CHECKS_EXPECTED = 'required status checks are expected';
 const MERGE_RETRY_MAX_ATTEMPTS = 8;
 const MERGE_RETRY_BACKOFF_MS = 30_000;
@@ -557,8 +562,9 @@ export async function executeMerge(
       candidate.headBranch,
       options.repoDir,
       async (worktreePath) => {
+        let pushedHeadSha: string | undefined;
         try {
-          rebaseAndPush(worktreePath, candidate.headBranch, integrationBranch, deps.shellRunner);
+          pushedHeadSha = rebaseAndPush(worktreePath, candidate.headBranch, integrationBranch, deps.shellRunner).headSha || undefined;
         } catch (error) {
           return block('rebase', outputFromError(error));
         }
@@ -567,7 +573,11 @@ export async function executeMerge(
           candidate.number,
           options.repoDir,
           deps.shellRunner,
-          { requiredChecks: integrationConfig.requiredChecks, retrySleep: deps.retrySleep },
+          {
+            requiredChecks: integrationConfig.requiredChecks,
+            retrySleep: deps.retrySleep,
+            expectedHeadSha: pushedHeadSha,
+          },
         );
         if (checks.outcome !== 'pass') {
           return block('checks', checks.summary);
@@ -952,7 +962,7 @@ function rebaseAndPush(
   prBranch: string,
   integrationBranch: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-): string {
+): { output: string; headSha: string } {
   validateBranchName(prBranch, 'PR branch');
   validateBranchName(integrationBranch, 'integration branch');
 
@@ -974,7 +984,7 @@ function rebaseAndPush(
   const integrationRemoteRef = `origin/${integrationBranch}`;
   if (isRemoteIntegrationAncestorOfPrHead(integrationRemoteRef, prBranchSha, worktreePath, shellRunner)) {
     output.push(`tend: skipping pre-merge rebase because ${integrationRemoteRef} is already an ancestor of ${prBranchSha}`);
-    return output.join('\n');
+    return { output: output.join('\n'), headSha: prBranchSha };
   }
 
   try {
@@ -996,6 +1006,14 @@ function rebaseAndPush(
     throw error;
   }
 
+  // The rebased head is the PR head the subsequent check wait must validate
+  // against — checks belonging to the pre-rebase head are superseded.
+  const rebasedHeadSha = String(shellRunner('git rev-parse HEAD', {
+    encoding: 'utf-8',
+    cwd: worktreePath,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+  })).trim();
+
   // Push the rebased commits back to origin's <prBranch>. We use HEAD:<branch>
   // syntax because withScratchWorktree intentionally checks out a detached
   // HEAD (so it doesn't fight mill's task worktree for branch ownership).
@@ -1006,7 +1024,7 @@ function rebaseAndPush(
     { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_MUTATION_TIMEOUT_MS },
   )));
 
-  return output.join('\n');
+  return { output: output.join('\n'), headSha: rebasedHeadSha };
 }
 
 function isRemoteIntegrationAncestorOfPrHead(
@@ -1042,35 +1060,131 @@ export async function waitForChecks(
   prNumber: number,
   repoDir: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-  options: { timeoutMs?: number; requiredChecks?: string[]; retrySleep?: (ms: number) => Promise<void> } = {},
+  options: {
+    timeoutMs?: number;
+    requiredChecks?: string[];
+    retrySleep?: (ms: number) => Promise<void>;
+    /**
+     * Head SHA the caller expects the PR to be at (e.g. the head it just
+     * pushed). When set, checks are only evaluated on polls where the PR head
+     * matches — checks from a different head are never mixed in (HOK-2938).
+     * A mismatch that persists for HEAD_MISMATCH_MAX_POLLS consecutive polls
+     * returns 'head-changed': the head was genuinely superseded by another
+     * actor, so this wait's verdict can never apply.
+     */
+    expectedHeadSha?: string;
+    /** Poll interval override for tests; production uses CHECK_POLL_INTERVAL_MS. */
+    pollIntervalMs?: number;
+  } = {},
 ): Promise<CheckWaitResult> {
   const timeoutMs = options.timeoutMs ?? 30 * 60 * 1000;
   const requiredChecks = options.requiredChecks ?? [];
+  const expectedHeadSha = options.expectedHeadSha?.trim() || undefined;
+  const pollIntervalMs = options.pollIntervalMs ?? CHECK_POLL_INTERVAL_MS;
   const deadline = Date.now() + timeoutMs;
+  let consecutiveHeadMismatches = 0;
 
   while (true) {
-    const output = await readPrChecks(prNumber, repoDir, shellRunner, options.retrySleep ?? sleep);
-    const checks = parseCheckRuns(output);
-    const failed = checks.find((check) => isFailingCheck(check));
-    if (failed) {
-      return { outcome: 'fail', summary: summarizeChecks(checks) };
+    // Head-provenance guard: right after a force-push GitHub may briefly serve
+    // the superseded head's checks — once superseded runs are cancelled
+    // (HOK-2938 concurrency policy), those read as CANCELLED and would block
+    // the PR for a failure that belongs to another head. Skipped polls
+    // self-heal within a poll or two of read-after-write lag.
+    let waitSummary: string | null = null;
+    if (expectedHeadSha) {
+      const observedHeadSha = await readPrHeadSha(prNumber, repoDir, shellRunner, options.retrySleep ?? sleep);
+      if (observedHeadSha === expectedHeadSha) {
+        consecutiveHeadMismatches = 0;
+      } else if (observedHeadSha === null) {
+        // Provenance unverifiable (API failure or malformed output): never
+        // derive a verdict from checks whose head is unknown. Keep waiting —
+        // the deadline still bounds the loop, so a persistent read failure
+        // surfaces as a conservative timeout, not a false verdict.
+        waitSummary = `Could not verify PR head (expected ${expectedHeadSha}); not evaluating checks without head provenance.`;
+      } else {
+        consecutiveHeadMismatches += 1;
+        if (consecutiveHeadMismatches >= HEAD_MISMATCH_MAX_POLLS) {
+          return {
+            outcome: 'head-changed',
+            summary: `PR head changed while waiting for checks: expected ${expectedHeadSha}, observed ${observedHeadSha} `
+              + `for ${consecutiveHeadMismatches} consecutive polls. The expected head was superseded; this wait's verdict cannot apply.`,
+          };
+        }
+        waitSummary = `PR head is ${observedHeadSha}, expected ${expectedHeadSha}; not evaluating checks from a different head.`;
+      }
     }
 
-    const missingRequired = findMissingRequiredChecks(checks, requiredChecks);
+    if (waitSummary === null) {
+      const output = await readPrChecks(prNumber, repoDir, shellRunner, options.retrySleep ?? sleep);
+      const checks = parseCheckRuns(output);
+      const failed = checks.find((check) => isFailingCheck(check));
+      if (failed) {
+        return { outcome: 'fail', summary: summarizeChecks(checks) };
+      }
 
-    if (checks.length > 0 && missingRequired.length === 0 && checks.every((check) => isPassingCheck(check))) {
-      return { outcome: 'pass', summary: summarizeChecks(checks, requiredChecks) };
+      const missingRequired = findMissingRequiredChecks(checks, requiredChecks);
+
+      if (checks.length > 0 && missingRequired.length === 0 && checks.every((check) => isPassingCheck(check))) {
+        return { outcome: 'pass', summary: summarizeChecks(checks, requiredChecks) };
+      }
+
+      waitSummary = summarizeChecks(checks, requiredChecks);
     }
 
     if (Date.now() >= deadline) {
-      return {
-        outcome: 'timeout',
-        summary: summarizeChecks(checks, requiredChecks),
-      };
+      return { outcome: 'timeout', summary: waitSummary };
     }
 
-    await sleep(CHECK_POLL_INTERVAL_MS);
+    await sleep(pollIntervalMs);
   }
+}
+
+/**
+ * Reads the PR's current head SHA for check-provenance validation. Returns
+ * null when the head cannot be determined (command failure surviving the
+ * transient retry, malformed JSON, or a missing headRefOid) — callers must
+ * treat null as "unverifiable", never as a match.
+ */
+async function readPrHeadSha(
+  prNumber: number,
+  repoDir: string,
+  shellRunner: MergeExecutionDeps['shellRunner'],
+  retrySleep: (ms: number) => Promise<void>,
+): Promise<string | null> {
+  let output: string;
+  try {
+    output = await retryTransient(
+      () => {
+        const raw = String(shellRunner(
+          `gh pr view ${prNumber} --json headRefOid 2>&1 || true`,
+          { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+        ));
+        try {
+          JSON.parse(raw);
+        } catch (error) {
+          if (isTransientErrorText(raw)) {
+            throw new TransientError(raw, { cause: error });
+          }
+        }
+        return raw;
+      },
+      { label: 'gh pr view headRefOid', sleep: retrySleep },
+    );
+  } catch {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return null;
+  }
+
+  const head = typeof parsed === 'object' && parsed !== null
+    ? (parsed as { headRefOid?: unknown }).headRefOid
+    : undefined;
+  return typeof head === 'string' && head.trim() ? head.trim() : null;
 }
 
 async function readPrChecks(
