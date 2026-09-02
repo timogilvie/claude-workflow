@@ -38,6 +38,7 @@ MONITOR_FUNC_FILE="$TEST_TMP/monitor_issue_state.sh"
 # The extracted helpers are thin wrappers over the shared bounded-retry
 # module (HOK-2924); make it available first.
 cat "$REPO_DIR/shared/lib/bounded-retry.sh" > "$MONITOR_FUNC_FILE"
+cat "$REPO_DIR/shared/lib/transient-marker.sh" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_base_sha" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "get_main_head_sha" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_allows_merge" >> "$MONITOR_FUNC_FILE"

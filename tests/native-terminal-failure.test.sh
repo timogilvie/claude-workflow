@@ -12,6 +12,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 
+# Extracted monitor helpers depend on the shared marker lifecycle module.
+# shellcheck source=../shared/lib/transient-marker.sh
+source "$REPO_DIR/shared/lib/transient-marker.sh"
+
 PASS=0
 FAIL=0
 
@@ -30,6 +34,7 @@ extract_function() {
 eval "$(extract_function native_hook_terminal_failure_detail)"
 eval "$(extract_function native_terminal_failure_kind)"
 eval "$(extract_function native_terminal_failure_next_action)"
+eval "$(extract_function agent_or_model_is_native_for_recovery)"
 eval "$(extract_function emit_native_terminal_failure_attention)"
 eval "$(extract_function emit_challenge_stage_failure_quarantine)"
 eval "$(extract_function write_openrouter_warning_cache)"
@@ -324,6 +329,16 @@ if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-4" "%4"
   fail "a healthy working hook was treated as terminal"
 else
   pass "non-error hook states are ignored"
+fi
+
+seed "PAIR-1_c"
+fd="$TMP_ROOT/f-non-native"
+write_stage_result "$fd" "coding" "running" "codex" "claude-opus-4-7"
+write_hook "PAIR-1_c" "error" "model_at_capacity: Selected model is at capacity. Please try a different model."
+if emit_native_terminal_failure_attention "PAIR-1_c" "$fd" "coding" "win-non-native" "%4" "codex" "claude-opus-4-7"; then
+  fail "a non-native terminal hook was treated as a native provider failure"
+else
+  pass "non-native terminal hooks are ignored by native recovery"
 fi
 
 seed "PAIR-1_c"

@@ -60,7 +60,8 @@ extract_function() {
 }
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_ready_phase.sh"
-extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_attention_head" > "$LAUNCH_FUNC_FILE"
+cat "$REPO_DIR/shared/lib/transient-marker.sh" > "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_attention_head" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "record_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "clear_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
@@ -331,6 +332,10 @@ EOF
     }
     check_stage_aborted() { return 1; }
     git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--show-toplevel" ]]; then
+        printf "%s\n" "$REPO_DIR"
+        return 0
+      fi
       if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
         printf "%s\n" "abc123"
         return 0
@@ -697,6 +702,17 @@ run_recheck_case() {
     LOG_ERROR_OUTPUT=""
     log() { LOG_OUTPUT+="$*\n"; }
     log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--show-toplevel" ]]; then
+        printf "%s\n" "$CASE_DIR"
+        return 0
+      fi
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
+        printf "%s\n" "abc123"
+        return 0
+      fi
+      return 1
+    }
 
     write_failed_result() {
       printf "%s\n" "{\"stage\":\"ready\",\"status\":\"failed\",\"finishedAt\":\"$1\",\"notes\":\"$2\",\"failureReason\":\"$2\",\"artifacts\":{\"type\":\"ready\",\"verdict\":\"fail\",\"prNumber\":304,\"crossPrGuard\":{\"source\":\"cross-pr-revert-guard\"}}}" > "$STATE_DIR/.ready-result.json"
@@ -806,7 +822,7 @@ run_recheck_case() {
         printf "%s\n" "4" > "$STATE_DIR/.failed-ready-recheck-count"
         first="not-first"
         mark_failed_ready_recheck_exhausted "HOK-1300" "304" "$STATE_DIR" && first="first"
-        attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null || echo "")
+        attention=$(marker_reason "$STATE_DIR/.needs-attention" 2>/dev/null || echo "")
         exhausted_flag=$(jq -r ".artifacts.failedReadyRecheck.exhausted" "$STATE_DIR/.ready-result.json")
         attempts=$(jq -r ".artifacts.failedReadyRecheck.attempts" "$STATE_DIR/.ready-result.json")
         last_reason=$(jq -r ".artifacts.failedReadyRecheck.lastReason" "$STATE_DIR/.ready-result.json")
@@ -825,7 +841,7 @@ run_recheck_case() {
         printf "%s\n" "2" > "$STATE_DIR2/.failed-ready-recheck-count"
         missing_result="not-first"
         mark_failed_ready_recheck_exhausted "HOK-1300" "304" "$STATE_DIR2" && missing_result="first"
-        missing_attention=$(cat "$STATE_DIR2/.needs-attention" 2>/dev/null || echo "")
+        missing_attention=$(marker_reason "$STATE_DIR2/.needs-attention" 2>/dev/null || echo "")
         printf "first=%s second=%s unchanged=%s exhausted_flag=%s attempts=%s last_reason=%s failure_reason=%s guard_kept=%s error_count=%s attention=%s missing_result=%s missing_attention=%s\n" \
           "$first" "$second" "$unchanged" "$exhausted_flag" "$attempts" "$last_reason" "$failure_reason" "$guard_kept" "$error_count" "$attention" "$missing_result" "$missing_attention"
         ;;

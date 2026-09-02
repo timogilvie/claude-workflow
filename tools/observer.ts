@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
@@ -1723,8 +1723,6 @@ function truncate(value: string, maxLength: number): string {
 
 function readObserverFindingsJsonl(repos: RepoRow[]): Finding[] {
   const findings: Finding[] = [];
-  const { readFileSync, rmSync } = require('fs');
-  const { join } = require('path');
 
   for (const repo of repos) {
     const findingsFile = join(repo.repoDir, '.wavemill', 'observer-findings.jsonl');

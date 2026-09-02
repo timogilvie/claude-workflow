@@ -4145,17 +4145,18 @@ emit_native_terminal_failure_attention() {
   # Never override a run that actually produced its completion artifact.
   [[ ! -f "$feature_dir/.${stage}-complete" ]] || return 1
 
+  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  [[ -n "$agent" ]] || agent="$fallback_agent"
+  [[ -n "$model" ]] || model="$fallback_model"
+  agent_or_model_is_native_for_recovery "$agent" "$model" "" || return 1
+
   detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
   failure_kind="$(native_terminal_failure_kind "$detail")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   if [[ "$failure_kind" == "provider-credit-exhausted" ]]; then
     write_openrouter_warning_cache "OpenRouter credits exhausted: $next_action"
   fi
-
-  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
-  model="$(stage_result_field "$feature_dir" "$stage" "model")"
-  [[ -n "$agent" ]] || agent="$fallback_agent"
-  [[ -n "$model" ]] || model="$fallback_model"
 
   notes="Native ${stage} failed (${failure_kind}): ${detail} Next: ${next_action}"
 
@@ -6574,6 +6575,7 @@ clear_transient_mergeability_state() {
 
 write_transient_ready_attention_file() {
   local state_dir="$1" message="$2"
+  write_ready_attention_file "$state_dir" "$message"
   local repo_dir
   repo_dir=$(git -C "$state_dir" rev-parse --show-toplevel 2>/dev/null) || return 0
   local head_sha

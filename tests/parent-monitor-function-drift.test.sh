@@ -28,6 +28,9 @@ MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 # challenge_eval_hard_failure_max_retries are gone from both local scopes;
 # the canonical ceilings live in shared/lib/wavemill-common.sh next to
 # resolve_challenge_pair_hard_failure, which consumes them.
+# HOK-2923: set_window_attention_state and clear_window_attention_state remain
+# intentionally duplicated while both parent and monitor scopes are migrated
+# to the shared transient-marker lifecycle contract.
 EXPECTED_DIVERGENT=""
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wavemill-parent-monitor-drift.XXXXXX")"
@@ -70,8 +73,8 @@ identical_count="$(jq '.identical | length' "$baseline_json")"
 divergent_count="$(jq '.divergent | length' "$baseline_json")"
 divergent_names="$(jq -r '.divergent[].name' "$baseline_json" | sort)"
 
-assert_eq "$duplicated_count" "32" "duplicated parent/monitor function count changed"
-assert_eq "$identical_count" "32" "byte-identical parent/monitor function count changed"
+assert_eq "$duplicated_count" "34" "duplicated parent/monitor function count changed"
+assert_eq "$identical_count" "34" "byte-identical parent/monitor function count changed"
 assert_eq "$divergent_count" "0" "allowlisted divergent parent/monitor function count changed"
 assert_eq "$divergent_names" "$EXPECTED_DIVERGENT" "allowlisted divergent parent/monitor function names changed"
 
@@ -107,6 +110,6 @@ printf '%s' "$probe_function" >> "$new_duplicate_monitor"
 new_duplicate_json="$work_dir/new-duplicate.json"
 run_json "$new_duplicate_parent" "$new_duplicate_monitor" > "$new_duplicate_json"
 new_duplicate_count="$(jq '.duplicated | length' "$new_duplicate_json")"
-assert_eq "$new_duplicate_count" "33" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
+assert_eq "$new_duplicate_count" "35" "introducing a new duplicated function was not detected" "$new_duplicate_parent" "$new_duplicate_monitor"
 
 echo "parent-monitor-function-drift: ok"
