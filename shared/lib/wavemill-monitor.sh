@@ -6394,7 +6394,7 @@ promote_merge_candidate() {
   if [[ -n "$ready_at" ]]; then
     ready_epoch="$(wavemill_iso8601_to_epoch "$ready_at" 2>/dev/null || echo 0)"
     now_epoch="$(wavemill_iso8601_to_epoch "$now" 2>/dev/null || echo 0)"
-    if [[ "$ready_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ ]] && (( ready_epoch > 0 && now_epoch >= ready_epoch )); then
+    if [[ "$ready_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ && "$ready_epoch" -gt 0 && "$now_epoch" -ge "$ready_epoch" ]]; then
       lane_wait_seconds=$(( now_epoch - ready_epoch ))
     fi
   fi
