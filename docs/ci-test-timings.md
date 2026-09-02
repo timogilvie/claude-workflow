@@ -35,7 +35,7 @@ Both runners accept `--timing-out FILE` (or the `TIMING_OUTPUT` env var) and
 write one bounded JSON document per run:
 
 ```json
-{"suite":"unit","shard":"2/5","runId":"33665710870","sha":"…",
+{"suite":"unit","shard":"2/7","runId":"33665710870","sha":"…",
  "generatedAt":"2026-09-02T00:00:00Z",
  "tests":[{"id":"shared/lib/foo.test.ts","elapsedMs":1234,"result":"pass"}]}
 ```
@@ -97,11 +97,16 @@ entries whose files are missing).
 
 The matrix uses the smallest shard count whose LPT-estimated maximum shard is
 at or below ~240 seconds under the checked-in weights, leaving headroom
-against the five-minute aggregator budget. Current counts: **unit 5, custom
-3** (shell stays at 4 — its slowest shard was already ~160s). If the estimated
-max drifts up (`npx tsx tools/partition-tests.ts --report`), bump the matrix
-in `ci.yml`; the balance preflight and `run-custom-tests-shard.test.sh` pick
-the new count up automatically.
+against the five-minute aggregator budget. Current counts: **unit 7, custom
+3** (shell stays at 4 — its slowest shard was already ~160s). Two caveats the
+estimates carry: unit file walls are measured under `node --test`'s internal
+parallelism, so a shard's real wall clock is below its estimated sum; and a
+single indivisible test can set a shard's wall-clock floor regardless of
+balance — the cross-repo parity suite was split into five per-mode files for
+exactly that reason. If the estimated max drifts up
+(`npx tsx tools/partition-tests.ts --report`), bump the matrix in `ci.yml`;
+the balance preflight and `run-custom-tests-shard.test.sh` pick the new count
+up automatically.
 
 ## Measuring the aggregator (REQ-F6)
 

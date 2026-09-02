@@ -6,7 +6,7 @@ set -euo pipefail
 #
 # Usage:
 #   bash tests/run-unit-tests.sh                    # run every test
-#   bash tests/run-unit-tests.sh --shard 2/5        # run shard 2 of 5
+#   bash tests/run-unit-tests.sh --shard 2/7        # run shard 2 of 7
 #   bash tests/run-unit-tests.sh --list             # print selected tests and exit
 #   bash tests/run-unit-tests.sh --timing-out FILE  # also write per-file timing JSON
 #

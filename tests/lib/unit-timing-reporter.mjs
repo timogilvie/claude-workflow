@@ -8,36 +8,32 @@
 // - Every test file passed to `node --test` emits a nesting-0 `test:enqueue`
 //   and a nesting-0 `test:complete` whose `name` is the file path exactly as
 //   given on the command line (repo-relative here, since the runner cds to the
-//   repo root); the complete event's `details.duration_ms` is the whole-file
-//   duration.
-// - Plain-script files (no node:test cases) additionally emit a file-level
-//   `test:pass`/`test:fail` of the same shape.
-// - Any failing test (case-level or file-level) emits `test:fail` carrying
-//   `file`, so a file is marked failed iff any `test:fail` references it.
-// - Defensive fallback: if a file-level complete event never arrives (crashed
-//   runner child), the sum of that file's nesting-0 case durations is used.
+//   repo root). The complete event's `details.duration_ms` is the whole-file
+//   duration and `details.passed` is the whole-file result — authoritative
+//   even when the file's tests are defined in an imported helper module.
+// - Case-level events carry `file` = the module where the test callback is
+//   DEFINED, which for delegated suites is the helper, not the registered
+//   test file. Only file-level events are therefore trusted for entry
+//   identity; anything else would invent phantom entries for helper modules.
+// - Defensive fallback: if a file-level complete never arrives (crashed
+//   runner child), the sum of nesting-0 case durations attributed to that
+//   file is used, and any `test:fail` attributed to it marks failure.
 //
 // Output contains only test ids (repo-relative paths), durations, and results —
 // never environment content — so it is structurally free of secrets.
 //
 // Metadata comes from the environment:
-//   WAVEMILL_TIMING_SHARD  e.g. "2/5" (default "1/1")
+//   WAVEMILL_TIMING_SHARD  e.g. "2/7" (default "1/1")
 //   GITHUB_RUN_ID / GITHUB_SHA (default "local")
 
 import path from 'node:path';
 
 export default async function* unitTimingReporter(source) {
-  // file path -> { fileDurationMs, caseSumMs, failed, seen }
-  const files = new Map();
-
-  const entryFor = (file) => {
-    let entry = files.get(file);
-    if (!entry) {
-      entry = { fileDurationMs: null, caseSumMs: 0, failed: false, seen: true };
-      files.set(file, entry);
-    }
-    return entry;
-  };
+  // Registered test files (file-level events seen), keyed by absolute path.
+  const files = new Map(); // file -> { durationMs, passed, sawComplete }
+  // Fallback data keyed by whatever file a case event was attributed to.
+  const caseSums = new Map(); // file -> ms
+  const caseFails = new Set(); // file
 
   // The file-level wrapper's name is the CLI-specified path; resolving it
   // against cwd matches the absolute `file` field regardless of whether the
@@ -55,22 +51,34 @@ export default async function* unitTimingReporter(source) {
 
     switch (event.type) {
       case 'test:enqueue':
-        if (isFileLevel(data)) entryFor(file);
+        if (isFileLevel(data) && !files.has(file)) {
+          files.set(file, { durationMs: null, passed: null, sawComplete: false });
+        }
         break;
       case 'test:complete':
         if (isFileLevel(data)) {
-          entryFor(file).fileDurationMs = data.details?.duration_ms ?? null;
+          const entry = files.get(file) ?? { durationMs: null, passed: null, sawComplete: false };
+          entry.durationMs = data.details?.duration_ms ?? entry.durationMs;
+          entry.passed = data.details?.passed ?? entry.passed;
+          entry.sawComplete = true;
+          files.set(file, entry);
         }
         break;
       case 'test:pass':
         if (data.nesting === 0 && !isFileLevel(data)) {
-          entryFor(file).caseSumMs += data.details?.duration_ms ?? 0;
+          caseSums.set(file, (caseSums.get(file) ?? 0) + (data.details?.duration_ms ?? 0));
         }
         break;
       case 'test:fail':
-        entryFor(file).failed = true;
-        if (data.nesting === 0 && !isFileLevel(data)) {
-          entryFor(file).caseSumMs += data.details?.duration_ms ?? 0;
+        if (isFileLevel(data)) {
+          const entry = files.get(file) ?? { durationMs: null, passed: null, sawComplete: false };
+          entry.passed = false;
+          files.set(file, entry);
+        } else {
+          caseFails.add(file);
+          if (data.nesting === 0) {
+            caseSums.set(file, (caseSums.get(file) ?? 0) + (data.details?.duration_ms ?? 0));
+          }
         }
         break;
       default:
@@ -80,11 +88,15 @@ export default async function* unitTimingReporter(source) {
 
   const cwd = process.cwd();
   const tests = [...files.entries()]
-    .map(([file, entry]) => ({
-      id: path.relative(cwd, file).split(path.sep).join('/'),
-      elapsedMs: Math.round(entry.fileDurationMs ?? entry.caseSumMs),
-      result: entry.failed ? 'fail' : 'pass',
-    }))
+    .map(([file, entry]) => {
+      const durationMs = entry.durationMs ?? caseSums.get(file) ?? 0;
+      const failed = entry.passed === false || (entry.passed === null && caseFails.has(file));
+      return {
+        id: path.relative(cwd, file).split(path.sep).join('/'),
+        elapsedMs: Math.round(durationMs),
+        result: failed ? 'fail' : 'pass',
+      };
+    })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 
   const doc = {
