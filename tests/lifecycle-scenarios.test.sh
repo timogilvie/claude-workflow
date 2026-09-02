@@ -96,6 +96,7 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 MONITOR_FUNC_FILE="$TEST_TMP/lifecycle-controller-functions.sh"
+cat "$REPO_DIR/shared/lib/transient-marker.sh" > "$MONITOR_FUNC_FILE"
 for fn in \
   approve_plan \
   capture_planning_baseline \
@@ -135,6 +136,7 @@ for fn in \
   ready_remediation_launch_head \
   inject_depends_on_pr_block \
   dispatch_queued_children_for_parent \
+  review_artifacts_with_pr_number \
   clear_transient_mergeability_state \
   reroute_expanded_packets_for_coding_handoff \
   handle_expanded_reroute_handoff_failure \
@@ -164,6 +166,12 @@ for fn in \
   native_launch_failure_kind \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
+  native_hook_terminal_failure_detail \
+  native_terminal_failure_kind \
+  native_terminal_failure_next_action \
+  emit_native_terminal_failure_attention \
+  _coding_terminal_blocked_completion_detected \
+  emit_terminal_blocked_completion_attention \
   challenge_varied_stage_model \
   challenge_result_stage_for_launch \
   challenge_stage_for_launch_env \

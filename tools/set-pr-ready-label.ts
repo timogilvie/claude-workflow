@@ -9,12 +9,15 @@ export const setPrReadyLabelDeps = {
   log: console.log,
 };
 
-export function setPrReadyLabel(prNumber: string, repo?: string): void {
+export function setPrReadyLabel(prNumber: string, repo?: string, markerRoot?: string): void {
   if (!prNumber) {
     throw new Error('PR number is required');
   }
 
-  const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, { repo });
+  const pr = setPrReadyLabelDeps.setWavemillReady(prNumber, {
+    ...(repo ? { repo } : {}),
+    ...(markerRoot ? { markerRoot } : {}),
+  });
 
   // Verify the write actually landed before claiming success.
   //
@@ -53,6 +56,10 @@ const config = {
       type: 'string',
       description: 'Repository in owner/repo format (defaults to current repo)',
     },
+    'marker-root': {
+      type: 'string',
+      description: 'Shared repository root for the PR-state marker sidecar',
+    },
   },
   positional: {
     name: 'pr-number',
@@ -64,7 +71,7 @@ const config = {
     'npx tsx tools/set-pr-ready-label.ts 229 --repo owner/repo',
   ],
   async run({ args, positional }) {
-    setPrReadyLabel(positional[0], args.repo);
+    setPrReadyLabel(positional[0], args.repo, args['marker-root']);
   },
 } as const;
 

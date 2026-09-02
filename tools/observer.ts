@@ -1,7 +1,7 @@
 #!/usr/bin/env -S npx tsx
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
@@ -1297,6 +1297,10 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     }
   }
 
+  // Read and merge observer-findings.jsonl from shell marker_emit_finding calls
+  const markerFindings = readObserverFindingsJsonl(snapshot.repos);
+  findings.push(...markerFindings);
+
   return correlateConfigIntegrityFindings(dedupeFindings(findings));
 }
 
@@ -1715,6 +1719,47 @@ function escapeRegExp(value: string): string {
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function readObserverFindingsJsonl(repos: RepoRow[]): Finding[] {
+  const findings: Finding[] = [];
+
+  for (const repo of repos) {
+    const findingsFile = join(repo.repoDir, '.wavemill', 'observer-findings.jsonl');
+    try {
+      const content = readFileSync(findingsFile, 'utf-8');
+      const lines = content.split('\n').filter((line: string) => line.trim().length > 0);
+
+      for (const line of lines) {
+        try {
+          const jsonFinding = JSON.parse(line);
+          findings.push({
+            id: `marker-${jsonFinding.context?.markerPath ?? 'unknown'}-${jsonFinding.context?.markerKind ?? 'unknown'}`,
+            severity: jsonFinding.severity || 'warning',
+            category: jsonFinding.subsystem || 'marker-lifecycle',
+            confidence: 'high',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            title: jsonFinding.title,
+            evidence: [
+              ...(jsonFinding.body ? [`detail=${jsonFinding.body}`] : []),
+              ...(jsonFinding.context ? Object.entries(jsonFinding.context).map(([k, v]) => `${k}=${v}`) : []),
+            ],
+            recommendation: 'Marker was stale or contradicted and was cleared. This should not happen; check marker lifecycle on re-derivation paths.',
+          });
+        } catch {
+          // Ignore malformed JSONL lines
+        }
+      }
+
+      // Truncate the file after reading to keep it from growing unbounded
+      rmSync(findingsFile, { force: true });
+    } catch {
+      // File doesn't exist yet, that's fine
+    }
+  }
+
+  return findings;
 }
 
 function dedupeFindings(findings: Finding[]): Finding[] {

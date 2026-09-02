@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, it, mock } from 'node:test';
 import * as prStateLabels from './pr-state-labels.ts';
 
@@ -10,6 +13,7 @@ function buildPullRequest(labelNames: string[]) {
     state: 'OPEN',
     author: 'octocat',
     headRefName: 'task/labels',
+    headRefOid: 'head-229',
     baseRefName: 'main',
     labels: labelNames.map((name) => ({ name })),
     url: 'https://github.com/acme/widgets/pull/229',
@@ -192,6 +196,77 @@ describe('clearWavemillState', () => {
       removeMock.mock.restore();
       addMock.mock.restore();
       getMock.mock.restore();
+    }
+  });
+});
+
+describe('PR state marker lifecycle', () => {
+  it('writes the active label state against the supplied head SHA', () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), 'wavemill-pr-marker-'));
+    mock.method(prStateLabels.prStateLabelDeps, 'getPullRequest', () => buildPullRequest([]));
+    mock.method(prStateLabels.prStateLabelDeps, 'addLabelsToPullRequest', () =>
+      buildPullRequest([prStateLabels.WM_LABELS.blocked]));
+    try {
+      prStateLabels.setWavemillBlocked(229, { headSha: 'head-explicit' }, { markerRoot });
+      const payload = JSON.parse(readFileSync(
+        prStateLabels.getPrStateMarkerHandle(229, markerRoot).path,
+        'utf-8',
+      )) as { headSha: string; detail: { activeLabels: string[] } };
+      assert.equal(payload.headSha, 'head-explicit');
+      assert.deepEqual(payload.detail.activeLabels, [prStateLabels.WM_LABELS.blocked]);
+    } finally {
+      rmSync(markerRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('reports stale and contradicted label sidecars through the read helper', async () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), 'wavemill-pr-marker-'));
+    try {
+      prStateLabels.writePrStateMarker(229, {
+        headSha: 'head-old',
+        activeLabels: [prStateLabels.WM_LABELS.blocked],
+        markerRoot,
+      });
+      const stale = await prStateLabels.readPrStateMarker(229, {
+        currentHead: 'head-new',
+        markerRoot,
+        deriveCondition: () => true,
+      });
+      assert.equal(stale.status, 'stale-sha');
+
+      prStateLabels.writePrStateMarker(229, {
+        headSha: 'head-new',
+        activeLabels: [prStateLabels.WM_LABELS.blocked],
+        markerRoot,
+      });
+      const contradicted = await prStateLabels.readPrStateMarker(229, {
+        currentHead: 'head-new',
+        markerRoot,
+        deriveCondition: () => false,
+      });
+      assert.equal(contradicted.status, 'contradicted');
+    } finally {
+      rmSync(markerRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('clears the transient sidecar when the PR reaches merged state', () => {
+    const markerRoot = mkdtempSync(join(tmpdir(), 'wavemill-pr-marker-'));
+    mock.method(prStateLabels.prStateLabelDeps, 'getPullRequest', () =>
+      buildPullRequest([prStateLabels.WM_LABELS.ready]));
+    mock.method(prStateLabels.prStateLabelDeps, 'removeLabelFromPullRequest', () => buildPullRequest([]));
+    mock.method(prStateLabels.prStateLabelDeps, 'addLabelsToPullRequest', () =>
+      buildPullRequest([prStateLabels.WM_LABELS.merged]));
+    try {
+      prStateLabels.writePrStateMarker(229, {
+        headSha: 'head-229',
+        activeLabels: [prStateLabels.WM_LABELS.ready],
+        markerRoot,
+      });
+      prStateLabels.setWavemillMerged(229, { markerRoot });
+      assert.equal(existsSync(prStateLabels.getPrStateMarkerHandle(229, markerRoot).path), false);
+    } finally {
+      rmSync(markerRoot, { recursive: true, force: true });
     }
   });
 });

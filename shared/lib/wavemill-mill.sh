@@ -1046,8 +1046,8 @@ check_routing_complete() {
 }
 
 
-set_window_attention_state() {
-  local win="$1" state="${2:-clear}"
+_resolve_window_attention_target() {
+  local win="$1"
   local target="$win" issue="" slug=""
   if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
     issue="${BASH_REMATCH[1]}"
@@ -1057,13 +1057,25 @@ set_window_attention_state() {
     target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
   fi
   [[ -n "$target" ]] || target="$win"
-  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
+  _tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target"
+}
+
+clear_window_attention_state() {
+  local win="$1" target
+  target="$(_resolve_window_attention_target "$win")"
+  tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
+  tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+}
+
+set_window_attention_state() {
+  local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then
+    local target
+    target="$(_resolve_window_attention_target "$win")"
     tmux set-window-option -t "$target" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
     tmux set-window-option -t "$target" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
   else
-    tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
-    tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+    clear_window_attention_state "$win"
   fi
   tmux refresh-client -S >/dev/null 2>&1 || true
 }

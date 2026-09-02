@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   setWavemillBlocked,
@@ -6,8 +6,13 @@ import {
   setWavemillMerging,
   setWavemillReady,
   setWavemillSuperseded,
+  clearPrStateMarker,
+  getPrStateMarkerHandle,
+  readPrStateMarker,
+  writePrStateMarker,
   WM_LABELS,
 } from './pr-state-labels.ts';
+import { buildStaleMarkerFinding, type MarkerPayload, type MarkerValidation } from './transient-marker.ts';
 import { getIntegrationConfig, getIntegrationReadyPolicy } from './config.ts';
 import { readChallengeComparisons } from './challenge-comparison.ts';
 import { getPullRequest, removeLabelFromPullRequest } from './github.ts';
@@ -105,6 +110,8 @@ export interface SelectNextCandidateOptions {
   healthChecker?: HealthChecker;
   crossPrGuardChecker?: CrossPrGuardChecker;
   blockedLabelClearer?: BlockedLabelClearer;
+  prStateMarkerReader?: PrStateMarkerReader;
+  prStateMarkerWriter?: PrStateMarkerWriter;
   loserCleanup?: (candidate: ChallengeLoserCleanupCandidate, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
   challengeGateOptions?: ChallengeGateOptions;
@@ -123,6 +130,11 @@ export type CrossPrGuardChecker = (input: {
 }) => Promise<CrossPrGuardCheckResult>;
 
 export type BlockedLabelClearer = (prNumber: number, repoDir: string) => void;
+export type PrStateMarkerReader = (
+  prNumber: number,
+  args: { currentHead: string; markerRoot: string; deriveCondition: (payload: MarkerPayload) => Promise<boolean> | boolean },
+) => Promise<MarkerValidation<boolean>>;
+export type PrStateMarkerWriter = typeof writePrStateMarker;
 
 interface EligibleWorkItem {
   pr: GhPrListEntry;
@@ -346,6 +358,8 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   let eligibleWorkItems: EligibleWorkItem[] = [];
   const crossPrGuardChecker = options.crossPrGuardChecker ?? defaultCrossPrGuardChecker;
   const blockedLabelClearer = options.blockedLabelClearer ?? defaultBlockedLabelClearer;
+  const prStateMarkerReader = options.prStateMarkerReader ?? readPrStateMarker;
+  const prStateMarkerWriter = options.prStateMarkerWriter ?? writePrStateMarker;
 
   for (const pr of wavemillPrs) {
     const metadataResult = getValidMetadata(pr.body);
@@ -358,6 +372,8 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
         integrationBranch,
         crossPrGuardChecker,
         blockedLabelClearer,
+        prStateMarkerReader,
+        prStateMarkerWriter,
       },
     );
 
@@ -444,7 +460,7 @@ export async function executeMerge(
   candidate: TendCandidate,
   options: ExecuteMergeOptions,
 ): Promise<MergeExecutionResult> {
-  const deps = mergeExecutionDeps(options.deps);
+  const deps = mergeExecutionDeps(options.deps, options.repoDir);
   const integrationConfig = getIntegrationConfig(options.repoDir);
   const integrationBranch = getConfiguredIntegrationBranch(options.repoDir);
 
@@ -1323,7 +1339,7 @@ function stringField(value: Record<string, unknown>, key: string): string | null
   return typeof field === 'string' && field.length > 0 ? field : null;
 }
 
-function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): MergeExecutionDeps {
+function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined, markerRoot: string): MergeExecutionDeps {
   return {
     shellRunner: (cmd, opts) => String(execShellCommand(cmd, {
       ...opts,
@@ -1332,22 +1348,22 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined): Merg
     readyChecker: defaultRunReadyCheck,
     healthChecker: defaultHealthChecker,
     acquireMerging: (prNumber) => {
-      setWavemillMerging(prNumber);
+      setWavemillMerging(prNumber, { markerRoot });
     },
     releaseToBlocked: (prNumber) => {
-      setWavemillBlocked(prNumber);
+      setWavemillBlocked(prNumber, { markerRoot });
     },
     releaseMerged: (prNumber) => {
-      setWavemillMerged(prNumber);
+      setWavemillMerged(prNumber, { markerRoot });
     },
     restoreReady: (prNumber) => {
-      setWavemillReady(prNumber);
+      setWavemillReady(prNumber, { markerRoot });
     },
     reclaimStaleMerging: (prNumber) => {
       // setWavemillReady clears both wm:merging and wm:blocked — the holder held
       // wm:ready before acquireMerging swapped it, and the in-lane ready gate
       // re-validates before any reclaimed PR can actually merge.
-      setWavemillReady(prNumber);
+      setWavemillReady(prNumber, { markerRoot });
     },
     retrySleep: sleep,
     currentTimeMs: () => Date.now(),
@@ -1656,6 +1672,8 @@ async function getInitialBlockReason(
     integrationBranch: string;
     crossPrGuardChecker: CrossPrGuardChecker;
     blockedLabelClearer: BlockedLabelClearer;
+    prStateMarkerReader: PrStateMarkerReader;
+    prStateMarkerWriter: PrStateMarkerWriter;
   },
 ): Promise<string | null> {
   const labels = labelSet(pr);
@@ -1706,28 +1724,56 @@ async function resolveBlockedLabelReason(
     integrationBranch: string;
     crossPrGuardChecker: CrossPrGuardChecker;
     blockedLabelClearer: BlockedLabelClearer;
+    prStateMarkerReader: PrStateMarkerReader;
+    prStateMarkerWriter: PrStateMarkerWriter;
   },
 ): Promise<string | null> {
   const readyResult = readReadyResultSnapshot(options.repoDir, pr, metadata);
   const currentHeadSha = pr.headRefOid ?? '';
+  if (!currentHeadSha) {
+    return 'blocked-label:cross-pr-guard-missing-head';
+  }
+
+  let markerNeedsReconciliation = false;
+  try {
+    const markerValidation = await options.prStateMarkerReader(pr.number, {
+      currentHead: currentHeadSha,
+      markerRoot: options.repoDir,
+      deriveCondition: (payload) => {
+        const activeLabels = payload.detail?.activeLabels;
+        return Array.isArray(activeLabels)
+          && activeLabels.includes(WM_LABELS.blocked)
+          && labels.has(WM_LABELS.blocked);
+      },
+    });
+    markerNeedsReconciliation = markerValidation.status !== 'valid';
+    emitPrStateMarkerFinding(options.repoDir, pr.number, markerValidation);
+  } catch (error) {
+    return `blocked-label:marker-read-error:${truncateReason(errorMessage(error))}`;
+  }
 
   if (metadata && currentHeadSha && labels.has(WM_LABELS.ready) && readyResultIsCurrentPass(readyResult, currentHeadSha)) {
-    return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+    return clearGuardBlockedLabel(pr, labels, currentHeadSha, options, 'blocked-label:clear-failed');
   }
 
   const evidence = extractCrossPrGuardEvidence(readyResult);
   if (!evidence.provenance) {
+    if (markerNeedsReconciliation) {
+      return clearGuardBlockedLabel(pr, labels, currentHeadSha, options, 'blocked-label:clear-failed');
+    }
     return 'blocked-label';
-  }
-
-  if (!currentHeadSha) {
-    return 'blocked-label:cross-pr-guard-missing-head';
   }
 
   if (
     evidence.checkedHeadSha === currentHeadSha
     && (evidence.status === 'blocked' || evidence.status === 'tool-error')
   ) {
+    if (markerNeedsReconciliation && evidence.status === 'blocked') {
+      const markerWriteError = refreshPrStateMarker(pr, labels, currentHeadSha, options);
+      if (markerWriteError) {
+        return markerWriteError;
+      }
+    }
     return evidence.status === 'tool-error'
       ? 'blocked-label:cross-pr-guard-tool-error'
       : 'blocked-label:cross-pr-guard';
@@ -1745,26 +1791,89 @@ async function resolveBlockedLabelReason(
   }
 
   if (recheck.status === 'blocked') {
+    const markerWriteError = refreshPrStateMarker(pr, labels, currentHeadSha, options);
+    if (markerWriteError) {
+      return markerWriteError;
+    }
     return 'blocked-label:cross-pr-guard';
   }
   if (recheck.status === 'tool-error') {
     return 'blocked-label:cross-pr-guard-tool-error';
   }
 
-  return clearGuardBlockedLabel(pr, options.blockedLabelClearer, options.repoDir, 'blocked-label:clear-failed');
+  return clearGuardBlockedLabel(pr, labels, currentHeadSha, options, 'blocked-label:clear-failed');
 }
 
 function clearGuardBlockedLabel(
   pr: GhPrListEntry,
-  blockedLabelClearer: BlockedLabelClearer,
-  repoDir: string,
+  labels: Set<string>,
+  currentHeadSha: string,
+  options: {
+    repoDir: string;
+    blockedLabelClearer: BlockedLabelClearer;
+    prStateMarkerWriter: PrStateMarkerWriter;
+  },
   failureReason: string,
 ): string | null {
   try {
-    blockedLabelClearer(pr.number, repoDir);
+    options.blockedLabelClearer(pr.number, options.repoDir);
+    const remainingActiveLabels = [WM_LABELS.ready, WM_LABELS.merging]
+      .filter((label) => labels.has(label));
+    if (remainingActiveLabels.length > 0) {
+      options.prStateMarkerWriter(pr.number, {
+        headSha: currentHeadSha,
+        activeLabels: remainingActiveLabels,
+        reason: 'wm:blocked cleared after marker revalidation',
+        markerRoot: options.repoDir,
+      });
+    } else {
+      clearPrStateMarker(pr.number, options.repoDir);
+    }
     return null;
   } catch (error) {
     return `${failureReason}:${truncateReason(errorMessage(error))}`;
+  }
+}
+
+function refreshPrStateMarker(
+  pr: GhPrListEntry,
+  labels: Set<string>,
+  currentHeadSha: string,
+  options: { repoDir: string; prStateMarkerWriter: PrStateMarkerWriter },
+): string | null {
+  try {
+    options.prStateMarkerWriter(pr.number, {
+      headSha: currentHeadSha,
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked, WM_LABELS.merging]
+        .filter((label) => labels.has(label)),
+      reason: 'wm:blocked condition revalidated by tend',
+      markerRoot: options.repoDir,
+    });
+    return null;
+  } catch (error) {
+    return `blocked-label:marker-write-error:${truncateReason(errorMessage(error))}`;
+  }
+}
+
+function emitPrStateMarkerFinding(
+  repoDir: string,
+  prNumber: number,
+  validation: MarkerValidation<boolean>,
+): void {
+  const finding = buildStaleMarkerFinding(
+    getPrStateMarkerHandle(prNumber, repoDir),
+    validation,
+    { repo: repoDir, prNumber },
+  );
+  if (!finding) {
+    return;
+  }
+  try {
+    const findingsPath = join(repoDir, '.wavemill', 'observer-findings.jsonl');
+    mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+    appendFileSync(findingsPath, `${JSON.stringify(finding)}\n`, 'utf-8');
+  } catch {
+    // Observer telemetry is best-effort and must not change the merge decision.
   }
 }
 
