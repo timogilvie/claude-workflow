@@ -27,15 +27,19 @@ afterEach(() => {
 
 describe('setPrReadyLabel', () => {
   it('reports success when the write actually landed', () => {
-    mock.method(setPrReadyLabelDeps, 'setWavemillReady', () =>
+    const readyMock = mock.method(setPrReadyLabelDeps, 'setWavemillReady', () =>
       pullRequestWithLabels(['wavemill', WM_LABELS.ready]));
     const logged: string[] = [];
     mock.method(setPrReadyLabelDeps, 'log', (line: string) => { logged.push(line); });
 
-    setPrReadyLabel('304');
+    setPrReadyLabel('304', 'acme/widgets', '/repo-root');
 
     assert.equal(logged.length, 1);
     assert.match(logged[0], /Canonicalized ready labels for PR #304/);
+    assert.deepEqual(readyMock.mock.calls[0]?.arguments, [
+      '304',
+      { repo: 'acme/widgets', markerRoot: '/repo-root' },
+    ]);
   });
 
   it('throws when the ready label did not land', () => {

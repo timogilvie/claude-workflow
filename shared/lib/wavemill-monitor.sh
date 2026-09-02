@@ -7097,7 +7097,7 @@ set_ready_pass_labels() {
 
   review_result_passes_ready_gate "$feature_dir" || return 1
 
-  (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number")
+  (cd "$wt_dir" && npx tsx "$TOOLS_DIR/set-pr-ready-label.ts" "$pr_number" --marker-root "$REPO_DIR")
 }
 
 _launch_ready_remediation_attempt() {

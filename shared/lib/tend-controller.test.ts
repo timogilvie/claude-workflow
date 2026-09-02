@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { LinearIssueSummary } from './linear.ts';
-import { WM_LABELS } from './pr-state-labels.ts';
+import { WM_LABELS, writePrStateMarker } from './pr-state-labels.ts';
 import {
   createPrFetcher,
   defaultHealthChecker,
@@ -335,12 +335,20 @@ describe('selectNextCandidate filtering', () => {
     });
   });
 
-  it('blocks PRs with the blocked label', async () => {
-    await withDecision([
+  it('re-derives and clears a blocked label that has no marker sidecar', async () => {
+    const options = buildTestOptions([
       pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
-    ], (decision) => {
-      assert.equal(decision.blocked[0]?.reason, 'blocked-label');
-    });
+    ]);
+    const cleared: number[] = [];
+    options.blockedLabelClearer = (prNumber) => { cleared.push(prNumber); };
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [1]);
+      assert.deepEqual(decision.blocked, []);
+      assert.deepEqual(cleared, [1]);
+    } finally {
+      options.cleanup();
+    }
   });
 
   it('keeps a current cross-PR guard block parked without rechecking', async () => {
@@ -366,6 +374,11 @@ describe('selectNextCandidate filtering', () => {
           checkedHeadSha: 'head-current',
         },
       },
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-current',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
     });
 
     try {
@@ -405,6 +418,11 @@ describe('selectNextCandidate filtering', () => {
         },
       },
     });
+    writePrStateMarker(1, {
+      headSha: 'head-old',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
 
     try {
       const decision = await selectNextCandidate(options);
@@ -412,6 +430,10 @@ describe('selectNextCandidate filtering', () => {
       assert.deepEqual(decision.blocked, []);
       assert.equal(decision.nextPR, 1);
       assert.deepEqual(cleared, [1]);
+      assert.match(
+        readFileSync(join(options.repoDir, '.wavemill', 'observer-findings.jsonl'), 'utf-8'),
+        /Stale marker: pr-label/,
+      );
     } finally {
       options.cleanup();
     }
@@ -444,6 +466,44 @@ describe('selectNextCandidate filtering', () => {
       const decision = await selectNextCandidate(options);
       assert.equal(decision.eligible.length, 0);
       assert.equal(decision.blocked[0]?.reason, 'blocked-label:cross-pr-guard');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed when a revalidated block cannot refresh its marker sidecar', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'blocked',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+    });
+    options.prStateMarkerWriter = () => {
+      throw new Error('sidecar disk unavailable');
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(
+        decision.blocked[0]?.reason,
+        'blocked-label:marker-write-error:sidecar disk unavailable',
+      );
     } finally {
       options.cleanup();
     }
