@@ -1590,6 +1590,7 @@ describe('executeMerge', () => {
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
         if (cmd.includes("git merge-base --is-ancestor 'origin/auto/integration' 'abc123def456'")) return '';
         if (cmd.includes('git rebase')) throw new Error('rebase should have been skipped');
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
@@ -1623,6 +1624,7 @@ describe('executeMerge', () => {
         if (cmd.includes('git rebase')) {
           throw new Error('rebase would reintroduce resolved conflicts in promotion-controller files');
         }
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'mergecommit630' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
@@ -1753,6 +1755,7 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) {
           // New gh shape: only `bucket` and `state`, no `conclusion`.
           return JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass' }]);
@@ -1787,6 +1790,132 @@ describe('executeMerge', () => {
     assert.match(result.summary, /Shell and Unit Tests: pass/);
     assert.match(result.summary, /Missing required checks: Lifecycle Integration Tests/);
     assert.ok(calls.some((cmd) => cmd.includes('gh pr checks 42 --json name,state,bucket')));
+  });
+
+  it('waitForChecks passes when the head matches on every poll (regression)', async () => {
+    const calls: string[] = [];
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        calls.push(cmd);
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'new000' });
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'pass');
+    assert.ok(calls.some((cmd) => cmd.includes('gh pr view 42 --json headRefOid')));
+  });
+
+  it('waitForChecks skips a stale head\'s cancelled checks and passes on the real head (REQ-F4)', async () => {
+    // The PR #1301 race: right after tend force-pushes new000, GitHub briefly
+    // serves the old head old000 — whose run the HOK-2938 concurrency policy
+    // has cancelled. Those CANCELLED checks must not block the wait.
+    let headPolls = 0;
+    let checksReadWhileMismatched = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) {
+          headPolls += 1;
+          return JSON.stringify({ headRefOid: headPolls === 1 ? 'old000' : 'new000' });
+        }
+        // gh pr checks: serve the superseded head's cancelled run until the
+        // head settles. If the guard ever evaluated this, the wait would fail.
+        if (headPolls <= 1) {
+          checksReadWhileMismatched += 1;
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'cancel' }]);
+        }
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'pass');
+    assert.equal(checksReadWhileMismatched, 0, 'checks must never be evaluated while the head mismatches');
+  });
+
+  it('waitForChecks returns head-changed when the head is permanently superseded', async () => {
+    let checksReads = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'other999' });
+        checksReads += 1;
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'head-changed');
+    assert.match(result.summary, /expected new000/);
+    assert.match(result.summary, /observed other999/);
+    assert.equal(checksReads, 0, 'another head\'s checks must never be evaluated');
+  });
+
+  it('waitForChecks fails on a cancelled check belonging to the expected head (REQ-F5)', async () => {
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'new000' });
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'cancel' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'fail');
+    assert.match(result.summary, /Shell and Unit Tests: cancel/);
+  });
+
+  it('waitForChecks times out conservatively when the head cannot be verified', async () => {
+    // A head read that stays unparseable must never produce a pass/fail
+    // verdict — provenance is unknown, so the wait degrades to a timeout.
+    let checksReads = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return 'gh: unexpected error';
+        checksReads += 1;
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 0,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+        retrySleep: async () => {},
+      },
+    );
+
+    assert.equal(result.outcome, 'timeout');
+    assert.match(result.summary, /Could not verify PR head/);
+    assert.equal(checksReads, 0);
   });
 
   it('blocks and comments when rebase fails', async () => {
@@ -1912,6 +2041,7 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
