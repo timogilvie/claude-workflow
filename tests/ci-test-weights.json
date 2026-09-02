@@ -174,7 +174,6 @@
       "shared/lib/context-analyzer.test.ts": 343,
       "shared/lib/context-linter.test.ts": 454,
       "shared/lib/cross-pr-revert-detector.test.ts": 1499,
-      "shared/lib/cross-repo-parity.test.ts": 377291,
       "shared/lib/deepseek-launcher.test.ts": 839,
       "shared/lib/deepseek-smoke.test.ts": 912,
       "shared/lib/dependency-classifier.test.ts": 3221,

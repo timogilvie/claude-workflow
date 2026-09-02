@@ -80,13 +80,13 @@ jobs:
   # with the weights manifest; tools/check-shard-balance.ts (preflight) reads
   # the counts from this file, so matrix and check cannot drift.
   unit:
-    name: Unit Tests (shard ${{ matrix.shard }}/5)
+    name: Unit Tests (shard ${{ matrix.shard }}/7)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: Checkout
@@ -96,7 +96,7 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Run unit test shard
-        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/5 --timing-out "timing-unit-shard-${{ matrix.shard }}.json"
+        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/7 --timing-out "timing-unit-shard-${{ matrix.shard }}.json"
 
       - name: Upload timing artifact
         if: always()

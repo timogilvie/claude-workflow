@@ -384,11 +384,13 @@
       "Shell Tests (shard 2/4)",
       "Shell Tests (shard 3/4)",
       "Shell Tests (shard 4/4)",
-      "Unit Tests (shard 1/5)",
-      "Unit Tests (shard 2/5)",
-      "Unit Tests (shard 3/5)",
-      "Unit Tests (shard 4/5)",
-      "Unit Tests (shard 5/5)",
+      "Unit Tests (shard 1/7)",
+      "Unit Tests (shard 2/7)",
+      "Unit Tests (shard 3/7)",
+      "Unit Tests (shard 4/7)",
+      "Unit Tests (shard 5/7)",
+      "Unit Tests (shard 6/7)",
+      "Unit Tests (shard 7/7)",
       "Custom Harness Tests (shard 1/3)",
       "Custom Harness Tests (shard 2/3)",
       "Custom Harness Tests (shard 3/3)",
@@ -437,30 +439,40 @@
           "workflowPath": ".github/workflows/ci.yml",
           "jobName": "Shell Tests (shard 4/4)"
         },
-        "Unit Tests (shard 1/5)": {
+        "Unit Tests (shard 1/7)": {
           "localCommand": "bash tests/run-unit-tests.sh",
           "workflowPath": ".github/workflows/ci.yml",
-          "jobName": "Unit Tests (shard 1/5)"
+          "jobName": "Unit Tests (shard 1/7)"
         },
-        "Unit Tests (shard 2/5)": {
+        "Unit Tests (shard 2/7)": {
           "localCommand": "bash tests/run-unit-tests.sh",
           "workflowPath": ".github/workflows/ci.yml",
-          "jobName": "Unit Tests (shard 2/5)"
+          "jobName": "Unit Tests (shard 2/7)"
         },
-        "Unit Tests (shard 3/5)": {
+        "Unit Tests (shard 3/7)": {
           "localCommand": "bash tests/run-unit-tests.sh",
           "workflowPath": ".github/workflows/ci.yml",
-          "jobName": "Unit Tests (shard 3/5)"
+          "jobName": "Unit Tests (shard 3/7)"
         },
-        "Unit Tests (shard 4/5)": {
+        "Unit Tests (shard 4/7)": {
           "localCommand": "bash tests/run-unit-tests.sh",
           "workflowPath": ".github/workflows/ci.yml",
-          "jobName": "Unit Tests (shard 4/5)"
+          "jobName": "Unit Tests (shard 4/7)"
         },
-        "Unit Tests (shard 5/5)": {
+        "Unit Tests (shard 5/7)": {
           "localCommand": "bash tests/run-unit-tests.sh",
           "workflowPath": ".github/workflows/ci.yml",
-          "jobName": "Unit Tests (shard 5/5)"
+          "jobName": "Unit Tests (shard 5/7)"
+        },
+        "Unit Tests (shard 6/7)": {
+          "localCommand": "bash tests/run-unit-tests.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Unit Tests (shard 6/7)"
+        },
+        "Unit Tests (shard 7/7)": {
+          "localCommand": "bash tests/run-unit-tests.sh",
+          "workflowPath": ".github/workflows/ci.yml",
+          "jobName": "Unit Tests (shard 7/7)"
         },
         "Custom Harness Tests (shard 1/3)": {
           "localCommand": "npm run test:custom",
