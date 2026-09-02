@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "defaultMs": 30000,
+  "sources": [],
+  "suites": {
+    "unit": {},
+    "custom": {}
+  }
+}

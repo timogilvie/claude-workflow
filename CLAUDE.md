@@ -125,22 +125,23 @@ Tests only run if they are registered. Adding a test file is not enough — regi
 |-----------|-------------|
 | Bash test (`tests/*.test.sh`) | `TESTS=( ... )` array in `tests/run-shell-suite.sh` |
 | `node --test` unit test | `TESTS=( ... )` array in `tests/run-unit-tests.sh` |
-| Custom-harness test (`process.exit(1)` style) | `for f in ...` loop in `tests/run-custom-tests.sh` |
+| Custom-harness test (`process.exit(1)` style) | `CUSTOM_TS_TESTS=( ... )` / `CUSTOM_SH_TESTS=( ... )` arrays in `tests/run-custom-tests.sh` (repo-relative paths) |
 | Any new `.sh` file | Also add to the syntax-check list in `tests/check-shell.sh` |
 
-Shell and unit tests are **no longer listed in `package.json`**. Both delegate to a sharding runner:
+Shell and unit tests are **no longer listed in `package.json`**. All three suites delegate to sharding runners:
 
 ```bash
 bash tests/run-shell-suite.sh              # all shell tests
 bash tests/run-shell-suite.sh --shard 2/4  # CI shard 2 of 4
 bash tests/run-unit-tests.sh               # all unit tests
-bash tests/run-unit-tests.sh --shard 2/3   # CI shard 2 of 3
+bash tests/run-unit-tests.sh --shard 2/5   # CI shard 2 of 5
 bash tests/run-unit-tests.sh --list        # print selection without running
+bash tests/run-custom-tests.sh --shard 2/3 # custom harness CI shard 2 of 3
 ```
 
-Both assign shards **round-robin, not in contiguous blocks** — cost is heavily skewed toward a few files, and those cluster together in the lists, so blocks would pile them into one shard. Adding a test to the array is all that is needed; shard assignment is automatic.
+Shell shards are assigned round-robin. Unit and custom shards use **deterministic weighted partitioning**: `tools/partition-tests.ts` (LPT greedy over `shared/lib/test-partitioner.ts`) balances shards using measured per-test medians from the checked-in manifest `tests/ci-test-weights.json`. A newly added test has no manifest entry yet and receives the conservative `defaultMs` weight — adding it to the array is still all that is needed. `tools/check-shard-balance.ts` (preflight) enforces exactly-once assignment, manifest hygiene, and the 130%-of-median balance rule; refresh the manifest with `npx tsx tools/ci-test-timings.ts collect` from ≥3 CI timing artifacts (see `docs/ci-test-timings.md`).
 
-**CI job layout** (`.github/workflows/ci.yml`): `preflight`, `shell` (×4 shards), `unit` (×3 shards), `custom`, `smoke`, and `certification` run in parallel. The `shell-and-unit` job aggregates them into the single status check named **"Shell and Unit Tests"**, which is a required check on `main` — do not rename it without updating branch protection.
+**CI job layout** (`.github/workflows/ci.yml`): `preflight`, `shell` (×4 shards), `unit` (×5 weighted shards), `custom` (×3 weighted shards), `smoke`, and `certification` run in parallel. The `shell-and-unit` job aggregates them into the single status check named **"Shell and Unit Tests"**, which is a required check on `main` — do not rename it without updating branch protection. The unit/custom jobs also upload `timing-*` artifacts used to refresh the weights manifest.
 
 ## Prompt Locations
 

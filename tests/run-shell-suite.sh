@@ -95,6 +95,7 @@ TESTS=(
   startup-handoff.test.sh
   monitor-script-byte-identical.test.sh
   transient-marker.test.sh
+  run-custom-tests-shard.test.sh
 )
 
 SHARD_INDEX=1
