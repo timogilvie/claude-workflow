@@ -139,6 +139,8 @@ for f in \
   "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
   "$REPO_DIR"/tests/bounded-retry.test.sh \
   "$REPO_DIR"/tests/handle-phase-launch-result.test.sh \
+  "$REPO_DIR"/tests/launch-pane-liveness.test.sh \
+  "$REPO_DIR"/tests/launch-failure-log-capture.test.sh \
   "$REPO_DIR"/tests/challenge-eval-soft-retry.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \

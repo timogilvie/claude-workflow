@@ -261,6 +261,8 @@ harness_extract_real_functions() {
     check_stage_aborted \
     phase_launch_head \
     phase_launch_gate \
+    _run_phase_launch \
+    reap_completed_planning_pane \
     persist_challenge_execution_intent \
     finalize_challenge_execution_intent_before_coding \
     phase_should_remain_active_without_pr \

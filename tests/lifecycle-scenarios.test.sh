@@ -114,6 +114,8 @@ for fn in \
   check_stage_awaiting_user \
   phase_launch_head \
   phase_launch_gate \
+  _run_phase_launch \
+  reap_completed_planning_pane \
   persist_challenge_execution_intent \
   finalize_challenge_execution_intent_before_coding \
   resolve_phase \
