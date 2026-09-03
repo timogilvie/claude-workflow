@@ -96,6 +96,7 @@ TEST_TMP="$(mktemp -d)"
 trap 'rm -rf "$TEST_TMP"' EXIT
 
 MONITOR_FUNC_FILE="$TEST_TMP/lifecycle-controller-functions.sh"
+cat "$REPO_DIR/shared/lib/transient-marker.sh" > "$MONITOR_FUNC_FILE"
 for fn in \
   approve_plan \
   capture_planning_baseline \
@@ -111,6 +112,10 @@ for fn in \
   check_stage_aborted \
   check_stage_complete \
   check_stage_awaiting_user \
+  phase_launch_head \
+  phase_launch_gate \
+  _run_phase_launch \
+  reap_completed_planning_pane \
   persist_challenge_execution_intent \
   finalize_challenge_execution_intent_before_coding \
   resolve_phase \
@@ -133,6 +138,12 @@ for fn in \
   ready_remediation_launch_head \
   inject_depends_on_pr_block \
   dispatch_queued_children_for_parent \
+  review_result_has_final_evidence \
+  review_result_missing_final_evidence \
+  review_artifacts_with_pr_number \
+  record_review_pr_reconciliation \
+  clear_review_gate_attention \
+  launch_review_for_missing_evidence \
   clear_transient_mergeability_state \
   reroute_expanded_packets_for_coding_handoff \
   handle_expanded_reroute_handoff_failure \
@@ -162,6 +173,12 @@ for fn in \
   native_launch_failure_kind \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
+  native_hook_terminal_failure_detail \
+  native_terminal_failure_kind \
+  native_terminal_failure_next_action \
+  emit_native_terminal_failure_attention \
+  _coding_terminal_blocked_completion_detected \
+  emit_terminal_blocked_completion_attention \
   challenge_varied_stage_model \
   challenge_result_stage_for_launch \
   challenge_stage_for_launch_env \
@@ -406,10 +423,14 @@ run_lifecycle_scenario() {
     write_stage_result() {
       local feature_dir="$1" stage="$2" status="$3"
       local agent="${4:-}" model="${5:-}" notes="${6:-}" artifacts_json="${7:-}"
+      local artifacts_fragment=""
       mkdir -p "$feature_dir"
       printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" "$WRITE_STAGE_CALLS" "$feature_dir" "$stage" "$status" "$agent" "$model" "$notes" "$artifacts_json"
+      if [[ -n "$artifacts_json" ]] && jq empty <<<"$artifacts_json" >/dev/null 2>&1; then
+        artifacts_fragment=",\"artifacts\":$artifacts_json"
+      fi
       cat > "$feature_dir/.${stage}-result.json" <<JSON
-{"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"}
+{"stage":"$stage","status":"$status","agent":"$agent","model":"$model","notes":"$notes"$artifacts_fragment}
 JSON
     }
     # Keep stage-history writes observable through the scenario stage recorder.

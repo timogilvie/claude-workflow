@@ -151,10 +151,11 @@ REAL_FUNC_FILE="$TEST_TMP/lifecycle-real-functions.sh"
 
 harness_extract_real_functions() {
   local func
-  : > "$REAL_FUNC_FILE"
+  cat "$REPO_DIR/shared/lib/transient-marker.sh" > "$REAL_FUNC_FILE"
   for func in \
     trim_outer_whitespace \
     merge_retry_marker_until \
+    lane_progress_patch_json \
     refresh_ready_merge_queue_tick \
     wavemill_run_tsx_tool \
     get_main_head_sha \
@@ -214,6 +215,10 @@ harness_extract_real_functions() {
     native_launch_failure_kind \
     write_native_launch_failure_artifact \
     emit_native_launch_failure_attention \
+    native_hook_terminal_failure_detail \
+    native_terminal_failure_kind \
+    native_terminal_failure_next_action \
+    emit_native_terminal_failure_attention \
     challenge_varied_stage_model \
     challenge_result_stage_for_launch \
     challenge_stage_for_launch_env \
@@ -255,6 +260,10 @@ harness_extract_real_functions() {
     check_stage_complete \
     check_stage_awaiting_user \
     check_stage_aborted \
+    phase_launch_head \
+    phase_launch_gate \
+    _run_phase_launch \
+    reap_completed_planning_pane \
     persist_challenge_execution_intent \
     finalize_challenge_execution_intent_before_coding \
     phase_should_remain_active_without_pr \

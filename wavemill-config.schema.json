@@ -1568,6 +1568,18 @@
                     },
                     "additionalProperties": false
                 },
+                "postPrReconciliation": {
+                    "type": "object",
+                    "description": "Durable post-PR reconciliation capsule (HOK-2936). When enabled, ready remediation and merge-conflict recovery launch fresh agents from a persisted, validated capsule (stable foundation prefix + volatile incident suffix), record attempt telemetry, and invalidate the prior review verdict after any reconciliation commit. Default off during rollout.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Gate recovery launches on a validated reconciliation capsule and capsule-projected prompts."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "watchdog": {
                     "type": "object",
                     "description": "Ready-stage stale-state watchdog settings.",
@@ -2904,6 +2916,31 @@
                 }
             },
             "additionalProperties": false
+        },
+        "retry": {
+            "type": "object",
+            "description": "Per-bucket tuning for the shared bounded-retry helper (shared/lib/bounded-retry.sh, HOK-2924). Keys are bucket slugs (e.g. phase-launch-coding, ready-remediation, pending-ready-recheck, failed-ready-recheck, challenge-eval-soft, challenge-eval-hard). Env vars (WAVEMILL_RETRY_BACKOFF_<BUCKET>_{BASE,CAP}_SECONDS) take precedence at runtime. Existing ceilings (ready.remediation.maxAttempts, challenge.eval.retryMaxAttempts, challenge.eval.hardFailureRetryMaxAttempts) remain the effective source for their buckets.",
+            "additionalProperties": {
+                "type": "object",
+                "properties": {
+                    "base": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Backoff base in seconds before the second attempt (doubles each attempt)."
+                    },
+                    "cap": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Maximum backoff delay in seconds."
+                    },
+                    "maxAttempts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Attempt ceiling before the path terminalizes with a recorded reason."
+                    }
+                },
+                "additionalProperties": false
+            }
         },
         "safety": {
             "type": "object",

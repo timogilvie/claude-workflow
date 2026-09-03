@@ -21,6 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # over every shell script, not a per-shard test, and runs once via `npm run lint`.
 TESTS=(
   aborted-challenge-cleanup.test.sh
+  safe-branch-cleanup.test.sh
   challenge-primary-merge-cleanup.test.sh
   operator-abort-cleanup.test.sh
   agent-resolve-from-model.test.sh
@@ -47,6 +48,11 @@ TESTS=(
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh
   launch-ready-phase.test.sh
+  bounded-retry.test.sh
+  handle-phase-launch-result.test.sh
+  launch-pane-liveness.test.sh
+  launch-failure-log-capture.test.sh
+  challenge-eval-soft-retry.test.sh
   review-scope-baseline-handoff.test.sh
   launch-native-planning-phase.test.sh
   log-hygiene.test.sh
@@ -81,6 +87,7 @@ TESTS=(
   merge-retry-marker.test.sh
   queue-health.test.sh
   merge-queue-live-ci.test.sh
+  merge-lane-progress-artifacts.test.sh
   queue-planner-stdin-policy.test.sh
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
@@ -88,6 +95,8 @@ TESTS=(
   stage-state.test.sh
   startup-handoff.test.sh
   monitor-script-byte-identical.test.sh
+  transient-marker.test.sh
+  run-custom-tests-shard.test.sh
 )
 
 SHARD_INDEX=1

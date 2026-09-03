@@ -1,3 +1,16 @@
+/**
+ * Shared harness for the cross-repo global model parity suite (HOK-2939).
+ *
+ * The suite used to live in a single cross-repo-parity.test.ts running all
+ * five artifact modes; at ~4-6 CI minutes it was the longest indivisible unit
+ * test and set the wall-clock floor for whichever shard held it. Each mode is
+ * fully independent (own fixture, own assertions), so the modes now run as
+ * five thin registered test files (cross-repo-parity.<mode>.test.ts) that call
+ * {@link runParityModeSuite}. Assertions and coverage are byte-for-byte the
+ * ones the monolithic file ran; only the file granularity changed so the
+ * weighted partitioner can spread the cost.
+ */
+
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildParityFixture, type ParityArtifactMode } from './cross-repo-parity.ts';
@@ -14,7 +27,6 @@ import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/stor
 import { pickChallengeModelsWithReason } from './challenge-mode.ts';
 import { diagnoseOpenRouter, type OpenRouterDoctorStage } from './openrouter-doctor.ts';
 
-const MODES: ParityArtifactMode[] = ['valid', 'missing', 'wrong-suite', 'stale', 'partial'];
 const STAGES: SupportedModelStage[] = ['planning', 'coding', 'review'];
 const STAGE_TO_ROLE: Record<SupportedModelStage, RouterRole> = {
   expansion: 'reviewer',
@@ -174,8 +186,12 @@ function snapshot(repoDir: string, stage: SupportedModelStage) {
   };
 }
 
-describe('cross-repo global model parity', () => {
-  for (const mode of MODES) {
+/**
+ * Register the parity suite for one artifact mode on the current node:test
+ * context. Each per-mode test file calls this exactly once.
+ */
+export function runParityModeSuite(mode: ParityArtifactMode): void {
+  describe('cross-repo global model parity', () => {
     it(`keeps Wavemill, gtm-backend, and gtm-frontend in parity for ${mode} global artifacts`, () => {
       const fixture = buildParityFixture({ globalArtifacts: mode });
       try {
@@ -205,5 +221,5 @@ describe('cross-repo global model parity', () => {
         fixture.cleanup();
       }
     });
-  }
-});
+  });
+}

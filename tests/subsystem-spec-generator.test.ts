@@ -43,6 +43,28 @@ function writeTemplate(repoDir: string): string {
 }
 
 describe('subsystem-spec-generator', () => {
+  it('does not misclassify implementation files containing spec in their names', () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-subsystem-spec-role-'));
+    const subsystem: Subsystem = {
+      id: 'generator',
+      name: 'Generator',
+      description: 'Generator files',
+      keyFiles: ['shared/lib/subsystem-spec-generator.ts', 'shared/lib/example.test.ts'],
+      testPatterns: [],
+      dependencies: [],
+      confidence: 1,
+      detectionMethod: 'pattern',
+    };
+
+    const spec = generateSubsystemSpec(subsystem, {
+      repoDir,
+      includeGitHistory: false,
+    });
+
+    assert.match(spec, /subsystem-spec-generator\.ts` \| Implementation \| TypeScript/);
+    assert.match(spec, /example\.test\.ts` \| Test \| Unit tests/);
+  });
+
   it('queries git history for shell-special paths literally', () => {
     const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-subsystem-spec-git-'));
     const keyFiles = [

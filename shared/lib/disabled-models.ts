@@ -28,6 +28,16 @@ export const DISABLED_MODEL_IDS = new Set<string>([
   // have subsided (or once challenge selection weights by observed
   // completion rate).
   'llama-4-maverick',
+  // Disabled 2026-09-02 after three concurrent implementation challengers
+  // selected Scout via least-used-zero-record. Two received OpenRouter 429
+  // upstream rate-limit responses before producing a token; the third emitted
+  // apply_patch syntax as plain text, executed no tool calls, and produced no
+  // completion artifact. Account credit was available, so this is a provider
+  // capacity and live tool-protocol reliability hold, not a billing hold.
+  // Re-enable only after a live coding certification demonstrates a structured
+  // mutation tool call plus completion artifact and a completion-rate review
+  // shows the upstream throttle has cleared.
+  'llama-4-scout',
 ]);
 
 export function isDisabledModel(modelId: string | undefined | null): boolean {

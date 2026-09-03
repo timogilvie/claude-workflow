@@ -1,6 +1,8 @@
+import { appendFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { mutateJsonState } from './state-mutex.ts';
-import { executeMerge, formatStatusLine, selectNextCandidate, type MergeExecutionResult } from './tend-controller.ts';
+import { executeMerge, formatStatusLine, selectNextCandidate, type BlockedCandidate, type MergeExecutionResult, type TendDecision } from './tend-controller.ts';
+import { WM_LABELS } from './pr-state-labels.ts';
 import type { StatusRenderer } from './tend-status-renderer.ts';
 import { computeBackoffDelayMs, isTransientError } from './transient-retry.ts';
 
@@ -14,6 +16,16 @@ export const TEND_MAX_CONSECUTIVE_UNKNOWN_FAILURES = 3;
 // deadlock is invisible: the stream keeps reporting health=ok with a
 // merging-#N / skipped-#N pair every poll.
 export const TEND_LANE_STALL_WARN_ITERATIONS = 3;
+// Progress-vs-liveness thresholds (HOK-2919 / consolidated HOK-2910): a lane
+// that reports eligible=0, blocked>0, action=idle for this many consecutive
+// polls is stalled, no matter how healthily it keeps polling. ~30 minutes at
+// the 60 s interval for the high-severity finding, ~2 hours for urgent.
+export const TEND_IDLE_STALL_HIGH_ITERATIONS = 30;
+export const TEND_IDLE_STALL_URGENT_ITERATIONS = 120;
+// Independent green-ready detector (REQ-F4 of HOK-2910): a PR carrying
+// wm:ready that stays unmerged this long is a finding on its own, regardless
+// of tend's reported health. Re-emitted at most once per this interval.
+export const TEND_READY_UNMERGED_WARN_MS = 30 * 60_000;
 
 export type TendLoopErrorClass = 'transient' | 'terminal' | 'unknown';
 
@@ -28,11 +40,26 @@ export interface TendLoopDeps {
   executeMerge: typeof executeMerge;
   writePollHeartbeat: typeof writeTendPollHeartbeatBestEffort;
   writeFailureState: typeof writeTendFailureStateBestEffort;
+  /** Best-effort observer-findings JSONL emitter; must never fail the loop. */
+  emitObserverFinding: (repoDir: string, finding: MergeLaneObserverFinding) => void;
   sleep: (ms: number) => Promise<void>;
   now: () => Date;
   log: (line: string) => void;
   random: () => number;
 }
+
+/** JSONL finding shape consumed by tools/observer.ts readObserverFindingsJsonl. */
+export interface MergeLaneObserverFinding {
+  subsystem: string;
+  title: string;
+  body?: string;
+  severity?: string;
+  recommendation?: string;
+  context?: Record<string, unknown>;
+}
+
+/** 'progressing' | 'idle' (empty lane) | 'stalled' (blocked lane, no movement). */
+export type TendProgressState = 'progressing' | 'idle' | 'stalled';
 
 export interface TendLoopOptions {
   repoDir: string;
@@ -89,6 +116,105 @@ export function formatLaneStallWarning(options: {
   return `warn=merge-lane-stalled holder=${holder} candidate=#${options.candidate} consecutive=${options.consecutive}`;
 }
 
+/**
+ * Greppable status-stream warning for the idle-blocked stall (HOK-2919): the
+ * lane holds blocked PRs, nothing is eligible, and the loop keeps idling.
+ */
+export function formatIdleStallWarning(options: {
+  blocked: BlockedCandidate[];
+  consecutive: number;
+  severity: 'high' | 'urgent';
+}): string {
+  const blockedList = options.blocked.length > 0
+    ? options.blocked.map((candidate) => `#${candidate.number}(${candidate.reason})`).join(',')
+    : 'unknown';
+  return `warn=merge-lane-idle-stalled severity=${options.severity} blocked=${blockedList} consecutive=${options.consecutive}`;
+}
+
+function describeBlockedCandidate(candidate: BlockedCandidate): string {
+  const labels = candidate.labels && candidate.labels.length > 0 ? candidate.labels.join(',') : '(unknown)';
+  return `PR #${candidate.number} (${candidate.headBranch}) labels=[${labels}] gate=${candidate.reason}`;
+}
+
+/**
+ * Progress-driven stalled-lane finding (REQ-F1..F3 of consolidated HOK-2910).
+ * Names each blocked PR, its labels, and the specific gate holding it so the
+ * finding is actionable without re-deriving the lane state.
+ */
+export function buildMergeLaneStalledFinding(options: {
+  decision: TendDecision;
+  consecutive: number;
+  severity: 'high' | 'urgent';
+  now: string;
+}): MergeLaneObserverFinding {
+  const blocked = options.decision.blocked;
+  const first = blocked[0];
+  return {
+    subsystem: 'merge-lane',
+    title: `Merge lane stalled: ${blocked.length} blocked PR${blocked.length === 1 ? '' : 's'}, 0 eligible for ${options.consecutive} consecutive polls`,
+    body: [
+      `tend reported eligible=0 blocked=${blocked.length} action=idle for ${options.consecutive} consecutive polls; `
+      + 'the loop is alive but the lane is not draining.',
+      ...blocked.map((candidate) => describeBlockedCandidate(candidate)),
+    ].join('\n'),
+    severity: options.severity,
+    recommendation: 'Inspect the named gate for each blocked PR (challenge pair, wm:blocked label, missing review '
+      + 'verdict, stale base) and unstick the lane; liveness alone is not health.',
+    context: {
+      markerPath: `merge-lane/idle-stall/${first ? `#${first.number}` : 'none'}`,
+      markerKind: 'merge-lane-idle-stall',
+      consecutivePolls: options.consecutive,
+      blockedCount: blocked.length,
+      blockedPrs: blocked.map((candidate) => candidate.number).join(','),
+      firstBlockedPr: first?.number ?? null,
+      firstBlockedLabels: first?.labels?.join(',') ?? '',
+      firstBlockedGate: first?.reason ?? '',
+      observedAt: options.now,
+    },
+  };
+}
+
+/**
+ * Independent long-wait detector: a wm:ready PR that stays unmerged past the
+ * threshold is a finding on its own, regardless of what tend's health reports
+ * say (REQ-F4 of consolidated HOK-2910).
+ */
+export function buildReadyPrUnmergedFinding(options: {
+  candidate: BlockedCandidate;
+  waitedMs: number;
+  now: string;
+}): MergeLaneObserverFinding {
+  const waitedMinutes = Math.round(options.waitedMs / 60_000);
+  return {
+    subsystem: 'merge-lane',
+    title: `wm:ready PR #${options.candidate.number} unmerged for ${waitedMinutes} minutes`,
+    body: `${describeBlockedCandidate(options.candidate)} has carried wm:ready for ~${waitedMinutes} minutes without `
+      + 'merging. Its ready verdict implies green CI, so the named gate is what holds it.',
+    severity: options.waitedMs >= 2 * TEND_READY_UNMERGED_WARN_MS ? 'urgent' : 'high',
+    recommendation: 'Resolve the named gate or canonicalize labels with tools/set-pr-ready-label.ts if the gate is stale.',
+    context: {
+      markerPath: `merge-lane/ready-unmerged/#${options.candidate.number}`,
+      markerKind: 'merge-lane-ready-unmerged',
+      prNumber: options.candidate.number,
+      labels: options.candidate.labels?.join(',') ?? '',
+      gate: options.candidate.reason,
+      waitedMinutes,
+      observedAt: options.now,
+    },
+  };
+}
+
+/** Default best-effort JSONL append into .wavemill/observer-findings.jsonl. */
+export function emitObserverFindingBestEffort(repoDir: string, finding: MergeLaneObserverFinding): void {
+  try {
+    const wavemillDir = join(repoDir, '.wavemill');
+    mkdirSync(wavemillDir, { recursive: true });
+    appendFileSync(join(wavemillDir, 'observer-findings.jsonl'), `${JSON.stringify(finding)}\n`, 'utf-8');
+  } catch (error) {
+    console.error(`tend: failed to emit observer finding: ${errorMessage(error)}`);
+  }
+}
+
 export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExit> {
   const deps = tendLoopDeps(options.deps);
   const intervalMs = options.intervalMs ?? TEND_LOOP_INTERVAL_MS;
@@ -100,6 +226,51 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   let lastErrorAt: string | null = null;
   let iteration = 0;
   let laneStallStreak = 0;
+  // Progress-vs-liveness state (HOK-2919): progress is a real state change —
+  // a merge, a retry-refresh, or the lane's PR set/gates changing — never a
+  // successful poll by itself.
+  let idleBlockedStreak = 0;
+  let lastProgressAt = deps.now().toISOString();
+  let lastDecisionSignature: string | null = null;
+  const readyUnmergedTracker = new Map<number, { firstSeenMs: number; lastEmittedMs: number }>();
+
+  const noteDecisionProgress = (decision: TendDecision, at: string): boolean => {
+    const signature = decisionSignature(decision);
+    const progressed = lastDecisionSignature !== null && signature !== lastDecisionSignature;
+    if (progressed) {
+      lastProgressAt = at;
+    }
+    lastDecisionSignature = signature;
+    return progressed;
+  };
+
+  const trackReadyUnmerged = (decision: TendDecision, at: string): void => {
+    const nowMs = Date.parse(at);
+    const openReadyBlocked = new Set<number>();
+    for (const candidate of decision.blocked) {
+      if (!candidate.labels?.includes(WM_LABELS.ready)) {
+        continue;
+      }
+      // A gate that already names failing/pending checks means CI is not
+      // green; the ready-unmerged finding is specifically about green PRs.
+      if (/checks-failing|checks-pending|ready-failed/.test(candidate.reason)) {
+        continue;
+      }
+      openReadyBlocked.add(candidate.number);
+      const entry = readyUnmergedTracker.get(candidate.number) ?? { firstSeenMs: nowMs, lastEmittedMs: 0 };
+      readyUnmergedTracker.set(candidate.number, entry);
+      const waitedMs = nowMs - entry.firstSeenMs;
+      if (waitedMs >= TEND_READY_UNMERGED_WARN_MS && nowMs - entry.lastEmittedMs >= TEND_READY_UNMERGED_WARN_MS) {
+        entry.lastEmittedMs = nowMs;
+        deps.emitObserverFinding(options.repoDir, buildReadyPrUnmergedFinding({ candidate, waitedMs, now: at }));
+      }
+    }
+    for (const prNumber of [...readyUnmergedTracker.keys()]) {
+      if (!openReadyBlocked.has(prNumber)) {
+        readyUnmergedTracker.delete(prNumber);
+      }
+    }
+  };
 
   while (true) {
     iteration += 1;
@@ -110,13 +281,43 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
       const decision = await deps.selectNextCandidate({ repoDir: options.repoDir });
       pollCompletedAt = deps.now().toISOString();
       const pollMetadata = { iteration, pollStartedAt, pollCompletedAt };
+      const decisionProgressed = noteDecisionProgress(decision, pollCompletedAt);
+      trackReadyUnmerged(decision, pollCompletedAt);
 
       if (decision.nextPR === null) {
+        // A changed lane signature (PRs entering/leaving, gates changing) is
+        // real state movement and restarts the stall count; only an unchanged
+        // blocked lane accumulates toward the stall thresholds.
+        idleBlockedStreak = decision.blocked.length === 0
+          ? 0
+          : decisionProgressed ? 1 : idleBlockedStreak + 1;
+        const progressState: TendProgressState = idleBlockedStreak >= TEND_IDLE_STALL_HIGH_ITERATIONS
+          ? 'stalled'
+          : decision.blocked.length > 0 ? 'progressing' : 'idle';
+
         options.renderer.write(formatStatusLine(decision, {
           action: 'idle',
           lastPR: lastMergedPR,
           ...pollMetadata,
         }));
+
+        if (idleBlockedStreak >= TEND_IDLE_STALL_HIGH_ITERATIONS) {
+          const severity = idleBlockedStreak >= TEND_IDLE_STALL_URGENT_ITERATIONS ? 'urgent' : 'high';
+          options.renderer.write(formatIdleStallWarning({
+            blocked: decision.blocked,
+            consecutive: idleBlockedStreak,
+            severity,
+          }));
+          if (idleBlockedStreak === TEND_IDLE_STALL_HIGH_ITERATIONS || idleBlockedStreak === TEND_IDLE_STALL_URGENT_ITERATIONS) {
+            deps.emitObserverFinding(options.repoDir, buildMergeLaneStalledFinding({
+              decision,
+              consecutive: idleBlockedStreak,
+              severity,
+              now: pollCompletedAt,
+            }));
+          }
+        }
+
         consecutiveFailures = 0;
         consecutiveUnknown = 0;
         lastError = null;
@@ -127,12 +328,15 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
           lastError,
           lastErrorAt,
           timestamp: pollCompletedAt,
+          lastProgressAt,
+          progressState,
           ...pollMetadata,
         });
         await deps.sleep(intervalMs);
         continue;
       }
 
+      idleBlockedStreak = 0;
       const candidate = decision.eligible.find((item) => item.number === decision.nextPR);
       if (!candidate) {
         throw new Error(`tend: selected PR #${decision.nextPR} was not found in eligible candidates`);
@@ -152,12 +356,17 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
         lastError,
         lastErrorAt,
         timestamp: pollCompletedAt,
+        lastProgressAt,
+        progressState: 'progressing',
         ...pollMetadata,
       });
 
       const result = await deps.executeMerge(candidate, { repoDir: options.repoDir });
       if (result.status === 'merged') {
         lastMergedPR = result.prNumber;
+      }
+      if (result.status === 'merged' || result.status === 'retried') {
+        lastProgressAt = deps.now().toISOString();
       }
 
       options.renderer.write(formatStatusLine(decision, {
@@ -260,6 +469,18 @@ export async function runTendLoop(options: TendLoopOptions): Promise<TendLoopExi
   }
 }
 
+/**
+ * Stable signature of a decision's lane state. A change between polls means
+ * the lane's PR set or gates moved — real state movement, unlike a poll tick.
+ */
+function decisionSignature(decision: TendDecision): string {
+  const eligible = decision.eligible.map((candidate) => candidate.number).sort((a, b) => a - b);
+  const blocked = decision.blocked
+    .map((candidate) => `${candidate.number}:${candidate.reason}`)
+    .sort();
+  return JSON.stringify({ eligible, blocked });
+}
+
 export function classifyTendLoopError(error: unknown): TendLoopErrorClass {
   if (isTransientError(error)) {
     return 'transient';
@@ -320,6 +541,9 @@ export async function writeTendHeartbeat(
     iteration?: number;
     pollStartedAt?: string;
     pollCompletedAt?: string | null;
+    /** Last real state change (merge/retry/lane movement), not the last tick. */
+    lastProgressAt?: string;
+    progressState?: TendProgressState;
   },
 ): Promise<void> {
   const healthPath = join(repoDir, '.wavemill', 'backstage-health.json');
@@ -329,10 +553,13 @@ export async function writeTendHeartbeat(
       const next = { ...(current ?? {}) };
       const services = { ...(next.services ?? {}) };
       const existing = { ...(services.tend ?? {}) };
+      const detail = health.progressState === 'stalled'
+        ? 'backstage tend loop is alive but the merge lane is not progressing'
+        : 'backstage tend loop is running';
       services.tend = {
         ...existing,
         status: 'healthy',
-        detail: 'backstage tend loop is running',
+        detail,
         heartbeatAt: timestamp,
         lastSuccessfulPollAt: timestamp,
         updatedAt: timestamp,
@@ -343,10 +570,12 @@ export async function writeTendHeartbeat(
         iteration: health.iteration,
         pollStartedAt: health.pollStartedAt,
         pollCompletedAt: health.pollCompletedAt ?? timestamp,
+        ...(health.lastProgressAt !== undefined ? { lastProgressAt: health.lastProgressAt } : {}),
+        ...(health.progressState !== undefined ? { progressState: health.progressState } : {}),
       };
       next.updatedAt = timestamp;
       next.status = 'healthy';
-      next.detail = 'backstage tend loop is running';
+      next.detail = detail;
       next.services = services;
       return next;
     },
@@ -408,6 +637,8 @@ export async function writeTendPollHeartbeatBestEffort(
     iteration?: number;
     pollStartedAt?: string;
     pollCompletedAt?: string | null;
+    lastProgressAt?: string;
+    progressState?: TendProgressState;
   } = {},
 ): Promise<void> {
   try {
@@ -421,6 +652,8 @@ export async function writeTendPollHeartbeatBestEffort(
         iteration: options.iteration,
         pollStartedAt: options.pollStartedAt,
         pollCompletedAt: options.pollCompletedAt,
+        lastProgressAt: options.lastProgressAt,
+        progressState: options.progressState,
       },
     );
   } catch (error) {
@@ -468,6 +701,7 @@ function tendLoopDeps(overrides: Partial<TendLoopDeps> | undefined): TendLoopDep
     executeMerge,
     writePollHeartbeat: writeTendPollHeartbeatBestEffort,
     writeFailureState: writeTendFailureStateBestEffort,
+    emitObserverFinding: emitObserverFindingBestEffort,
     sleep,
     now: () => new Date(),
     log: (line) => console.error(line),

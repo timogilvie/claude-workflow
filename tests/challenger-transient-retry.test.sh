@@ -49,6 +49,11 @@ for fn in \
   challenger_transient_retry_file \
   challenger_transient_retry_max \
   clear_challenger_transient_retry_state \
+  challenger_transient_retry_diagnostic_file \
+  challenger_transient_retry_result_head \
+  challenger_transient_retry_intent_json \
+  resolve_challenger_transient_retry_launch_intent \
+  record_challenger_transient_retry_contract_failure \
   maybe_retry_challenger_transient_phase \
   challenge_abort_scope_for_failure \
   challenge_abort_pair \
@@ -83,6 +88,7 @@ active_count=0
 CLEANUP_CALLS=""
 PREPARE_CALLS=""
 LAUNCH_CALLS=""
+VALIDATE_CALLS=""
 VALIDATE_RC=0
 
 log() { printf '%s\n' "$*" >> "$STATUS_LOG"; }
@@ -123,7 +129,10 @@ write_stage_result() {
     > "$feature_dir/.${stage}-result.json"
 }
 read_phase_config() { printf ''; }
-agent_validate_phase_launch() { return "$VALIDATE_RC"; }
+agent_validate_phase_launch() {
+  VALIDATE_CALLS+="$1|$2|$3"$'\n'
+  return "$VALIDATE_RC"
+}
 _prepare_recovery_phase_launch() {
   local issue="$1" slug="$2" phase="$3" feature_dir="$4"
   PREPARE_CALLS+="$issue|$phase"$'\n'
@@ -142,11 +151,20 @@ write_hook() {
     > "/tmp/wavemill-${SESSION}-${issue}.hook"
 }
 
+real_challenge_intent() {
+  npx tsx "$REPO_DIR/tests/fixtures/build-challenge-intent.ts" "$@"
+}
+
 # Seed both arms of the pair; slug/worktree/branch details attach to the arm
 # under test ($issue) so relaunch inputs resolve from workflow state.
 seed() {
   local issue="$1" challenge="${2:-true}" role="${3:-challenger}"
   local slug="$4"
+  local challenge_stage="${5:-implementation}"
+  local challenger_model="${6:-llama-4-scout}"
+  local challenger_agent="${7:-native-openrouter}"
+  local primary_model="${8:-claude-opus-4-7}"
+  local intent intent_args
   mkdir -p "$WORKTREE_ROOT/$slug"
   jq -n \
     --arg issue "$issue" --arg role "$role" --argjson challenge "$challenge" \
@@ -160,12 +178,39 @@ seed() {
          branch:$branch, title:"Transient retry fixture"
        }' \
     > "$STATE_FILE"
+  if [[ "$challenge" == "true" ]]; then
+    intent_args=(--stage "$challenge_stage" --pair-id PAIR-9 --slug "$slug")
+    case "$challenge_stage" in
+      plan)
+        intent_args+=(--primary-planner "$primary_model" --primary-planner-agent claude --challenger-planner "$challenger_model" --challenger-planner-agent "$challenger_agent")
+        ;;
+      review)
+        intent_args+=(--primary-reviewer "$primary_model" --primary-reviewer-agent claude --challenger-reviewer "$challenger_model" --challenger-reviewer-agent "$challenger_agent")
+        ;;
+      *)
+        intent_args+=(--primary-coder "$primary_model" --primary-coder-agent claude --challenger-coder "$challenger_model" --challenger-coder-agent "$challenger_agent")
+        ;;
+    esac
+    intent="$(real_challenge_intent "${intent_args[@]}")"
+    jq --argjson intent "$intent" \
+      '.tasks["PAIR-9"].challengeExecutionIntent = $intent
+       | .tasks["PAIR-9_c"].challengeExecutionIntent = $intent
+       | .tasks["PAIR-9"].challengeStage = ($intent.selectedStage // $intent.challengeStage)
+       | .tasks["PAIR-9_c"].challengeStage = ($intent.selectedStage // $intent.challengeStage)
+       | .tasks["PAIR-9"].challengeVariedModel = ($intent.primary.expectedStageModel // "")
+       | .tasks["PAIR-9_c"].challengeVariedModel = ($intent.challenger.expectedStageModel // "")
+       | .tasks["PAIR-9"].challengeVariedAgent = ($intent.primary.expectedStageAgent // "")
+       | .tasks["PAIR-9_c"].challengeVariedAgent = ($intent.challenger.expectedStageAgent // "")' \
+      "$STATE_FILE" > "$STATE_FILE.tmp"
+    mv "$STATE_FILE.tmp" "$STATE_FILE"
+  fi
   : > "$ATTENTION_FILE"
   : > "$WARN_FILE"
   : > "$STATUS_LOG"
   CLEANUP_CALLS=""
   PREPARE_CALLS=""
   LAUNCH_CALLS=""
+  VALIDATE_CALLS=""
 }
 
 transient_detail="Native coding failed: provider-transient-error: Upstream idle timeout exceeded"
@@ -176,7 +221,7 @@ echo "=== Challenger Transient Phase Relaunch (HOK-2885) ==="
 # ── First observation starts the backoff clock, nothing stamped ───────
 seed "PAIR-9_c" true challenger "slug-first"
 fd="$TMP_ROOT/f-first"
-write_stage_result "$fd" "coding" "failed" "native" "llama-4-maverick" "$transient_detail"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
 rm -f "/tmp/wavemill-${SESSION}-PAIR-9_c.hook"
 
 rc=0
@@ -207,7 +252,8 @@ write_hook "PAIR-9_c" "error" "$transient_detail"
 rc=0
 maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-first" || rc=$?
 if [[ "$rc" -eq 0 ]] \
-  && [[ "$LAUNCH_CALLS" == *"coding|PAIR-9_c|llama-4-maverick|native|medium"* ]] \
+  && [[ "$LAUNCH_CALLS" == *"coding|PAIR-9_c|llama-4-scout|native-openrouter|medium"* ]] \
+  && [[ "$VALIDATE_CALLS" == *"native-openrouter|coding|llama-4-scout"* ]] \
   && [[ "$PREPARE_CALLS" == *"PAIR-9_c|coding"* ]] \
   && [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
   && [[ "$(read_stage_status "$fd" "coding")" == "running" ]] \
@@ -219,6 +265,14 @@ if [[ "$rc" -eq 0 ]] \
 else
   fail "relaunch handling wrong (rc=$rc, launches=$LAUNCH_CALLS)"
 fi
+rc=0
+maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-first" || rc=$?
+if [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
+  && [[ "$(printf '%s' "$LAUNCH_CALLS" | grep -c '^coding|')" == "1" ]]; then
+  pass "duplicate callback after relaunch does not claim another attempt"
+else
+  fail "duplicate callback claimed another launch (rc=$rc)"
+fi
 # The stale terminal-error hook must be cleared so the running-stage failure
 # detector cannot re-quarantine the relaunched arm before its first hook write.
 if [[ ! -f "/tmp/wavemill-${SESSION}-PAIR-9_c.hook" ]]; then
@@ -228,7 +282,7 @@ else
 fi
 
 # ── Stage change resets the counter ───────────────────────────────────
-seed "PAIR-9_c" true challenger "slug-stage-reset"
+seed "PAIR-9_c" true challenger "slug-stage-reset" review "kimi-k2.7-code" native-openrouter
 fd="$TMP_ROOT/f-stage-reset"
 write_stage_result "$fd" "review" "failed" "native" "kimi-k2.7-code" "$transient_detail"
 jq -n '{stage:"coding",count:3,lastAt:1}' > "$fd/.challenger-transient-retries.json"
@@ -245,7 +299,7 @@ fi
 # ── Budget exhausted → single-side abort ──────────────────────────────
 seed "PAIR-9_c" true challenger "slug-exhausted"
 fd="$TMP_ROOT/f-exhausted"
-write_stage_result "$fd" "coding" "failed" "native" "llama-4-maverick" "$transient_detail"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
 jq -n '{stage:"coding",count:3,lastAt:1}' > "$fd/.challenger-transient-retries.json"
 rc=0
 maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-exhausted" || rc=$?
@@ -280,7 +334,7 @@ fi
 # ── Non-transient failure → not applicable, pair-wide quarantine ──────
 seed "PAIR-9_c" true challenger "slug-config"
 fd="$TMP_ROOT/f-config"
-write_stage_result "$fd" "coding" "failed" "native" "llama-4-maverick" "$config_detail"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$config_detail"
 rc=0
 maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-config" || rc=$?
 if [[ "$rc" -eq 1 ]] && [[ ! -f "$fd/.challenger-transient-retries.json" ]] && [[ -z "$LAUNCH_CALLS" ]]; then
@@ -333,19 +387,98 @@ else
   fail "non-challenge task handling wrong (rc=$rc)"
 fi
 
-# ── Relaunch validation failure falls through to quarantine ───────────
+# ── Relaunch validation failure fails closed before launch ────────────
 seed "PAIR-9_c" true challenger "slug-novalidate"
 fd="$TMP_ROOT/f-novalidate"
-write_stage_result "$fd" "coding" "failed" "native" "llama-4-maverick" "$transient_detail"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
 jq -n '{stage:"coding",count:1,lastAt:1}' > "$fd/.challenger-transient-retries.json"
 VALIDATE_RC=1
 rc=0
 maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-novalidate" || rc=$?
 VALIDATE_RC=0
-if [[ "$rc" -eq 1 ]] && [[ -z "$LAUNCH_CALLS" ]]; then
-  pass "unlaunchable retry falls through to the quarantine path"
+if [[ "$rc" -eq 1 ]] \
+  && [[ -z "$LAUNCH_CALLS" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-9_c"].challengeAborted' "$STATE_FILE")" == "retry_contract_invalid:unsupported_launch_identity" ]] \
+  && [[ "$(jq -r '.reason' "$fd/.challenger-transient-retry-diagnostic.json")" == "retry_contract_invalid:unsupported_launch_identity" ]]; then
+  pass "unlaunchable retry fails closed with a typed contract reason"
 else
   fail "unlaunchable retry handling wrong (rc=$rc)"
+fi
+
+# ── Missing/corrupt intent fails closed without consuming retry budget ──
+seed "PAIR-9_c" true challenger "slug-missing-intent"
+fd="$TMP_ROOT/f-missing-intent"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
+jq -n '{stage:"coding",count:1,lastAt:1}' > "$fd/.challenger-transient-retries.json"
+jq 'del(.tasks["PAIR-9_c"].challengeExecutionIntent)' "$STATE_FILE" > "$STATE_FILE.tmp"
+mv "$STATE_FILE.tmp" "$STATE_FILE"
+rc=0
+maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-missing-intent" || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && [[ -z "$LAUNCH_CALLS" ]] \
+  && [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-9_c"].challengeAborted' "$STATE_FILE")" == "retry_contract_invalid:missing_challenge_intent" ]]; then
+  pass "missing intent fails closed without incrementing retry count"
+else
+  fail "missing intent handling wrong (rc=$rc)"
+fi
+
+seed "PAIR-9_c" true challenger "slug-invalid-intent"
+fd="$TMP_ROOT/f-invalid-intent"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
+jq -n '{stage:"coding",count:1,lastAt:1}' > "$fd/.challenger-transient-retries.json"
+jq 'del(.tasks["PAIR-9_c"].challengeExecutionIntent)' "$STATE_FILE" > "$STATE_FILE.tmp"
+mv "$STATE_FILE.tmp" "$STATE_FILE"
+printf '{bad\n' > "$fd/challenge-intent.json"
+rc=0
+maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-invalid-intent" || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && [[ -z "$LAUNCH_CALLS" ]] \
+  && [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-9_c"].challengeAborted' "$STATE_FILE")" == "retry_contract_invalid:invalid_challenge_intent_json" ]]; then
+  pass "invalid intent JSON fails closed without incrementing retry count"
+else
+  fail "invalid intent handling wrong (rc=$rc)"
+fi
+
+seed "PAIR-9_c" true challenger "slug-corrupt-intent"
+fd="$TMP_ROOT/f-corrupt-intent"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail"
+jq -n '{stage:"coding",count:1,lastAt:1}' > "$fd/.challenger-transient-retries.json"
+jq '.tasks["PAIR-9_c"].challengeExecutionIntent.challenger.expectedStageAgent = "native"' "$STATE_FILE" > "$STATE_FILE.tmp"
+mv "$STATE_FILE.tmp" "$STATE_FILE"
+rc=0
+maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-corrupt-intent" || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && [[ -z "$LAUNCH_CALLS" ]] \
+  && [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-9_c"].challengeAborted' "$STATE_FILE")" == "retry_contract_invalid:ambiguous_launch_agent" ]]; then
+  pass "ambiguous native launch identity fails closed before validation"
+else
+  fail "ambiguous launch identity handling wrong (rc=$rc)"
+fi
+
+# ── Stale-head callback fails closed before touching current-head counter ─
+seed "PAIR-9_c" true challenger "slug-stale-head"
+fd="$TMP_ROOT/f-stale-head"
+git -C "$WORKTREE_ROOT/slug-stale-head" init -q
+git -C "$WORKTREE_ROOT/slug-stale-head" config user.email test@example.com
+git -C "$WORKTREE_ROOT/slug-stale-head" config user.name Test
+printf 'seed\n' > "$WORKTREE_ROOT/slug-stale-head/file.txt"
+git -C "$WORKTREE_ROOT/slug-stale-head" add file.txt
+git -C "$WORKTREE_ROOT/slug-stale-head" commit -qm seed
+current_head="$(git -C "$WORKTREE_ROOT/slug-stale-head" rev-parse HEAD)"
+write_stage_result "$fd" "coding" "failed" "native" "llama-4-scout" "$transient_detail" '{"headSha":"stale-head"}'
+jq -n --arg head "$current_head" '{stage:"coding",head:$head,count:1,lastAt:1}' > "$fd/.challenger-transient-retries.json"
+rc=0
+maybe_retry_challenger_transient_phase "PAIR-9_c" "$fd" "coding" "win-stale-head" || rc=$?
+if [[ "$rc" -eq 1 ]] \
+  && [[ -z "$LAUNCH_CALLS" ]] \
+  && [[ "$(jq -r '.count' "$fd/.challenger-transient-retries.json")" == "1" ]] \
+  && [[ "$(jq -r '.tasks["PAIR-9_c"].challengeAborted' "$STATE_FILE")" == "retry_intent_mismatch:stale_head" ]]; then
+  pass "stale-head retry callback fails closed without mutating retry count"
+else
+  fail "stale-head handling wrong (rc=$rc)"
 fi
 
 # ── Hook detail is preferred over stage notes ─────────────────────────

@@ -8,7 +8,8 @@ setup_review_pr_detected_marks_ready() {
   PR="321"
   PR_BY_ISSUE["$ISSUE"]="$PR"
   PR_STATUS="OPEN"
-  write_stage_result "$FEATURE_DIR" "review" "running" "$CURRENT_AGENT"
+  write_stage_result "$FEATURE_DIR" "review" "running" "$CURRENT_AGENT" "" "" \
+    '{"type":"review","prNumber":321,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}'
 }
 
 assert_review_pr_detected_marks_ready() {

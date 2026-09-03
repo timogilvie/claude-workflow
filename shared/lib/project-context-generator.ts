@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyzeCodeConventions, type ConventionAnalysis } from './context-analyzer.ts';
@@ -8,6 +8,7 @@ import { writeSubsystemSpecs } from './subsystem-spec-generator.ts';
 import { detectSubsystemRelationships } from './subsystem-cross-reference.ts';
 import { listConceptPaths } from './context-tool.ts';
 import { extractSection } from './context-tool.ts';
+import { lintSubsystemSpecs } from './context-linter.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -17,6 +18,13 @@ export interface FillProjectContextTemplateOptions {
   repoContext: ReturnType<typeof analyzeRepoContext>;
   conventions: ConventionAnalysis;
   timestamp: string;
+}
+
+export interface GenerateProjectContextOptions {
+  repoDir: string;
+  force: boolean;
+  /** Refresh generated navigation while preserving living documentation. */
+  refresh?: boolean;
 }
 
 /**
@@ -206,8 +214,12 @@ export function fillProjectContextTemplate(opts: FillProjectContextTemplateOptio
 /**
  * Generate `.wavemill/project-context.md` and subsystem docs for a repository.
  */
-export async function generateProjectContext(opts: { repoDir: string; force: boolean }): Promise<void> {
-  const { repoDir, force } = opts;
+export async function generateProjectContext(opts: GenerateProjectContextOptions): Promise<void> {
+  const { repoDir, force, refresh = false } = opts;
+
+  if (force && refresh) {
+    throw new Error('--force and --refresh are mutually exclusive');
+  }
 
   console.log(`Analyzing repository: ${repoDir}`);
 
@@ -218,29 +230,33 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
   }
 
   const contextPath = join(wavemillDir, 'project-context.md');
-  if (existsSync(contextPath) && !force) {
-    throw new Error('project-context.md already exists. Use --force to overwrite');
+  const contextExists = existsSync(contextPath);
+  if (contextExists && !force && !refresh) {
+    throw new Error('project-context.md already exists. Use --refresh to preserve it or --force to overwrite it');
   }
 
-  console.log('Analyzing repository structure...');
-  const repoContext = analyzeRepoContext(repoDir);
+  if (!contextExists || force) {
+    console.log('Analyzing repository structure...');
+    const repoContext = analyzeRepoContext(repoDir);
 
-  console.log('Detecting code patterns and conventions...');
-  const conventions = analyzeCodeConventions(repoDir);
+    console.log('Detecting code patterns and conventions...');
+    const conventions = analyzeCodeConventions(repoDir);
 
-  const templatePath = join(dirname(dirname(__dirname)), 'tools', 'prompts', 'project-context-template.md');
-  const template = readFileSync(templatePath, 'utf-8');
-  const timestamp = new Date().toISOString();
-  const filledTemplate = fillProjectContextTemplate({
-    template,
-    repoContext,
-    conventions,
-    timestamp,
-  });
+    const templatePath = join(dirname(dirname(__dirname)), 'tools', 'prompts', 'project-context-template.md');
+    const template = readFileSync(templatePath, 'utf-8');
+    const timestamp = new Date().toISOString();
+    const filledTemplate = fillProjectContextTemplate({
+      template,
+      repoContext,
+      conventions,
+      timestamp,
+    });
 
-  writeFileSync(contextPath, filledTemplate, 'utf-8');
-
-  console.log(`\n✓ Successfully created: ${contextPath}`);
+    writeFileSync(contextPath, filledTemplate, 'utf-8');
+    console.log(`\n✓ Successfully created: ${contextPath}`);
+  } else {
+    console.log('Preserving existing project context and Recent Work log...');
+  }
 
   console.log('\nDetecting subsystems...');
   const subsystems = detectSubsystems(repoDir, {
@@ -248,16 +264,28 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
     useGitAnalysis: true,
     maxSubsystems: 20,
   });
+  const contextDir = join(wavemillDir, 'context');
+
+  if (refresh && existsSync(contextDir)) {
+    await assertContextRefreshLintClean(repoDir);
+  }
 
   if (subsystems.length > 0) {
-    console.log(`Found ${subsystems.length} subsystem(s):`);
-    subsystems.forEach((subsystem) =>
+    const refreshableSubsystems = refresh
+      ? subsystems.filter((subsystem) => {
+          if (subsystem.detectionMethod === 'git-cluster') return false;
+          if (subsystem.detectionMethod !== 'pattern') return true;
+          return existsSync(join(contextDir, `${subsystem.id}.md`));
+        })
+      : subsystems;
+
+    console.log(`Found ${refreshableSubsystems.length} stable subsystem(s):`);
+    refreshableSubsystems.forEach((subsystem) =>
       console.log(
         `  - ${subsystem.name} (${subsystem.keyFiles.length} files, confidence: ${(subsystem.confidence * 100).toFixed(0)}%)`
       )
     );
 
-    const contextDir = join(wavemillDir, 'context');
     if (!existsSync(contextDir)) {
       mkdirSync(contextDir, { recursive: true });
     }
@@ -265,23 +293,26 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
     console.log('\nGenerating subsystem specifications...');
 
     // Generate cross-references
-    const crossReferences = detectSubsystemRelationships(subsystems);
+    const crossReferences = detectSubsystemRelationships(refreshableSubsystems);
 
-    writeSubsystemSpecs(subsystems, contextDir, {
+    writeSubsystemSpecs(refreshableSubsystems, contextDir, {
       repoDir,
       includeGitHistory: true,
       crossReferences,
+      refresh,
     });
 
-    console.log(`✓ Created ${subsystems.length} subsystem spec(s) with cross-references`);
+    console.log(`✓ ${refresh ? 'Refreshed' : 'Created'} ${refreshableSubsystems.length} subsystem spec(s) with cross-references`);
+  } else {
+    console.log('No subsystems detected (repo may be too small or unstructured)');
+  }
 
-    const subsystemLinks = subsystems
-      .map((subsystem) => `- [${subsystem.name}](context/${subsystem.id}.md) - ${subsystem.description}`)
-      .join('\n');
+  if (existsSync(contextDir)) {
+    if (refresh) {
+      await assertContextRefreshLintClean(repoDir);
+    }
 
-    let subsystemSection = `\n\n## Subsystem Documentation\n\nFor detailed documentation on specific subsystems, see \`.wavemill/context/\`:\n\n${subsystemLinks}`;
-
-    // Add concept pages if they exist
+    let subsystemSection = buildSubsystemDocumentationSection(contextDir);
     const conceptPaths = listConceptPaths(repoDir);
     if (conceptPaths.length > 0) {
       const conceptLinks = conceptPaths.map(path => {
@@ -295,17 +326,12 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
       subsystemSection += `\n\n### Concept Pages\n\nCross-cutting knowledge that applies across multiple subsystems:\n\n${conceptLinks}`;
     }
 
-    subsystemSection += '\n\n---';
-
-    const updatedContext = readFileSync(contextPath, 'utf-8').replace(
-      /## Recent Work/,
-      subsystemSection + '\n## Recent Work'
+    const updatedContext = replaceSubsystemDocumentationSection(
+      readFileSync(contextPath, 'utf-8'),
+      subsystemSection,
     );
     writeFileSync(contextPath, updatedContext, 'utf-8');
-
     console.log('✓ Updated project-context.md with subsystem references');
-  } else {
-    console.log('No subsystems detected (repo may be too small or unstructured)');
   }
 
   console.log('\nNext steps:');
@@ -315,6 +341,63 @@ export async function generateProjectContext(opts: { repoDir: string; force: boo
   console.log('4. The "Recent Work" section will be auto-updated after each PR merge');
   console.log('\nTo use this context in issue expansion:');
   console.log('  npx tsx tools/expand-issue.ts <issue-id>');
+}
+
+async function assertContextRefreshLintClean(repoDir: string): Promise<void> {
+  const lintErrors = (await lintSubsystemSpecs(repoDir))
+    .filter((result) => result.level === 'error');
+  if (lintErrors.length === 0) return;
+
+  const summary = lintErrors
+    .map((result) => `[${result.rule}] ${result.subsystem}: ${result.message}`)
+    .join('; ');
+  throw new Error(`refusing to publish a lint-failing context refresh: ${summary}`);
+}
+
+function extractSubsystemPageName(content: string, fallback: string): string {
+  const subsystemHeading = content.match(/^# Subsystem:\s*(.+)$/m);
+  if (subsystemHeading) return subsystemHeading[1].trim();
+  const heading = content.match(/^#\s+(.+)$/m);
+  return heading ? heading[1].trim() : fallback;
+}
+
+function extractSubsystemPageDescription(content: string): string {
+  const purpose = extractSection(content, 'Purpose');
+  const firstLine = purpose.split('\n').map((line) => line.trim()).find(Boolean);
+  return firstLine || 'Subsystem documentation';
+}
+
+/** Build the index from every page on disk, including curated pages not rediscovered heuristically. */
+export function buildSubsystemDocumentationSection(contextDir: string): string {
+  const links = readdirSync(contextDir)
+    .filter((file) => file.endsWith('.md'))
+    .sort()
+    .map((file) => {
+      const id = basename(file, '.md');
+      const content = readFileSync(join(contextDir, file), 'utf-8');
+      const name = extractSubsystemPageName(content, id);
+      const description = extractSubsystemPageDescription(content);
+      return `- [${name}](context/${file}) - ${description}`;
+    });
+
+  return `## Subsystem Documentation\n\nFor detailed documentation on specific subsystems, see \`.wavemill/context/\`:\n\n${links.join('\n')}`;
+}
+
+/** Replace only the generated subsystem index; all hot memory and Recent Work remain byte-for-byte. */
+export function replaceSubsystemDocumentationSection(content: string, section: string): string {
+  const recentHeader = '## Recent Work';
+  const recentIndex = content.indexOf(recentHeader);
+  if (recentIndex < 0) {
+    throw new Error(`cannot refresh project context: '${recentHeader}' header not found`);
+  }
+
+  const sectionHeader = '## Subsystem Documentation';
+  const sectionIndex = content.indexOf(sectionHeader);
+  const before = sectionIndex >= 0 && sectionIndex < recentIndex
+    ? content.slice(0, sectionIndex).trimEnd()
+    : content.slice(0, recentIndex).trimEnd();
+  const recentWork = content.slice(recentIndex);
+  return `${before}\n\n${section.trim()}\n\n---\n${recentWork}`;
 }
 
 /**

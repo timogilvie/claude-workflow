@@ -100,6 +100,7 @@ test('challenge model pool excludes disabled models from the global pool', () =>
   );
   assert.ok(pool.includes('claude-opus-4-6'));
   assert.ok(!pool.includes('gpt-5.3-codex'));
+  assert.ok(!pool.includes('llama-4-scout'));
 });
 
 test('challenge model pool excludes DeepSeek by default', () => {

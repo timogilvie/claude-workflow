@@ -59,7 +59,7 @@ export async function lintSubsystemSpecs(repoDir: string, config: LintConfig = {
   const detectedIds = new Set(detectedSubsystems.map((subsystem) => subsystem.id));
 
   const ruleRunners: Record<LintResult['rule'], () => Promise<LintResult[]> | LintResult[]> = {
-    'orphaned-spec': () => lintOrphanedSpecs(specInfos, detectedIds),
+    'orphaned-spec': () => lintOrphanedSpecs(repoDir, specInfos, detectedIds),
     'missing-spec': () => lintMissingSpecs(repoDir, detectedIds),
     'stale-crossref': () => lintStaleCrossReferences(repoDir, specInfos),
     contradiction: () => lintContradictions(specInfos),
@@ -106,15 +106,30 @@ function loadSubsystemSpecs(repoDir: string): SpecInfo[] {
     }));
 }
 
-function lintOrphanedSpecs(specs: SpecInfo[], detectedIds: Set<string>): LintResult[] {
+function lintOrphanedSpecs(repoDir: string, specs: SpecInfo[], detectedIds: Set<string>): LintResult[] {
   return specs
-    .filter((spec) => !detectedIds.has(spec.id))
+    .filter((spec) => {
+      if (detectedIds.has(spec.id)) return false;
+      const keyFiles = extractKeyFileReferences(spec.content);
+      // Heuristic discovery is not an authority over curated domain pages. A
+      // page is orphaned only when it has an explicit file inventory and none
+      // of those files remain in the repository.
+      return keyFiles.length > 0 && keyFiles.every((file) => !existsSync(join(repoDir, file)));
+    })
     .map((spec) => ({
       level: 'error',
       rule: 'orphaned-spec' as const,
       subsystem: spec.id,
       message: 'Spec exists but subsystem is not currently detected',
     }));
+}
+
+function extractKeyFileReferences(content: string): string[] {
+  const section = extractSection(content, 'Key Files')
+    || extractSection(content, 'Generated Navigation Index');
+  const files = new Set<string>();
+  for (const match of section.matchAll(/\|\s*`([^`]+)`\s*\|/g)) files.add(match[1]);
+  return Array.from(files);
 }
 
 function lintMissingSpecs(repoDir: string, detectedIds: Set<string>): LintResult[] {

@@ -5,12 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import type { LinearIssueSummary } from './linear.ts';
-import { WM_LABELS } from './pr-state-labels.ts';
+import { WM_LABELS, writePrStateMarker } from './pr-state-labels.ts';
 import {
+  classifyBasePolicyRejection,
   createPrFetcher,
   defaultHealthChecker,
+  defaultStrictBaseRetryOps,
   executeMerge,
   formatStatusLine,
+  isBasePolicyMergeError,
   isRequiredChecksExpectedMergeError,
   mergeRetryMarkerPath,
   selectNextCandidate,
@@ -19,6 +22,8 @@ import {
   type IntegrationHealth,
   type MergeExecutionDeps,
   type SelectNextCandidateOptions,
+  type StrictBaseRetryDecision,
+  type StrictBaseRetryOps,
   type TendCandidate,
   type TendDecision,
 } from './tend-controller.ts';
@@ -335,12 +340,20 @@ describe('selectNextCandidate filtering', () => {
     });
   });
 
-  it('blocks PRs with the blocked label', async () => {
-    await withDecision([
+  it('re-derives and clears a blocked label that has no marker sidecar', async () => {
+    const options = buildTestOptions([
       pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
-    ], (decision) => {
-      assert.equal(decision.blocked[0]?.reason, 'blocked-label');
-    });
+    ]);
+    const cleared: number[] = [];
+    options.blockedLabelClearer = (prNumber) => { cleared.push(prNumber); };
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((candidate) => candidate.number), [1]);
+      assert.deepEqual(decision.blocked, []);
+      assert.deepEqual(cleared, [1]);
+    } finally {
+      options.cleanup();
+    }
   });
 
   it('keeps a current cross-PR guard block parked without rechecking', async () => {
@@ -366,6 +379,11 @@ describe('selectNextCandidate filtering', () => {
           checkedHeadSha: 'head-current',
         },
       },
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-current',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
     });
 
     try {
@@ -405,6 +423,11 @@ describe('selectNextCandidate filtering', () => {
         },
       },
     });
+    writePrStateMarker(1, {
+      headSha: 'head-old',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
 
     try {
       const decision = await selectNextCandidate(options);
@@ -412,6 +435,10 @@ describe('selectNextCandidate filtering', () => {
       assert.deepEqual(decision.blocked, []);
       assert.equal(decision.nextPR, 1);
       assert.deepEqual(cleared, [1]);
+      assert.match(
+        readFileSync(join(options.repoDir, '.wavemill', 'observer-findings.jsonl'), 'utf-8'),
+        /Stale marker: pr-label/,
+      );
     } finally {
       options.cleanup();
     }
@@ -444,6 +471,44 @@ describe('selectNextCandidate filtering', () => {
       const decision = await selectNextCandidate(options);
       assert.equal(decision.eligible.length, 0);
       assert.equal(decision.blocked[0]?.reason, 'blocked-label:cross-pr-guard');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('fails closed when a revalidated block cannot refresh its marker sidecar', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] }),
+    ]);
+    options.crossPrGuardChecker = async ({ pr: checkedPr }) => ({
+      status: 'blocked',
+      checkedHeadSha: checkedPr.headRefOid ?? '',
+    });
+    options.prStateMarkerWriter = () => {
+      throw new Error('sidecar disk unavailable');
+    };
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'failed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'fail',
+        prNumber: 1,
+        crossPrGuard: {
+          source: 'cross-pr-revert-guard',
+          status: 'blocked',
+          checkedHeadSha: 'head-old',
+        },
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.equal(
+        decision.blocked[0]?.reason,
+        'blocked-label:marker-write-error:sidecar disk unavailable',
+      );
     } finally {
       options.cleanup();
     }
@@ -1530,6 +1595,7 @@ describe('executeMerge', () => {
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
         if (cmd.includes("git merge-base --is-ancestor 'origin/auto/integration' 'abc123def456'")) return '';
         if (cmd.includes('git rebase')) throw new Error('rebase should have been skipped');
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
@@ -1563,6 +1629,7 @@ describe('executeMerge', () => {
         if (cmd.includes('git rebase')) {
           throw new Error('rebase would reintroduce resolved conflicts in promotion-controller files');
         }
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'mergecommit630' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
@@ -1693,6 +1760,7 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) {
           // New gh shape: only `bucket` and `state`, no `conclusion`.
           return JSON.stringify([{ name: 'ci', state: 'SUCCESS', bucket: 'pass' }]);
@@ -1727,6 +1795,132 @@ describe('executeMerge', () => {
     assert.match(result.summary, /Shell and Unit Tests: pass/);
     assert.match(result.summary, /Missing required checks: Lifecycle Integration Tests/);
     assert.ok(calls.some((cmd) => cmd.includes('gh pr checks 42 --json name,state,bucket')));
+  });
+
+  it('waitForChecks passes when the head matches on every poll (regression)', async () => {
+    const calls: string[] = [];
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        calls.push(cmd);
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'new000' });
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'pass');
+    assert.ok(calls.some((cmd) => cmd.includes('gh pr view 42 --json headRefOid')));
+  });
+
+  it('waitForChecks skips a stale head\'s cancelled checks and passes on the real head (REQ-F4)', async () => {
+    // The PR #1301 race: right after tend force-pushes new000, GitHub briefly
+    // serves the old head old000 — whose run the HOK-2938 concurrency policy
+    // has cancelled. Those CANCELLED checks must not block the wait.
+    let headPolls = 0;
+    let checksReadWhileMismatched = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) {
+          headPolls += 1;
+          return JSON.stringify({ headRefOid: headPolls === 1 ? 'old000' : 'new000' });
+        }
+        // gh pr checks: serve the superseded head's cancelled run until the
+        // head settles. If the guard ever evaluated this, the wait would fail.
+        if (headPolls <= 1) {
+          checksReadWhileMismatched += 1;
+          return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'cancel' }]);
+        }
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'pass');
+    assert.equal(checksReadWhileMismatched, 0, 'checks must never be evaluated while the head mismatches');
+  });
+
+  it('waitForChecks returns head-changed when the head is permanently superseded', async () => {
+    let checksReads = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'other999' });
+        checksReads += 1;
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'head-changed');
+    assert.match(result.summary, /expected new000/);
+    assert.match(result.summary, /observed other999/);
+    assert.equal(checksReads, 0, 'another head\'s checks must never be evaluated');
+  });
+
+  it('waitForChecks fails on a cancelled check belonging to the expected head (REQ-F5)', async () => {
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'new000' });
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'cancel' }]);
+      },
+      {
+        timeoutMs: 60_000,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+      },
+    );
+
+    assert.equal(result.outcome, 'fail');
+    assert.match(result.summary, /Shell and Unit Tests: cancel/);
+  });
+
+  it('waitForChecks times out conservatively when the head cannot be verified', async () => {
+    // A head read that stays unparseable must never produce a pass/fail
+    // verdict — provenance is unknown, so the wait degrades to a timeout.
+    let checksReads = 0;
+    const result = await waitForChecks(
+      42,
+      '/tmp/repo',
+      (cmd) => {
+        if (cmd.includes('--json headRefOid')) return 'gh: unexpected error';
+        checksReads += 1;
+        return JSON.stringify([{ name: 'Shell and Unit Tests', state: 'COMPLETED', bucket: 'pass' }]);
+      },
+      {
+        timeoutMs: 0,
+        pollIntervalMs: 0,
+        expectedHeadSha: 'new000',
+        requiredChecks: ['Shell and Unit Tests'],
+        retrySleep: async () => {},
+      },
+    );
+
+    assert.equal(result.outcome, 'timeout');
+    assert.match(result.summary, /Could not verify PR head/);
+    assert.equal(checksReads, 0);
   });
 
   it('blocks and comments when rebase fails', async () => {
@@ -1852,6 +2046,7 @@ describe('executeMerge', () => {
         if (cmd.includes('gh pr list --label')) return '[]';
         if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
         if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+        if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'abc123def456' });
         if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
         return '';
       },
@@ -1936,7 +2131,7 @@ describe('executeMerge', () => {
       assert.deepEqual(result, { status: 'merged', prNumber: 42, haltLoop: false });
       assert.equal(mergeAttempts, 2);
       assert.deepEqual(sleeps, [30_000]);
-      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid/));
+      assert.ok(hasCall(options.calls, /gh pr view 42 --json mergeStateStatus,mergeable,statusCheckRollup,headRefOid,baseRefOid/));
       assert.deepEqual(options.labels, ['merging:42', 'merged:42']);
     } finally {
       options.cleanup();
@@ -2654,6 +2849,438 @@ describe('merge-lane stale lock reclaim', () => {
       });
       assert.deepEqual(options.labels, []);
       assert.ok(!hasCall(options.calls, /gh pr comment/));
+    } finally {
+      options.cleanup();
+    }
+  });
+});
+
+describe('strict-base rejection classification (HOK-2919)', () => {
+  it('matches the GitHub strict-mode rejection text', () => {
+    assert.ok(isBasePolicyMergeError(
+      'X Pull request timogilvie/wavemill#1267 is not mergeable: the base branch policy prohibits the merge.',
+    ));
+    assert.ok(!isBasePolicyMergeError('GraphQL: Head branch was modified. Review and try the merge again.'));
+  });
+
+  it('classifies MERGEABLE/BEHIND with green checks as stale-base', () => {
+    const verdict = classifyBasePolicyRejection({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+      headRefOid: 'head-1',
+      statusCheckRollup: [
+        { name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'SUCCESS' },
+        { name: 'Lifecycle Integration Tests', status: 'COMPLETED', conclusion: 'SUCCESS' },
+      ],
+    });
+    assert.equal(verdict.classification, 'stale-base');
+    assert.match(verdict.detail, /BEHIND/);
+  });
+
+  it('classifies a failing required check as policy-failure even when BEHIND', () => {
+    const verdict = classifyBasePolicyRejection({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+      statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'FAILURE' }],
+    });
+    assert.equal(verdict.classification, 'policy-failure');
+    assert.match(verdict.detail, /failingChecks=Shell and Unit Tests/);
+  });
+
+  it('classifies non-BEHIND, non-MERGEABLE, and unreadable states as policy-failure', () => {
+    assert.equal(classifyBasePolicyRejection({
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+      statusCheckRollup: [],
+    }).classification, 'policy-failure');
+    assert.equal(classifyBasePolicyRejection({
+      mergeable: 'CONFLICTING',
+      mergeStateStatus: 'DIRTY',
+      statusCheckRollup: [],
+    }).classification, 'policy-failure');
+    assert.equal(classifyBasePolicyRejection({ unavailableReason: 'HTTP 500' }).classification, 'policy-failure');
+  });
+});
+
+function strictBaseShellRunner(options: {
+  calls: string[];
+  repoDir: string;
+  diagnostics: object;
+  mergeError?: string;
+}): MergeExecutionDeps['shellRunner'] {
+  return (cmd) => {
+    options.calls.push(cmd);
+    if (cmd.includes('gh pr list --label')) return '[]';
+    if (cmd.includes('git rev-parse --git-common-dir')) return join(options.repoDir, '.git');
+    if (cmd.includes('git rev-parse') && cmd.includes('origin/')) return 'abc123def456';
+    if (cmd === 'git rev-parse HEAD' || cmd.includes('git rev-parse HEAD')) return 'refreshed-head-sha';
+    if (cmd.includes('git merge-base --is-ancestor')) {
+      const error = new Error('not an ancestor');
+      (error as unknown as Record<string, unknown>).status = 1;
+      throw error;
+    }
+    if (cmd.includes('gh pr checks')) return JSON.stringify([{ name: 'ci', state: 'COMPLETED', conclusion: 'success' }]);
+    if (cmd.includes('gh pr merge 42')) {
+      const error = new Error('merge failed');
+      (error as unknown as { stderr: string }).stderr = options.mergeError
+        ?? 'X Pull request timogilvie/wavemill#42 is not mergeable: the base branch policy prohibits the merge.';
+      throw error;
+    }
+    if (cmd.includes('gh pr view 42 --json mergeStateStatus,mergeable')) {
+      return JSON.stringify(options.diagnostics);
+    }
+    if (cmd.includes('--json headRefOid')) return JSON.stringify({ headRefOid: 'refreshed-head-sha' });
+    return '';
+  };
+}
+
+function fakeStrictBaseRetry(decision: StrictBaseRetryDecision): {
+  ops: StrictBaseRetryOps;
+  events: string[];
+} {
+  const events: string[] = [];
+  return {
+    events,
+    ops: {
+      gate: (prNumber, headSha) => {
+        events.push(`gate:${prNumber}:${headSha}`);
+        return decision;
+      },
+      increment: (prNumber, headSha) => {
+        events.push(`increment:${prNumber}:${headSha}`);
+      },
+      markExhausted: (prNumber, reason) => {
+        events.push(`exhausted:${prNumber}:${reason}`);
+      },
+      clear: (prNumber) => {
+        events.push(`clear:${prNumber}`);
+      },
+    },
+  };
+}
+
+describe('executeMerge strict-base refresh-and-retry (HOK-2919)', () => {
+  const staleBaseDiagnostics = {
+    mergeStateStatus: 'BEHIND',
+    mergeable: 'MERGEABLE',
+    headRefOid: 'rejected-head-sha',
+    baseRefOid: 'base-sha',
+    statusCheckRollup: [{ name: 'ci', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+  };
+
+  it('refreshes and retries a stale-base rejection instead of blocking (REQ-F1)', async () => {
+    const options = buildMergeTestOptions();
+    const retry = fakeStrictBaseRetry('proceed');
+    const laneEvents: string[] = [];
+    const shellRunner = strictBaseShellRunner({ calls: options.calls, repoDir: options.repoDir, diagnostics: staleBaseDiagnostics });
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          shellRunner,
+          strictBaseRetry: retry.ops,
+          recordLaneProgress: async (prNumber, event) => {
+            laneEvents.push(`${event}:${prNumber}`);
+          },
+        },
+      });
+
+      assert.equal(result.status, 'retried');
+      assert.equal(result.phase, 'stale-base-refresh');
+      assert.equal(result.haltLoop, false);
+      assert.match(result.failureExcerpt ?? '', /stale-base/);
+      // The PR returns to wm:ready, never wm:blocked.
+      assert.deepEqual(options.labels, ['merging:42', 'ready:42']);
+      // Bounded-retry contract: gate then increment, keyed by the rejected head.
+      assert.deepEqual(
+        retry.events,
+        ['gate:42:rejected-head-sha', 'increment:42:rejected-head-sha'],
+      );
+      // The branch was refreshed in place (a second rebase+push restarts CI).
+      assert.equal(options.calls.filter((call) => /git push --force-with-lease/.test(call)).length, 2);
+      assert.ok(laneEvents.includes('stale-base-refresh:42'));
+      // No terminal failure comment is posted for transient staleness.
+      assert.ok(!hasCall(options.calls, /gh pr comment 42/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('defers the refresh but still restores wm:ready while in backoff', async () => {
+    const options = buildMergeTestOptions();
+    const retry = fakeStrictBaseRetry('backoff');
+    const shellRunner = strictBaseShellRunner({ calls: options.calls, repoDir: options.repoDir, diagnostics: staleBaseDiagnostics });
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: { ...options.deps, shellRunner, strictBaseRetry: retry.ops, recordLaneProgress: async () => {} },
+      });
+
+      assert.equal(result.status, 'retried');
+      assert.equal(result.phase, 'stale-base-backoff');
+      assert.deepEqual(options.labels, ['merging:42', 'ready:42']);
+      assert.deepEqual(retry.events, ['gate:42:rejected-head-sha']);
+      assert.equal(options.calls.filter((call) => /git push --force-with-lease/.test(call)).length, 1);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('terminalizes with a recorded reason when the refresh budget is exhausted', async () => {
+    const options = buildMergeTestOptions();
+    const retry = fakeStrictBaseRetry('exhausted');
+    const shellRunner = strictBaseShellRunner({ calls: options.calls, repoDir: options.repoDir, diagnostics: staleBaseDiagnostics });
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: { ...options.deps, shellRunner, strictBaseRetry: retry.ops, recordLaneProgress: async () => {} },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'merge');
+      assert.match(result.failureExcerpt ?? '', /strict-base-refresh budget exhausted/);
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+      assert.ok(retry.events.some((event) => event.startsWith('exhausted:42:')));
+      assert.ok(hasCall(options.calls, /gh pr comment 42/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('still blocks a genuine policy failure with a distinguishable classifier line (REQ-F2)', async () => {
+    const options = buildMergeTestOptions();
+    const retry = fakeStrictBaseRetry('proceed');
+    const shellRunner = strictBaseShellRunner({
+      calls: options.calls,
+      repoDir: options.repoDir,
+      diagnostics: {
+        mergeStateStatus: 'BEHIND',
+        mergeable: 'MERGEABLE',
+        headRefOid: 'rejected-head-sha',
+        statusCheckRollup: [{ name: 'Shell and Unit Tests', status: 'COMPLETED', conclusion: 'FAILURE' }],
+      },
+    });
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: { ...options.deps, shellRunner, strictBaseRetry: retry.ops, recordLaneProgress: async () => {} },
+      });
+
+      assert.equal(result.status, 'blocked');
+      assert.equal(result.phase, 'merge');
+      assert.match(result.failureExcerpt ?? '', /policy-failure/);
+      assert.match(result.failureExcerpt ?? '', /failingChecks=Shell and Unit Tests/);
+      // The retry machinery is never consulted for a genuine policy failure.
+      assert.deepEqual(retry.events, []);
+      assert.deepEqual(options.labels, ['merging:42', 'blocked:42']);
+      assert.ok(hasCall(options.calls, /gh pr comment 42/));
+      assert.ok(hasCall(options.calls, /policy-failure/));
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('clears the strict-base budget and records lane progress on a successful merge', async () => {
+    const options = buildMergeTestOptions();
+    const retry = fakeStrictBaseRetry('proceed');
+    const laneEvents: string[] = [];
+
+    try {
+      const result = await executeMerge(candidate(), {
+        repoDir: options.repoDir,
+        deps: {
+          ...options.deps,
+          strictBaseRetry: retry.ops,
+          recordLaneProgress: async (prNumber, event) => {
+            laneEvents.push(`${event}:${prNumber}`);
+          },
+        },
+      });
+
+      assert.equal(result.status, 'merged');
+      assert.deepEqual(retry.events, ['clear:42']);
+      assert.ok(laneEvents.includes('merge-attempt:42'));
+      assert.ok(laneEvents.includes('rebase:42'));
+      assert.ok(laneEvents.includes('ci-restart:42'));
+      assert.ok(laneEvents.includes('merged:42'));
+    } finally {
+      options.cleanup();
+    }
+  });
+});
+
+describe('defaultStrictBaseRetryOps (bounded-retry.sh integration)', () => {
+  it('gates, increments, terminalizes at the ceiling, and clears via the shared helper', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-strict-retry-'));
+    try {
+      assert.equal(defaultStrictBaseRetryOps.gate(7, 'aaaa1111', repoDir), 'proceed');
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        defaultStrictBaseRetryOps.increment(7, 'aaaa1111', repoDir);
+      }
+      assert.equal(defaultStrictBaseRetryOps.gate(7, 'aaaa1111', repoDir), 'exhausted');
+      defaultStrictBaseRetryOps.markExhausted(7, 'strict-base-refresh budget exhausted', repoDir);
+      assert.equal(defaultStrictBaseRetryOps.gate(7, 'aaaa1111', repoDir), 'exhausted-quiet');
+      const sentinel = join(repoDir, '.wavemill', 'merge-lane', '7', '.retry-strict-base-refresh-exhausted');
+      assert.match(readFileSync(sentinel, 'utf-8'), /budget exhausted/);
+      // A new head resets the budget, including the terminal sentinel.
+      assert.equal(defaultStrictBaseRetryOps.gate(7, 'bbbb2222', repoDir), 'proceed');
+      assert.ok(!existsSync(sentinel));
+      defaultStrictBaseRetryOps.increment(7, 'bbbb2222', repoDir);
+      defaultStrictBaseRetryOps.clear(7, repoDir);
+      assert.equal(defaultStrictBaseRetryOps.gate(7, 'bbbb2222', repoDir), 'proceed');
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('wm:blocked reconciliation against live state (HOK-2919)', () => {
+  function blockedPr(): GhPrListEntry {
+    return pr({ labels: [label(WM_LABELS.wavemill), label(WM_LABELS.ready), label(WM_LABELS.blocked)] });
+  }
+
+  it('invalidates a block written against a prior head when no live gate remains (REQ-F3/REQ-F4)', async () => {
+    const options = buildTestOptions([blockedPr()]);
+    const cleared: number[] = [];
+    options.blockedLabelClearer = (prNumber) => { cleared.push(prNumber); };
+    options.blockedPrLiveStateProber = async () => ({
+      available: true,
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+      failingChecks: [],
+      pendingChecks: [],
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-old',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.deepEqual(decision.eligible.map((item) => item.number), [1]);
+      assert.deepEqual(decision.blocked, []);
+      assert.deepEqual(cleared, [1]);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('keeps a stale-marker block when live truth confirms failing checks, with a named gate', async () => {
+    const options = buildTestOptions([blockedPr()]);
+    const cleared: number[] = [];
+    options.blockedLabelClearer = (prNumber) => { cleared.push(prNumber); };
+    options.blockedPrLiveStateProber = async () => ({
+      available: true,
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BLOCKED',
+      failingChecks: ['Shell and Unit Tests'],
+      pendingChecks: [],
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-old',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.eligible.length, 0);
+      assert.match(decision.blocked[0]?.reason ?? '', /^blocked-label:checks-failing:Shell and Unit Tests/);
+      assert.deepEqual(cleared, []);
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('surfaces a contradiction finding for a valid same-head block on a CLEAN green PR (REQ-F5)', async () => {
+    const options = buildTestOptions([blockedPr()]);
+    options.blockedPrLiveStateProber = async () => ({
+      available: true,
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN',
+      failingChecks: [],
+      pendingChecks: [],
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-current',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:contradicted-by-live-state');
+      const findings = readFileSync(join(options.repoDir, '.wavemill', 'observer-findings.jsonl'), 'utf-8');
+      assert.match(findings, /contradicted by live state/);
+      assert.match(findings, /merge-lane-blocked-contradiction/);
+      // A second poll with unchanged state does not re-emit the finding.
+      const findingCount = findings.split('\n').filter((line) => line.includes('merge-lane-blocked-contradiction')).length;
+      await selectNextCandidate(options);
+      const findingsAfter = readFileSync(join(options.repoDir, '.wavemill', 'observer-findings.jsonl'), 'utf-8');
+      assert.equal(
+        findingsAfter.split('\n').filter((line) => line.includes('merge-lane-blocked-contradiction')).length,
+        findingCount,
+      );
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('names the behind-base gate for a valid same-head block that is merely stale', async () => {
+    const options = buildTestOptions([blockedPr()]);
+    options.blockedPrLiveStateProber = async () => ({
+      available: true,
+      mergeable: 'MERGEABLE',
+      mergeStateStatus: 'BEHIND',
+      failingChecks: [],
+      pendingChecks: [],
+    });
+    writePrStateMarker(1, {
+      headSha: 'head-current',
+      activeLabels: [WM_LABELS.ready, WM_LABELS.blocked],
+      markerRoot: options.repoDir,
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      assert.equal(decision.blocked[0]?.reason, 'blocked-label:behind-base');
+    } finally {
+      options.cleanup();
+    }
+  });
+
+  it('emits a mill/tend disagreement finding when the mill holds a blocked PR as a merge candidate (REQ-F5)', async () => {
+    const options = buildTestOptions([
+      pr({ labels: [label(WM_LABELS.wavemill)] }),
+    ]);
+    writeReadyResult(options.repoDir, 'HOK-1437', {
+      stage: 'ready',
+      status: 'completed',
+      artifacts: {
+        type: 'ready',
+        verdict: 'pass',
+        prNumber: 1,
+        queueState: 'merge-candidate',
+        lastCiSummary: 'pass: 16/3 checks',
+        lastCiHeadSha: 'head-current',
+      },
+    });
+
+    try {
+      const decision = await selectNextCandidate(options);
+      // Blocked because wm:ready is missing — while the mill calls it a candidate.
+      assert.equal(decision.blocked[0]?.reason, 'ready-failed:not-ready');
+      assert.deepEqual(decision.blocked[0]?.labels, ['wavemill']);
+      const findings = readFileSync(join(options.repoDir, '.wavemill', 'observer-findings.jsonl'), 'utf-8');
+      assert.match(findings, /Mill and tend disagree on PR #1 merge candidacy/);
+      assert.match(findings, /ready-failed:not-ready/);
+      assert.match(findings, /pass: 16\/3 checks/);
     } finally {
       options.cleanup();
     }

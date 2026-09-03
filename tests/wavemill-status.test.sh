@@ -1567,6 +1567,42 @@ else
   fail "ready rows still render stale planning approval detail"
 fi
 
+printf '%s\n' 'Review verdict does not pass readiness gate for PR #414 (status=completed, exitCode=missing).' \
+  > "$WORKTREES_DIR/ready-task/features/ready-task/.needs-attention"
+BEHAVIOR_READY_REVIEW_STALE="$TMP_DIR/behavior-ready-review-stale.json"
+cat > "$BEHAVIOR_READY_REVIEW_STALE" <<'EOF'
+{
+  "pane": {
+    "HOK-1311-ready-task": "15",
+    "HOK-1312-active-task": "16"
+  },
+  "reported": {
+    "HOK-1312": "blocked by scope guard"
+  },
+  "planning": {},
+  "pr": {
+    "task/ready-task": "414|OPEN",
+    "task/active-task": "415|OPEN"
+  },
+  "checks": {
+    "task/ready-task": "pass",
+    "task/active-task": "pass"
+  }
+}
+EOF
+
+OUTPUT_READY_REVIEW_STALE="$TMP_DIR/output-ready-review-stale.txt"
+run_render "$STATE_FILE_READY_PLANNING_STALE" "$WORKTREES_DIR" "$BEHAVIOR_READY_REVIEW_STALE" "$OUTPUT_READY_REVIEW_STALE"
+rm -f "$WORKTREES_DIR/ready-task/features/ready-task/.needs-attention"
+
+if grep -q '⚡ ACTIVE (2)' "$OUTPUT_READY_REVIEW_STALE" \
+  && ! grep -q 'Review verdict does not pass readiness gate' "$OUTPUT_READY_REVIEW_STALE" \
+  && ! grep -q 'blocked by scope guard' "$OUTPUT_READY_REVIEW_STALE"; then
+  pass "ready rows suppress stale review-gate detail"
+else
+  fail "ready rows still render stale review-gate detail"
+fi
+
 echo ""
 echo "=== wavemill-status pr_checks rollup handling ==="
 
@@ -2700,6 +2736,84 @@ if [[ "$malformed_helper_probe" == *"odd:0:challenge pair entry HOK-3 has no slu
 else
   echo "    probe: $malformed_helper_probe"
   fail "malformed challenge helper contract violated"
+fi
+
+# --- Backstage progress-vs-liveness rendering (HOK-2919) ---
+# A current heartbeat with a stalled progress state must render as alive but
+# not progressing, showing both the tick age and the last-progress age; a
+# health file without progress fields renders unchanged (backwards compatible).
+BACKSTAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_DIR" "$BACKSTAGE_DIR"' EXIT
+BACKSTAGE_STATE_FILE="$BACKSTAGE_DIR/workflow-state.json"
+printf '{"tasks":{}}\n' > "$BACKSTAGE_STATE_FILE"
+recent_tick="$(iso_at_offset -48)"
+old_progress="$(iso_at_offset -57600)"
+cat > "$BACKSTAGE_DIR/backstage-health.json" <<JSON
+{
+  "status": "healthy",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "heartbeatAt": "$recent_tick",
+      "progressState": "stalled",
+      "lastProgressAt": "$old_progress",
+      "failureCount": 0
+    },
+    "observer": {
+      "status": "healthy",
+      "heartbeatAt": "$recent_tick"
+    }
+  }
+}
+JSON
+
+backstage_probe="$(
+  set -- test-session "$WORKTREES_DIR" "$BACKSTAGE_STATE_FILE"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  backstage_health_dashboard_line "$BACKSTAGE_STATE_FILE" 2>/dev/null || echo "RENDER_FAILED"
+)"
+backstage_probe_plain="$(printf '%s' "$backstage_probe" | strip_ansi)"
+if [[ "$backstage_probe_plain" == *"Tend: alive-not-progressing"* \
+  && "$backstage_probe_plain" == *"tick "* \
+  && "$backstage_probe_plain" == *"progress "* ]]; then
+  pass "stalled tend renders as alive-not-progressing with tick and progress ages"
+else
+  echo "    probe: $backstage_probe_plain"
+  fail "stalled tend did not render tick-vs-progress distinction"
+fi
+if [[ "$backstage_probe_plain" == *"Observer: healthy"* ]]; then
+  pass "service without progress fields still renders its plain status"
+else
+  echo "    probe: $backstage_probe_plain"
+  fail "observer without progress fields lost its plain rendering"
+fi
+
+# Same file with tend progressing: header must say healthy, no progress suffix.
+cat > "$BACKSTAGE_DIR/backstage-health.json" <<JSON
+{
+  "status": "healthy",
+  "services": {
+    "tend": {
+      "status": "healthy",
+      "heartbeatAt": "$recent_tick",
+      "progressState": "progressing",
+      "lastProgressAt": "$recent_tick",
+      "failureCount": 0
+    }
+  }
+}
+JSON
+backstage_probe_plain="$(
+  set -- test-session "$WORKTREES_DIR" "$BACKSTAGE_STATE_FILE"
+  source "$REPO_DIR/shared/lib/wavemill-status.sh" >/dev/null 2>&1
+  backstage_health_dashboard_line "$BACKSTAGE_STATE_FILE" 2>/dev/null | strip_ansi || echo "RENDER_FAILED"
+)"
+if [[ "$backstage_probe_plain" == *"Tend: healthy"* && "$backstage_probe_plain" != *"alive-not-progressing"* \
+  && "$backstage_probe_plain" != *"progress "* ]]; then
+  pass "progressing tend renders as healthy without a progress suffix"
+else
+  echo "    probe: $backstage_probe_plain"
+  fail "progressing tend rendering regressed"
 fi
 
 echo ""

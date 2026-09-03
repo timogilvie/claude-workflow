@@ -72,7 +72,7 @@ FUNCTION_FILE="$TEST_TMP/challenge-hard-failure-functions.sh"
 : > "$FUNCTION_FILE"
 for fn in \
   mark_challenge_eval_running:1:mill \
-  challenge_eval_hard_failure_max_retries:1:mill \
+  challenge_eval_hard_failure_max_retries:1:common \
   challenge_pair_hard_failure_reason:1:mill \
   challenge_pair_records_file:1:mill \
   challenge_pr_url_from_number:1:mill \
@@ -319,6 +319,8 @@ JSON
   printf 'terminal_winner=%s\n' "$(jq -r '.winner' "$REPO_DIR/.wavemill/evals/challenge-records.jsonl")"
   printf 'terminal_compared_primary=%s\n' "$(jq -r '.tasks["HOK-2462"].challengeCompared' "$STATE_FILE")"
   printf 'terminal_compared_challenger=%s\n' "$(jq -r '.tasks["HOK-2462_c"].challengeCompared' "$STATE_FILE")"
+  printf 'terminal_sentinel=%s\n' "$([[ -f "$WORKTREE_ROOT/hok-2462/features/hok-2462/.retry-challenge-eval-hard-exhausted" ]] && echo present || echo absent)"
+  printf 'terminal_sentinel_reason=%s\n' "$(cat "$WORKTREE_ROOT/hok-2462/features/hok-2462/.retry-challenge-eval-hard-exhausted" 2>/dev/null || true)"
 }
 
 run_double_case() {
@@ -598,6 +600,83 @@ run_helper_case() {
   printf 'max_retries=%s\n' "$(challenge_eval_hard_failure_max_retries)"
 }
 
+# HOK-2924: the hard-failure retry counts against the bounded-retry bucket in
+# the arm's feature dir (head-keyed, backoff-capable) with the state mirror
+# kept for resolve_challenge_pair_hard_failure.
+run_bucket_case() {
+  BUCKET_HEAD="sha-one"
+  git() {
+    if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" ]]; then
+      printf '%s\n' "$BUCKET_HEAD"
+      return 0
+    fi
+    return 1
+  }
+  local bucket_dir="$WORKTREE_ROOT/hok-2462/features/hok-2462"
+
+  cat > "$STATE_FILE" <<JSON
+{
+  "tasks": {
+    "HOK-2462": {
+      "slug": "hok-2462",
+      "branch": "task/hok-2462",
+      "worktree": "$WORKTREE_ROOT/hok-2462",
+      "pr": "101",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": false,
+      "evalFailed": true,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "primary",
+      "challengeModel": "model-a"
+    },
+    "HOK-2462_c": {
+      "slug": "hok-2462-c",
+      "branch": "task/hok-2462-c",
+      "worktree": "$WORKTREE_ROOT/hok-2462-c",
+      "pr": "102",
+      "status": "ready",
+      "agent": "codex",
+      "phase": "ready",
+      "evalCompleted": true,
+      "evalFailed": false,
+      "challengeCompared": false,
+      "challenge": true,
+      "challengePairId": "HOK-2462",
+      "challengeRole": "challenger",
+      "challengeModel": "model-b"
+    }
+  },
+  "jobs": {}
+}
+JSON
+
+  maybe_run_challenge_eval "HOK-2462" "101" "task/hok-2462" "hok-2462"
+  wait || true
+  printf 'bucket_count=%s\n' "$(bounded_retry_count "$bucket_dir" challenge-eval-hard)"
+  printf 'bucket_head=%s\n' "$(bounded_retry_head "$bucket_dir" challenge-eval-hard)"
+  printf 'bucket_launches_1=%s\n' "$(printf '%s' "$LOG_OUTPUT" | grep -c "eval running in background" || true)"
+
+  # Backoff: with a non-zero base the next retry inside the window holds.
+  state_mutate "$STATE_FILE" '.tasks["HOK-2462"].evalFailed = true | .tasks["HOK-2462"].evalCompleted = false' >/dev/null
+  WAVEMILL_RETRY_BACKOFF_CHALLENGE_EVAL_HARD_BASE_SECONDS=600 \
+    maybe_run_challenge_eval "HOK-2462" "101" "task/hok-2462" "hok-2462"
+  printf 'backoff_count=%s\n' "$(bounded_retry_count "$bucket_dir" challenge-eval-hard)"
+  printf 'backoff_launches=%s\n' "$(printf '%s' "$LOG_OUTPUT" | grep -c "eval running in background" || true)"
+  printf 'backoff_failed=%s\n' "$(jq -r '.tasks["HOK-2462"].evalFailed' "$STATE_FILE")"
+
+  # A fresh commit on the arm zeroes bucket and mirror: retry restarts at 1.
+  BUCKET_HEAD="sha-two"
+  maybe_run_challenge_eval "HOK-2462" "101" "task/hok-2462" "hok-2462"
+  wait || true
+  printf 'reset_count=%s\n' "$(bounded_retry_count "$bucket_dir" challenge-eval-hard)"
+  printf 'reset_mirror=%s\n' "$(jq -r '.tasks["HOK-2462"].evalHardFailureRetryCount' "$STATE_FILE")"
+  printf 'reset_logs_attempt=%s\n' "$(printf '%s' "$LOG_OUTPUT" | grep -c "hard failure (attempt 1/2)" || true)"
+}
+
 "run_${CASE_NAME}_case"
 printf 'eval_launches=%s\n' "$EVAL_LAUNCHES"
 printf 'job_tracker_calls=%s\n' "$JOB_TRACKER_CALLS"
@@ -632,6 +711,7 @@ helper_soft_only_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts"
 helper_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=3 CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 helper_invalid_env_output="$(CONFIG_JSON='{"challenge":{"eval":{"retryMaxAttempts":9,"hardFailureRetryMaxAttempts":4}}}' WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES=bad CASE_NAME=helper CASE_DIR="$TEST_TMP/helper-invalid-env" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 config_retry_output="$(CONFIG_JSON='{"challenge":{"eval":{"hardFailureRetryMaxAttempts":3}}}' CASE_NAME=config_retry CASE_DIR="$TEST_TMP/config-retry" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
+bucket_output="$(CASE_NAME=bucket CASE_DIR="$TEST_TMP/bucket" REPO_DIR="$REPO_DIR" FUNCTION_FILE="$FUNCTION_FILE" "$TEST_TMP/run-case.sh")"
 
 check_contains "legacy hard failure defaults retry counter to zero then increments" "$retry_output" "retry_counter=1"
 check_contains "hard failure retry clears evalFailed before relaunch" "$retry_output" "retry_failed=false"
@@ -648,6 +728,18 @@ check_contains "exhausted hard failure awards challenger" "$exhausted_output" "t
 check_contains "exhausted hard failure marks primary compared" "$exhausted_output" "terminal_compared_primary=true"
 check_contains "exhausted hard failure marks challenger compared" "$exhausted_output" "terminal_compared_challenger=true"
 check_contains "exhausted hard failure does not relaunch eval" "$exhausted_output" "eval_launches=0"
+check_contains "exhausted hard failure writes bounded-retry sentinel" "$exhausted_output" "terminal_sentinel=present"
+check_contains "exhausted hard failure sentinel carries greppable reason" "$exhausted_output" "Challenge eval hard-failure retries exhausted for HOK-2462"
+
+check_contains "bucket retry counts attempt in feature dir" "$bucket_output" "bucket_count=1"
+check_contains "bucket retry keys the arm head" "$bucket_output" "bucket_head=sha-one"
+check_contains "bucket retry launches eval once" "$bucket_output" "bucket_launches_1=1"
+check_contains "backoff window holds the hard-failure retry" "$bucket_output" "backoff_count=1"
+check_contains "backoff hold launches nothing" "$bucket_output" "backoff_launches=1"
+check_contains "backoff hold preserves evalFailed for the next tick" "$bucket_output" "backoff_failed=true"
+check_contains "new head restarts the hard-failure budget" "$bucket_output" "reset_count=1"
+check_contains "new head zeroes then rewrites the state mirror" "$bucket_output" "reset_mirror=1"
+check_contains "new head retry logs attempt 1 twice" "$bucket_output" "reset_logs_attempt=2"
 
 check_contains "double hard failure writes exactly one terminal record" "$double_output" "double_lines=1"
 check_contains "double hard failure writes double-forfeit outcome" "$double_output" "double_outcome=double-forfeit"

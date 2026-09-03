@@ -60,7 +60,8 @@ extract_function() {
 }
 
 LAUNCH_FUNC_FILE="$TEST_TMP/launch_ready_phase.sh"
-extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_attention_head" > "$LAUNCH_FUNC_FILE"
+cat "$REPO_DIR/shared/lib/transient-marker.sh" > "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_attention_head" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "record_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "clear_ready_conflict_attention" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "transient_mergeability_count" >> "$LAUNCH_FUNC_FILE"
@@ -88,6 +89,8 @@ extract_function "$MONITOR_SCRIPT_FILE" "log_ready_unparseable_result" >> "$LAUN
 extract_function "$MONITOR_SCRIPT_FILE" "ready_failure_is_actionable_for_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_failed_check_summary" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_passes_ready_gate" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_has_final_evidence" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "review_result_missing_final_evidence" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_result_infra_failure" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "increment_review_infra_retry_count" >> "$LAUNCH_FUNC_FILE"
@@ -97,6 +100,15 @@ extract_function "$MONITOR_SCRIPT_FILE" "review_result_summary" >> "$LAUNCH_FUNC
 extract_function "$MONITOR_SCRIPT_FILE" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "post_pr_reconciliation_config_json" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "post_pr_reconciliation_enabled" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_feature_task_packet" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_capsule_refresh" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_project_prompt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_reset_retry_if_new_fingerprint" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_record_attempt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_review_invalidated_by_commit" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_mark_review_stale" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
@@ -109,6 +121,10 @@ fi
 run_launch_case() {
   local test_case="$1"
   local case_dir="$TEST_TMP/$test_case"
+  # Each invocation starts from a clean state dir: the bounded-retry backoff
+  # (HOK-2924) would otherwise hold a re-run of the same case name because a
+  # previous invocation's attempt timestamp is still inside the window.
+  rm -rf "$case_dir"
   mkdir -p "$case_dir"
 
   CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" TEST_CASE="$test_case" bash -lc '
@@ -152,6 +168,16 @@ EOF
       unknown_capped)
         printf "%s\n" "6" > "$STATE_DIR/.transient-mergeability-count"
         ;;
+      remediation_backoff_hold)
+        printf "%s\n" "1" > "$STATE_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "abc123" > "$STATE_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "$(date +%s)" > "$STATE_DIR/.retry-ready-remediation-last-at"
+        ;;
+      remediation_head_reset)
+        printf "%s\n" "2" > "$STATE_DIR/.retry-ready-remediation-count"
+        printf "%s\n" "oldsha" > "$STATE_DIR/.retry-ready-remediation-head"
+        printf "%s\n" "$(date +%s)" > "$STATE_DIR/.retry-ready-remediation-last-at"
+        ;;
       clean_after_unknown)
         printf "%s\n" "stale transient attention" > "$STATE_DIR/.needs-attention"
         : > "$STATE_DIR/.needs-attention-transient"
@@ -186,6 +212,24 @@ EOF
       infra_retry_scope_unverifiable)
         cat > "$STATE_DIR/.review-result.json" <<EOF
 {"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":1,"failureCategory":"review-scope-unverifiable","terminalReason":"review_complete"}}
+EOF
+        ;;
+      verdictless_completed_recovery)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"missingReviewEvidence":true}}
+EOF
+        ;;
+      missing_review_recovery)
+        rm -f "$STATE_DIR/.review-result.json"
+        ;;
+      verdictless_running_recovery)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"running","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"recoveryReplay":{"status":"running","preservesPriorVerdict":true}}}
+EOF
+        ;;
+      infra_retry_running_preserved_failure)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"running","agent":"native-openrouter","model":"qwen-3-coder","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"failureCategory":"native-runtime-unavailable","history":["prior"]}}
 EOF
         ;;
       review_not_ready_no_category)
@@ -317,6 +361,10 @@ EOF
     }
     check_stage_aborted() { return 1; }
     git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--show-toplevel" ]]; then
+        printf "%s\n" "$REPO_DIR"
+        return 0
+      fi
       if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
         printf "%s\n" "abc123"
         return 0
@@ -423,7 +471,7 @@ EOF
           printf "%s\n" "TypeError: ready crashed" >&2
           return 1
           ;;
-        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available)
+        remediation_disabled|remediation_launch|second_remediation_launch|remediation_exhausted|remediation_launch_failure|already_inflight_same_head|sequential_failing_launch_1|sequential_failing_launch_2|sequential_failing_launch_3|native_route_coder_model|no_model_available|remediation_backoff_hold|remediation_head_reset)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"fail\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"fail\",\"message\":\"1 CI check(s) failing\",\"details\":{\"failedChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"FAILURE\"}],\"pendingChecks\":[],\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"One or more checks failed - not safe to merge\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 1
           ;;
@@ -491,6 +539,11 @@ EOF
     printf "ready_label_calls=%s\n" "$ready_label_calls"
     printf "prompt_summary=%s\n" "$READY_PROMPT_SUMMARY"
     printf "phase_used=%s\n" "$LAUNCH_AGENT_PHASE"
+    remediation_retry_count="$(cat "$STATE_DIR/.retry-ready-remediation-count" 2>/dev/null || echo "")"
+    remediation_retry_exhausted="absent"
+    [[ -f "$STATE_DIR/.retry-ready-remediation-exhausted" ]] && remediation_retry_exhausted="present"
+    printf "remediation_retry_count=%s\nremediation_retry_exhausted=%s\n" \
+      "$remediation_retry_count" "$remediation_retry_exhausted"
     recheck_count_file="absent"
     [[ -f "$STATE_DIR/.failed-ready-recheck-count" ]] && recheck_count_file="present"
     recheck_head_file="absent"
@@ -678,6 +731,17 @@ run_recheck_case() {
     LOG_ERROR_OUTPUT=""
     log() { LOG_OUTPUT+="$*\n"; }
     log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
+    git() {
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--show-toplevel" ]]; then
+        printf "%s\n" "$CASE_DIR"
+        return 0
+      fi
+      if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "HEAD" ]]; then
+        printf "%s\n" "abc123"
+        return 0
+      fi
+      return 1
+    }
 
     write_failed_result() {
       printf "%s\n" "{\"stage\":\"ready\",\"status\":\"failed\",\"finishedAt\":\"$1\",\"notes\":\"$2\",\"failureReason\":\"$2\",\"artifacts\":{\"type\":\"ready\",\"verdict\":\"fail\",\"prNumber\":304,\"crossPrGuard\":{\"source\":\"cross-pr-revert-guard\"}}}" > "$STATE_DIR/.ready-result.json"
@@ -787,7 +851,7 @@ run_recheck_case() {
         printf "%s\n" "4" > "$STATE_DIR/.failed-ready-recheck-count"
         first="not-first"
         mark_failed_ready_recheck_exhausted "HOK-1300" "304" "$STATE_DIR" && first="first"
-        attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null || echo "")
+        attention=$(marker_reason "$STATE_DIR/.needs-attention" 2>/dev/null || echo "")
         exhausted_flag=$(jq -r ".artifacts.failedReadyRecheck.exhausted" "$STATE_DIR/.ready-result.json")
         attempts=$(jq -r ".artifacts.failedReadyRecheck.attempts" "$STATE_DIR/.ready-result.json")
         last_reason=$(jq -r ".artifacts.failedReadyRecheck.lastReason" "$STATE_DIR/.ready-result.json")
@@ -806,7 +870,7 @@ run_recheck_case() {
         printf "%s\n" "2" > "$STATE_DIR2/.failed-ready-recheck-count"
         missing_result="not-first"
         mark_failed_ready_recheck_exhausted "HOK-1300" "304" "$STATE_DIR2" && missing_result="first"
-        missing_attention=$(cat "$STATE_DIR2/.needs-attention" 2>/dev/null || echo "")
+        missing_attention=$(marker_reason "$STATE_DIR2/.needs-attention" 2>/dev/null || echo "")
         printf "first=%s second=%s unchanged=%s exhausted_flag=%s attempts=%s last_reason=%s failure_reason=%s guard_kept=%s error_count=%s attention=%s missing_result=%s missing_attention=%s\n" \
           "$first" "$second" "$unchanged" "$exhausted_flag" "$attempts" "$last_reason" "$failure_reason" "$guard_kept" "$error_count" "$attention" "$missing_result" "$missing_attention"
         ;;
@@ -951,6 +1015,19 @@ check_contains "remediation exhaustion writes failed stage result" "$output" "|r
 check_contains "remediation exhaustion writes terse attention file" "$output" "Remediation exhausted after 3 attempt(s)"
 check_contains "remediation exhaustion logs terse error" "$output" "Ready remediation exhausted"
 check_not_contains "remediation exhaustion skips json dump" "$output" "error_payload=  {\"prNumber\":304"
+check_contains "remediation exhaustion writes terminal sentinel" "$output" "remediation_retry_exhausted=present"
+
+echo "=== Remediation Bounded Retry (HOK-2924) ==="
+
+output="$(run_launch_case remediation_backoff_hold)"
+check_contains "remediation backoff holds inside window" "$output" "rc=5"
+check_contains "remediation backoff does not launch agent" "$output" "launch_calls=0"
+check_contains "remediation backoff logs the hold" "$output" "holding ready remediation"
+
+output="$(run_launch_case remediation_head_reset)"
+check_contains "new head re-enables remediation launch" "$output" "launch_calls=1"
+check_contains "new head restarts the attempt counter" "$output" "remediation_retry_count=1"
+check_contains "new head remediation returns in-progress" "$output" "rc=5"
 
 output="$(run_launch_case remediation_disabled)"
 check_contains "disabled remediation falls back to ready failure" "$output" "rc=1"
@@ -1038,6 +1115,26 @@ check_contains "scope unverifiable retries review" "$output" "rc=6"
 check_contains "scope unverifiable launches review" "$output" "review_launch_calls=1"
 check_contains "scope unverifiable increments infra retry" "$output" "infra_retry_count=1"
 
+output="$(run_launch_case verdictless_completed_recovery)"
+check_contains "verdictless completed retries review" "$output" "rc=6"
+check_contains "verdictless completed launches review" "$output" "review_launch_calls=1"
+check_contains "verdictless completed increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case missing_review_recovery)"
+check_contains "missing review retries review" "$output" "rc=6"
+check_contains "missing review launches review" "$output" "review_launch_calls=1"
+check_contains "missing review increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case verdictless_running_recovery)"
+check_contains "verdictless running retries review" "$output" "rc=6"
+check_contains "verdictless running launches review" "$output" "review_launch_calls=1"
+check_contains "verdictless running increments infra retry" "$output" "infra_retry_count=1"
+
+output="$(run_launch_case infra_retry_running_preserved_failure)"
+check_contains "running preserved infra verdict retries review" "$output" "rc=6"
+check_contains "running preserved infra verdict launches review" "$output" "review_launch_calls=1"
+check_contains "running preserved infra verdict increments infra retry" "$output" "infra_retry_count=1"
+
 # HOK-2889 (other direction): a plain not_ready with no failure category is a
 # genuine review failure and must refuse without any infra retry.
 output="$(run_launch_case review_not_ready_no_category)"
@@ -1045,6 +1142,7 @@ check_contains "plain not_ready refuses ready" "$output" "rc=1"
 check_contains "plain not_ready does not launch review" "$output" "review_launch_calls=0"
 check_not_contains "plain not_ready does not increment infra retry" "$output" "infra_retry_count=1"
 check_contains "plain not_ready writes readiness attention" "$output" "Review verdict does not pass readiness gate"
+check_contains "plain not_ready marks failed verdict" "$output" "verdictState=failed"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"
@@ -1196,6 +1294,125 @@ echo "=== Launch Phase Propagation ==="
 
 output="$(run_launch_case remediation_launch)"
 check_contains "remediation passes explicit phase" "$output" "phase_used=coding"
+
+echo "=== Post-PR Reconciliation Capsule (HOK-2936) ==="
+
+run_recon_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/recon-$test_case"
+  rm -rf "$case_dir"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" \
+    REAL_REPO_DIR="$REPO_DIR" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    TOOLS_DIR="$REAL_REPO_DIR/tools"
+    STATE_DIR="$CASE_DIR/feature"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+
+    case "$TEST_CASE" in
+      flag_default_off)
+        echo "default_enabled=$(post_pr_reconciliation_enabled "$WT_DIR")"
+        printf "%s\n" "{\"ready\":{\"postPrReconciliation\":{\"enabled\":true}}}" > "$WT_DIR/.wavemill-config.json"
+        HOME="$CASE_DIR" echo "repo_enabled=$(post_pr_reconciliation_enabled "$WT_DIR")"
+        ;;
+      fingerprint_reset)
+        printf "%s\n" "2" > "$STATE_DIR/.retry-ready-remediation-count"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-one"
+        echo "same_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-one"
+        echo "repeat_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-two"
+        echo "new_fp_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        ;;
+      capsule_gate)
+        git -C "$CASE_DIR" init -q
+        git -C "$CASE_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m fixture
+        printf "%s\n" "{not json" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "malformed_rc=$rc"
+        echo "malformed_attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null | tr "\n" " ")"
+        rm -f "$STATE_DIR/.reconciliation-context.json" "$STATE_DIR/.needs-attention"
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "missing_rc=$rc"
+        echo "missing_attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null | tr "\n" " ")"
+        ;;
+      capsule_project)
+        npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" build \
+          --feature-dir "$STATE_DIR" --task-id HOK-2936 --title "Recon test" \
+          --slug recon-test --branch task/recon --base-branch main --pr 304 \
+          --review-head aaa111aaa111aaa111aaa111aaa111aaa111aaa1 --review-verdict ready >/dev/null
+        npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
+          --feature-dir "$STATE_DIR" --classification merge_conflict \
+          --head aaa111aaa111aaa111aaa111aaa111aaa111aaa1 --detail "conflict test" >/dev/null
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "project_rc=$rc"
+        foundation_line=$(grep -n "Task foundation" "$CASE_DIR/prompt.txt" | head -1 | cut -d: -f1)
+        incident_line=$(grep -n "Current incident" "$CASE_DIR/prompt.txt" | head -1 | cut -d: -f1)
+        if [[ -n "$foundation_line" && -n "$incident_line" ]] && (( foundation_line < incident_line )); then
+          echo "projection_order=foundation-first"
+        else
+          echo "projection_order=wrong"
+        fi
+        ;;
+      review_invalidation)
+        git -C "$WT_DIR" init -q
+        git -C "$WT_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m one
+        old_head=$(git -C "$WT_DIR" rev-parse HEAD)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+EOF
+        printf "%s\n" "{\"review\":{\"reviewHeadSha\":\"$old_head\"},\"attempts\":[]}" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "no_attempts_same_head_rc=$rc"
+        git -C "$WT_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m two
+        new_head=$(git -C "$WT_DIR" rev-parse HEAD)
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "no_attempts_new_head_rc=$rc"
+        printf "%s\n" "{\"review\":{\"reviewHeadSha\":\"$old_head\"},\"attempts\":[{\"attemptNumber\":1}]}" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "attempt_new_head_rc=$rc"
+        reconciliation_mark_review_stale "$STATE_DIR" 304 "$old_head" "$new_head" || true
+        echo "stale_status=$(jq -r .status "$STATE_DIR/.review-result.json")"
+        rc=0; review_result_passes_ready_gate "$STATE_DIR" || rc=$?
+        echo "gate_after_stale_rc=$rc"
+        ;;
+    esac
+  '
+}
+
+output="$(run_recon_case flag_default_off)"
+check_contains "reconciliation flag defaults off" "$output" "default_enabled=false"
+check_contains "reconciliation flag honors repo config" "$output" "repo_enabled=true"
+
+output="$(run_recon_case fingerprint_reset)"
+check_contains "same fingerprint keeps retry budget" "$output" "same_count=2"
+check_contains "repeat fingerprint keeps retry budget" "$output" "repeat_count=2"
+check_contains "new fingerprint starts a new episode" "$output" "new_fp_count=0"
+
+output="$(run_recon_case capsule_gate)"
+check_contains "malformed capsule refuses projection" "$output" "malformed_rc=1"
+check_contains "malformed capsule surfaces typed reason" "$output" "capsule_malformed"
+check_contains "missing capsule refuses projection" "$output" "missing_rc=1"
+check_contains "missing capsule surfaces typed reason" "$output" "capsule_missing"
+
+output="$(run_recon_case capsule_project)"
+check_contains "valid capsule projects a prompt" "$output" "project_rc=0"
+check_contains "projection puts foundation before incident" "$output" "projection_order=foundation-first"
+
+output="$(run_recon_case review_invalidation)"
+check_contains "no attempts and same head keeps review valid" "$output" "no_attempts_same_head_rc=1"
+check_contains "head advance without attempts keeps review valid" "$output" "no_attempts_new_head_rc=1"
+check_contains "reconciliation commit invalidates review" "$output" "attempt_new_head_rc=0"
+check_contains "stale review is recorded" "$output" "stale_status=stale"
+check_contains "ready gate refuses stale review" "$output" "gate_after_stale_rc=1"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

@@ -21,6 +21,14 @@ test('llama-4-maverick is held out of automatic selection (HOK-2885)', () => {
   assert.equal(filterDisabledModels(['llama-4-maverick']).length, 0);
 });
 
+test('llama-4-scout is held out after live coding challenge failures', () => {
+  assert.equal(isDisabledModel('llama-4-scout'), true);
+  assert.deepEqual(
+    filterDisabledModels(['llama-4-scout', 'kimi-k2.7-code']),
+    ['kimi-k2.7-code'],
+  );
+});
+
 test('the hold list stays deliberate', () => {
   // Every entry costs the fleet a model, so keep the set small and reviewed.
   assert.ok(DISABLED_MODEL_IDS.size <= 5, `unexpectedly large hold list: ${DISABLED_MODEL_IDS.size}`);

@@ -134,6 +134,11 @@ test('Test frameworks are non-empty strings', () => {
   }
 });
 
+test('Detects the built-in Node test runner from package scripts', () => {
+  const result = detectTestFrameworks(REPO_DIR);
+  assert.ok(result.includes('node:test'));
+});
+
 // ────────────────────────────────────────────────────────────────
 // CI Provider Detection Tests
 // ────────────────────────────────────────────────────────────────

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getChallengeEvalHardFailureRetryMaxAttempts } from './config.ts';
 import { mutateJsonState } from './state-mutex.ts';
@@ -77,10 +78,11 @@ export async function resolveUnresolvablePair(input: UnresolvablePairInput): Pro
   }
 
   const workflow = loadWorkflowStateChallengeData(input.repoDir);
-  const pairState = workflow.taskStateByPair.get(input.pairId);
-  if (!pairState) {
+  const trackedPairState = workflow.taskStateByPair.get(input.pairId);
+  if (!trackedPairState) {
     return { status: 'skipped', reason: `Pair ${input.pairId} is not present in workflow state.` };
   }
+  const pairState = hydrateCleanedAbortedArm(input.pairId, evalsDir, trackedPairState);
   const retryMax = getChallengeEvalHardFailureRetryMaxAttempts(input.repoDir);
 
   if ((workflow.activeJobsByPair.get(input.pairId) ?? []).length > 0) {
@@ -133,6 +135,83 @@ export async function resolveUnresolvablePair(input: UnresolvablePairInput): Pro
     reason: resolvedReason,
     dryRun: input.dryRun === true,
   };
+}
+
+interface ArchivedChallengeAbort {
+  pairId?: unknown;
+  model?: unknown;
+  reason?: unknown;
+  detail?: unknown;
+  nextAction?: unknown;
+  stage?: unknown;
+  abortedAt?: unknown;
+}
+
+/**
+ * Post-review cleanup can remove an aborted challenger from workflow state
+ * while preserving its `.challenge-aborted.json` under eval artifacts. The
+ * pair-wide quarantine stamp then survives only on the healthy primary, which
+ * makes the resolver misidentify the primary as the failed arm. Rehydrate the
+ * missing terminal arm from durable evidence and discard that mirrored stamp
+ * from the evaluated survivor.
+ */
+function hydrateCleanedAbortedArm(
+  pairId: string,
+  evalsDir: string,
+  pairState: PairTaskState,
+): PairTaskState {
+  if (pairState.primary && pairState.challenger) return pairState;
+
+  const missingRole = pairState.primary ? 'challenger' : 'primary';
+  const taskKeys = missingRole === 'challenger'
+    ? [`${pairId}_c`, `${pairId}-challenger`]
+    : [pairId];
+
+  for (const taskKey of taskKeys) {
+    const artifactPath = join(evalsDir, 'artifacts', taskKey, '.challenge-aborted.json');
+    if (!existsSync(artifactPath)) continue;
+    try {
+      const artifact = JSON.parse(readFileSync(artifactPath, 'utf-8')) as ArchivedChallengeAbort;
+      if (typeof artifact.reason !== 'string' || !artifact.reason.trim()) continue;
+      if (typeof artifact.pairId === 'string' && artifact.pairId.trim() !== pairId) continue;
+
+      const timestamp = typeof artifact.abortedAt === 'string' ? Date.parse(artifact.abortedAt) : NaN;
+      const restored: TaskEvalState = {
+        issueId: taskKey,
+        prNumber: null,
+        role: missingRole,
+        branch: null,
+        model: typeof artifact.model === 'string' && artifact.model.trim() ? artifact.model.trim() : null,
+        updatedAt: Number.isFinite(timestamp) ? timestamp : null,
+        evalFailed: false,
+        evalCompleted: false,
+        evalHardFailureRetryCount: 0,
+        comparisonState: null,
+        challengeAborted: artifact.reason.trim(),
+        challengeAbortedDetail: typeof artifact.detail === 'string' && artifact.detail.trim() ? artifact.detail.trim() : null,
+        challengeAbortedNextAction: typeof artifact.nextAction === 'string' && artifact.nextAction.trim() ? artifact.nextAction.trim() : null,
+        challengeAbortedStage: typeof artifact.stage === 'string' && artifact.stage.trim() ? artifact.stage.trim() : null,
+      };
+
+      const hydrated: PairTaskState = { ...pairState, [missingRole]: restored };
+      const survivorRole = missingRole === 'challenger' ? 'primary' : 'challenger';
+      const survivor = hydrated[survivorRole];
+      if (survivor?.evalCompleted && survivor.challengeAborted === restored.challengeAborted
+        && survivor.challengeAbortedDetail === restored.challengeAbortedDetail) {
+        hydrated[survivorRole] = {
+          ...survivor,
+          challengeAborted: null,
+          challengeAbortedDetail: null,
+          challengeAbortedNextAction: null,
+          challengeAbortedStage: null,
+        };
+      }
+      return hydrated;
+    } catch {
+      // Try the next canonical artifact key; malformed evidence stays fail-closed.
+    }
+  }
+  return pairState;
 }
 
 export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promise<ResolveOutcome> {
