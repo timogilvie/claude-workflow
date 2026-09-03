@@ -7696,10 +7696,20 @@ _launch_ready_remediation_attempt() {
   # Post-PR reconciliation capsule gate (HOK-2936): update the incident and
   # validate the capsule before consuming any retry budget. An invalid capsule
   # refuses the launch with a typed needs-user reason (REQ-F4).
+  # REQ-F3: Gate launch based on classification — only launch for deterministic/conflict
+  # failures; skip costly LLM for transient and stale-base issues.
   recon_enabled=$(post_pr_reconciliation_enabled "$wt_dir")
   if [[ "$recon_enabled" == "true" ]]; then
     local recon_classification
     recon_classification=$(classify_for_reconciliation "$merge_status" "$failed_check_summary" "$checks_run" "$checks_passed")
+
+    case "$recon_classification" in
+      stale_base_clean|ci_transient)
+        log "status" "  ⏭ Skipping LLM remediation for $recon_classification failure on PR #$pr_number (REQ-F3)"
+        return 0
+        ;;
+    esac
+
     recon_checks_json=$(jq -c 'map({name: .})' <<< "$failed_check_names_json" 2>/dev/null || echo '[]')
     recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
       --feature-dir "$state_dir" \
