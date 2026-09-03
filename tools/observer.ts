@@ -868,6 +868,26 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
             ],
             recommendation: 'Inspect the task state and quarantine/cleanup path; if the process is gone, terminalize and clean the task instead of leaving it active.',
           });
+        } else {
+          findings.push({
+            id: `stale-active-task-live-process-${repo.session}-${task.issue}`,
+            severity: 'high',
+            category: 'stuck',
+            confidence: 'medium',
+            session: repo.session,
+            repoDir: repo.repoDir,
+            issue: task.issue,
+            title: `${task.issue} has live pane or process residue but has not progressed in ${task.phase}`,
+            evidence: [
+              `status=${task.status ?? 'unknown'}`,
+              `phase=${task.phase ?? 'unknown'}`,
+              `updated=${task.updated ?? repo.stateMtime ?? 'unknown'}`,
+              `ageMinutes=${Math.round(ageMinutes)}`,
+              `expectedWindow=${expectedWindow}`,
+              `worktree=${task.worktree ?? 'unknown'}`,
+            ],
+            recommendation: 'Inspect the task pane and hook state. If the agent is parked at a prompt or waiting after reporting completion, send a narrow recovery instruction; stop a child process only when it is conclusively wedged.',
+          });
         }
       }
 
@@ -1353,7 +1373,8 @@ function parseReadyWatchdogLine(line: string): ReadyWatchdogLogEntry | null {
 }
 
 function parseReadyRecheckLine(line: string): ReadyRecheckLogEntry | null {
-  const match = line.match(/(\S+)\s+\u2192\s+Re-running failed ready checks for PR #(\d+)/);
+  const match = line.match(/(\S+)\s+\u2192\s+Re-running failed ready checks for PR #(\d+)/)
+    ?? line.match(/\b([A-Z][A-Z0-9]*-\d+(?:_[A-Za-z0-9]+)?):\s+refusing ready phase for PR #(\d+)/i);
   if (!match) return null;
   return {
     line,
@@ -1378,12 +1399,33 @@ function parseModelDowngradeLine(line: string): ModelDowngradeLogEntry | null {
 function readReadyFailureReason(repo: RepoSnapshot, issue: string): string | undefined {
   const task = repo.tasks?.find((candidate) => candidate.issue === issue);
   if (!task?.worktree || !task.slug) return undefined;
-  const resultPath = join(task.worktree, 'features', task.slug, '.ready-result.json');
+  const featureDir = join(task.worktree, 'features', task.slug);
+  const attentionPath = join(featureDir, '.needs-attention');
+  if (existsSync(attentionPath)) {
+    try {
+      const attention = readFileSync(attentionPath, 'utf-8').trim();
+      if (attention) return attention;
+    } catch {
+      // Fall through to the structured result when the advisory cannot be read.
+    }
+  }
+
+  const resultPath = join(featureDir, '.ready-result.json');
   if (!existsSync(resultPath)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as { failureReason?: unknown; notes?: unknown };
-    const reason = typeof parsed.failureReason === 'string' ? parsed.failureReason : parsed.notes;
-    return typeof reason === 'string' && reason.trim() ? reason.trim() : undefined;
+    const parsed = JSON.parse(readFileSync(resultPath, 'utf-8')) as {
+      failureReason?: unknown;
+      notes?: unknown;
+      artifacts?: { failureReason?: unknown; lastCiSummary?: unknown };
+    };
+    const candidates = [
+      parsed.failureReason,
+      parsed.artifacts?.failureReason,
+      parsed.artifacts?.lastCiSummary,
+      parsed.notes,
+    ];
+    const reason = candidates.find((candidate) => typeof candidate === 'string' && candidate.trim());
+    return typeof reason === 'string' ? reason.trim() : undefined;
   } catch {
     return undefined;
   }
