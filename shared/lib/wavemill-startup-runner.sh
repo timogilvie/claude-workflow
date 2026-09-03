@@ -743,6 +743,51 @@ INSTALL_EOF
   return 0
 }
 
+challenge_selection_health_stage() {
+  case "${1:-}" in
+    plan|planning|planner) printf '%s\n' "plan" ;;
+    review|reviewer) printf '%s\n' "review" ;;
+    implementation|coding|coder) printf '%s\n' "implementation" ;;
+    *) printf '%s\n' "${1:-implementation}" ;;
+  esac
+}
+
+challenge_selection_health_varied_model() {
+  local stage
+  stage="$(challenge_selection_health_stage "${1:-implementation}")"
+  case "$stage" in
+    plan) printf '%s\n' "${2:-${3:-}}" ;;
+    review) printf '%s\n' "${4:-${3:-}}" ;;
+    *) printf '%s\n' "${3:-}" ;;
+  esac
+}
+
+challenge_selection_health_ack_launch() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts ack-launch \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_selection_health_stage "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
+challenge_selection_health_release() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_selection_health_stage "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
 startup_run_task_phases() {
   local task_json="$1" ordinal="${2:-}" total="${3:-}"
   local issue slug title branch wt_dir linear_issue task_packet_file details_file issue_json_file
@@ -1106,6 +1151,10 @@ $details_context"
   export WAVEMILL_FEATURE_SLUG="$slug"
   export WAVEMILL_FEATURE_DIR="$feature_dir"
   if ! agent_launch_interactive "$SESSION" "${created_window_id:-$win}" "$planning_prompt" "$planner_agent" "${planner_model:-gpt-5.6-terra}" "" "" "$issue"; then
+    if [[ "$challenge" == "true" ]]; then
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$coder_model" "$reviewer_model")"
+    fi
     [[ -n "${state_written:-}" ]] && wavemill_lock_run "state" remove_task_state "$issue" >/dev/null 2>&1 || true
     tmux kill-window -t "${created_window_id:-$SESSION:$win}" >/dev/null 2>&1 || true
     startup_phase_failed "$startup_id" agent "$issue" "launching planning agent"
@@ -1142,6 +1191,10 @@ $details_context"
   [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" linear done
 
   printf '%s\n' "$issue" >> "$LAUNCHED_ISSUES_FILE"
+  if [[ "$challenge" == "true" ]]; then
+    challenge_selection_health_ack_launch "$challenge_pair" "$challenge_stage" \
+      "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$coder_model" "$reviewer_model")"
+  fi
   startup_task_log "$issue" "✓ $issue launched (${coder_model:-$planner_model}, phase: $persisted_phase)"
   STARTUP_TASK_LOG_FILE=""
   return 0

@@ -280,6 +280,19 @@ export interface ChallengeEvalConfig {
   hardFailureRetryMaxAttempts?: number;
 }
 
+export interface ChallengeSelectionHealthConfig {
+  enabled?: boolean;
+  reservation?: {
+    selectionTtlSeconds?: number;
+    inflightTtlSeconds?: number;
+  };
+  circuit?: {
+    transientFailureThreshold?: number;
+    windowSeconds?: number;
+    cooldownSeconds?: number;
+  };
+}
+
 export interface ChallengeConfig {
   enabled?: boolean;
   rate?: number;
@@ -294,6 +307,7 @@ export interface ChallengeConfig {
     review?: number;
   };
   eval?: ChallengeEvalConfig;
+  selectionHealth?: ChallengeSelectionHealthConfig;
 }
 
 export interface ChallengeSchedulerConfig {

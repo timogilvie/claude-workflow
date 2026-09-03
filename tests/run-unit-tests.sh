@@ -126,6 +126,7 @@ TESTS=(
   shared/lib/challenge-pair-resolver.test.ts
   shared/lib/arm-failure-taxonomy.test.ts
   shared/lib/arm-reliability.test.ts
+  shared/lib/challenge-selection-health.test.ts
   shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/observer-status-renderer.test.ts

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { appendArmReliabilityRecord } from '../shared/lib/arm-reliability.ts';
 import type { ChallengeArmSide } from '../shared/lib/arm-failure-taxonomy.ts';
+import { recordSelectionOutcome } from '../shared/lib/challenge-selection-health.ts';
+import type { ChallengeStage } from '../shared/lib/challenge-scheduler.ts';
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const issueId = requireArg(args, 'issue');
   const challengePairId = requireArg(args, 'pair-id');
@@ -16,7 +18,7 @@ function main(): void {
     throw new Error(`Invalid challenge role: ${challengeRole}`);
   }
 
-  appendArmReliabilityRecord({
+  const record = appendArmReliabilityRecord({
     issueId,
     challengePairId,
     challengeRole,
@@ -26,6 +28,18 @@ function main(): void {
     detail: args.detail,
     nextAction: args['next-action'],
   }, repoDir);
+
+  await recordSelectionOutcome({
+    repoDir,
+    owner: {
+      issueId: challengePairId,
+      pairId: challengePairId,
+    },
+    stage: normalizeStage(record.stage),
+    model: record.model,
+    failureKind: record.failureKind,
+    faultClass: record.faultClass,
+  });
 }
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -55,10 +69,15 @@ function requireArg(args: Record<string, string>, name: string): string {
   return value;
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   console.warn(`[record-arm-failure] ${message}`);
   process.exitCode = 0;
+});
+
+function normalizeStage(value: string): ChallengeStage {
+  const raw = value.trim().toLowerCase();
+  if (raw === 'plan' || raw === 'planning' || raw === 'planner') return 'plan';
+  if (raw === 'review' || raw === 'reviewer') return 'review';
+  return 'implementation';
 }
