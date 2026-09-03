@@ -7703,12 +7703,10 @@ _launch_ready_remediation_attempt() {
     local recon_classification
     recon_classification=$(classify_for_reconciliation "$merge_status" "$failed_check_summary" "$checks_run" "$checks_passed")
 
-    case "$recon_classification" in
-      stale_base_clean|ci_transient)
-        log "status" "  ⏭ Skipping LLM remediation for $recon_classification failure on PR #$pr_number (REQ-F3)"
-        return 0
-        ;;
-    esac
+    if [[ "$recon_classification" == "stale_base_clean" || "$recon_classification" == "ci_transient" ]]; then
+      log "status" "  ⏭ Skipping LLM remediation for $recon_classification failure on PR #$pr_number (REQ-F3)"
+      return 0
+    fi
 
     recon_checks_json=$(jq -c 'map({name: .})' <<< "$failed_check_names_json" 2>/dev/null || echo '[]')
     recon_incident_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
