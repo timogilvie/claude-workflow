@@ -3760,6 +3760,214 @@ test_coding_pane_divergence_deduplicates_on_repeat_ticks() {
   check_eq "div dedupe: tick 2 task remains active" "1" "$(kv_value "$tick2" active_count)"
 }
 
+test_queue_owned_pane_release_blocks_on_dirty_worktree() {
+  local slug="pane-release-blocked-dirty"
+  local issue="HOK-2937-DIRTY"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="701"
+    get_main_head_sha() { printf "%s\n" "base-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_candidate_selected() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // empty" "$1/.ready-result.json"; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // empty" "$1/.ready-result.json"; }
+    ready_queue_field() { jq -r ".artifacts.${2} // empty" "$1/.ready-result.json"; }
+    task_worktree_release_safety() { printf "%s\n" "dirty"; }
+  ')"
+
+  check_eq "pane release blocked dirty: remains task owned" "task" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+  check_eq "pane release blocked dirty: pane remains active" "active" "$(jq -r --arg issue "$issue" '.tasks[$issue].paneState' "$repo/.wavemill/state.json")"
+  check_file_exists "pane release blocked dirty: blocked marker created" "$repo/features/$slug/ready/.pane-release-blocked.json"
+  check_eq "pane release blocked dirty: task remains active" "1" "$(kv_value "$tick" active_count)"
+}
+
+test_queue_owned_pane_release_blocks_on_missing_capsule() {
+  local slug="pane-release-blocked-capsule"
+  local issue="HOK-2937-CAPSULE"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="701"
+    get_main_head_sha() { printf "%s\n" "base-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_candidate_selected() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // empty" "$1/.ready-result.json"; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // empty" "$1/.ready-result.json"; }
+    ready_queue_field() { jq -r ".artifacts.${2} // empty" "$1/.ready-result.json"; }
+    task_worktree_release_safety() { printf "%s\n" "ok"; }
+    npx() {
+      if [[ "$*" == *"reconciliation-capsule.ts validate"* ]]; then
+        printf "%s\n" "{\"ok\":false,\"reason\":\"missing\"}"
+        return 1
+      fi
+      return 1
+    }
+  ')"
+
+  check_eq "pane release blocked capsule: remains task owned" "task" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+  check_eq "pane release blocked capsule: pane remains active" "active" "$(jq -r --arg issue "$issue" '.tasks[$issue].paneState' "$repo/.wavemill/state.json")"
+  check_file_exists "pane release blocked capsule: blocked marker created" "$repo/features/$slug/ready/.pane-release-blocked.json"
+}
+
+test_queue_owned_pane_release_blocks_on_stale_review() {
+  local slug="pane-release-blocked-stale-review"
+  local issue="HOK-2937-STALE-REV"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="701"
+    get_main_head_sha() { printf "%s\n" "base-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_candidate_selected() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // empty" "$1/.ready-result.json"; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // empty" "$1/.ready-result.json"; }
+    ready_queue_field() { jq -r ".artifacts.${2} // empty" "$1/.ready-result.json"; }
+    task_worktree_release_safety() { printf "%s\n" "ok"; }
+    review_result_passes_ready_gate() { return 1; }
+    npx() {
+      if [[ "$*" == *"reconciliation-capsule.ts validate"* ]]; then
+        printf "%s\n" "{\"ok\":true}"
+        return 0
+      fi
+      return 1
+    }
+  ')"
+
+  check_eq "pane release blocked stale review: remains task owned" "task" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+  check_eq "pane release blocked stale review: pane remains active" "active" "$(jq -r --arg issue "$issue" '.tasks[$issue].paneState' "$repo/.wavemill/state.json")"
+  check_file_exists "pane release blocked stale review: blocked marker created" "$repo/features/$slug/ready/.pane-release-blocked.json"
+}
+
+test_reconciliation_returns_to_queue_ownership_after_success() {
+  local slug="pane-release-recon-success"
+  local issue="HOK-2937-RECON-OK"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue" "reconciliation" "rehydrating"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    PR_BY_ISSUE["$ISSUE"]="701"
+    get_main_head_sha() { printf "%s\n" "base-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_candidate_selected() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // empty" "$1/.ready-result.json"; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // empty" "$1/.ready-result.json"; }
+    ready_queue_field() { jq -r ".artifacts.${2} // empty" "$1/.ready-result.json"; }
+    task_worktree_release_safety() { printf "%s\n" "ok"; }
+    npx() {
+      if [[ "$*" == *"reconciliation-capsule.ts validate"* ]]; then
+        printf "%s\n" "{\"ok\":true}"
+        return 0
+      fi
+      return 1
+    }
+    _tmux_task_window_target() { printf "%s\n" "@8"; }
+    tmux() {
+      printf "%s\n" "$*" >> "$REPO_UNDER_TEST/tmux.log"
+      if [[ "${1:-}" == "list-panes" ]]; then
+        printf "%s\n" "999999"
+        return 0
+      fi
+      return 1
+    }
+    review_result_passes_ready_gate() { return 0; }
+  ')"
+
+  check_eq "recon success: returns to queue ownership" "queue" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+  check_eq "recon success: pane released again" "released" "$(jq -r --arg issue "$issue" '.tasks[$issue].paneState' "$repo/.wavemill/state.json")"
+}
+
+test_restart_does_not_recreate_queue_owned_panes() {
+  local slug="pane-release-restart"
+  local issue="HOK-2937-RESTART"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue" "queue" "released"
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    read_state_value() { return 1; }
+    _ensure_window_exists() {
+      echo "ERROR: _ensure_window_exists should not be called for released panes" > /dev/stderr
+      return 1
+    }
+  ')"
+
+  check_eq "restart no pane: task remains queue-owned" "queue" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+  check_eq "restart no pane: queue-owned count" "1" "$(kv_value "$tick" queue_owned_count)"
+  check_eq "restart no pane: no active slots" "0" "$(kv_value "$tick" active_count)"
+}
+
+test_terminal_cleanup_queue_owned_merged_pr_idempotent() {
+  local slug="pane-release-merged-cleanup"
+  local issue="HOK-2937-CLEANUP-M"
+  local repo tick1 tick2
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue" "queue" "released"
+
+  # First cleanup tick - mark as merged
+  tick1="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    read_state_value() {
+      if [[ "$*" == *".status"* ]]; then
+        printf "%s\n" "merged"
+      else
+        return 1
+      fi
+    }
+  ')"
+
+  # Verify cleanup happened once
+  local cleanup_count="$(jq -r '.tasks | length' "$repo/.wavemill/state.json" 2>/dev/null || echo 0)"
+  check_eq "terminal cleanup merged: task removed on first cleanup" "0" "$cleanup_count"
+
+  # Second cleanup tick - should be idempotent
+  tick2="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    read_state_value() { return 1; }
+  ')"
+
+  check_eq "terminal cleanup merged: remains cleaned up" "0" "$(jq -r '.tasks | length' "$repo/.wavemill/state.json" 2>/dev/null || echo 0)"
+}
+
+test_terminal_cleanup_queue_owned_closed_unmerged_preserves_unsafe_work() {
+  local slug="pane-release-closed-cleanup"
+  local issue="HOK-2937-CLEANUP-C"
+  local repo tick
+  repo="$(harness_init_repo "$slug")"
+  harness_setup_pane_release_candidate "$repo" "$slug" "$issue" "queue" "released"
+
+  # Simulate unpushed commit to trigger "unsafe" preservation
+  git -C "$repo" commit --allow-empty -m "Unpushed work" 2>/dev/null || true
+
+  tick="$(harness_run_tick "$repo" "$slug" "$issue" '
+    CURRENT_PHASE="ready"
+    read_state_value() {
+      if [[ "$*" == *".status"* ]]; then
+        printf "%s\n" "closed-unmerged"
+      else
+        return 1
+      fi
+    }
+    git_worktree_has_unpushed() { return 0; }
+  ')"
+
+  # Task should remain (preserved for recovery)
+  check_eq "terminal cleanup closed: task preserved" "1" "$(jq -r '.tasks | length' "$repo/.wavemill/state.json" 2>/dev/null || echo 0)"
+  check_eq "terminal cleanup closed: remains queue-owned" "queue" "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner' "$repo/.wavemill/state.json")"
+}
+
 echo "=== Mill Lifecycle: Planning to Coding Handoff ==="
 harness_extract_real_functions
 
@@ -3784,8 +3992,15 @@ test_resume_uses_expanded_phase_config_over_stale_state
 test_merge_queue_marks_non_candidate_stale_without_rerun
 test_merge_queue_disabled_keeps_legacy_rerun
 test_queue_owned_pane_release_happy_path
+test_queue_owned_pane_release_blocks_on_dirty_worktree
+test_queue_owned_pane_release_blocks_on_missing_capsule
+test_queue_owned_pane_release_blocks_on_stale_review
 test_queue_owned_released_crash_repair_kills_window
 test_reconciliation_rehydration_acquires_single_owner
+test_reconciliation_returns_to_queue_ownership_after_success
+test_restart_does_not_recreate_queue_owned_panes
+test_terminal_cleanup_queue_owned_merged_pr_idempotent
+test_terminal_cleanup_queue_owned_closed_unmerged_preserves_unsafe_work
 test_merge_queue_preserved_merged_tasks_do_not_block_ready_pr
 test_merge_queue_closed_unmerged_pr_does_not_block_ready_pr
 test_coding_blocked_completion_needs_user_without_advancing
