@@ -126,7 +126,6 @@
   "suites": {
     "custom": {
       "shared/lib/challenge-coverage-selector.test.ts": 268,
-      "shared/lib/challenge-mode.test.ts": 9980,
       "shared/lib/challenge-scheduler.test.ts": 590,
       "shared/lib/challenge-score-selector.test.ts": 198,
       "shared/lib/check-routing.test.ts": 6252,
