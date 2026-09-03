@@ -327,6 +327,7 @@ TESTS=(
   shared/lib/evals-paths.test.ts
   shared/lib/execution-contract.test.ts
   shared/lib/expanded-route-cache.test.ts
+  shared/lib/reconciliation-context.test.ts
   shared/lib/launch-priority-audit.consistency.test.ts
   shared/lib/launch-priority-audit.test.ts
   shared/lib/linear.test.ts
