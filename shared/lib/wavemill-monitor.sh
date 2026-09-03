@@ -32,16 +32,8 @@ run_linear_retry_drain_tick() {
 # merge conflicts, and ambiguous failures (REQ-F3: only LLM on deterministic/conflict).
 classify_for_reconciliation() {
   local merge_status="$1" failed_check_summary="$2" checks_run="$3" checks_passed="$4"
-  (cd "$REPO_DIR" && npx tsx -e "
-import { classifyForReconciliation } from './shared/lib/ready-watchdog.ts';
-const classification = classifyForReconciliation({
-  mergeStatus: '$merge_status',
-  failedCheckSummary: '$failed_check_summary',
-  checksRun: $checks_run,
-  checksPassed: $checks_passed,
-});
-console.log(classification);
-  " 2>/dev/null) || echo "ambiguous"
+  (cd "$REPO_DIR" && npx tsx "$TOOLS_DIR/classify-reconciliation.ts" \
+    "$merge_status" "$failed_check_summary" "$checks_run" "$checks_passed" 2>/dev/null) || echo "ambiguous"
 }
 
 # Logging functions - defined early so they're available for all error handling
