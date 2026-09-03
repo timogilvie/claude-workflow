@@ -360,6 +360,9 @@
     },
     "postPrReconciliation": {
       "enabled": false
+    },
+    "paneRelease": {
+      "enabled": false
     }
   },
   "integration": {

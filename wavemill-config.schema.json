@@ -1580,6 +1580,18 @@
                     },
                     "additionalProperties": false
                 },
+                "paneRelease": {
+                    "type": "object",
+                    "description": "Queue-owned task pane release (HOK-2937). When enabled with postPrReconciliation, reviewed merge-candidate tasks can release their tmux task pane after a durable capsule handoff and rehydrate only for bounded reconciliation. Default off during rollout.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Release eligible ready-stage task panes after a safe durable queue handoff."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "watchdog": {
                     "type": "object",
                     "description": "Ready-stage stale-state watchdog settings.",
