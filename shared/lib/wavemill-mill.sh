@@ -773,30 +773,8 @@ clear_challenge_eval_running() {
   ' --arg issue "$issue"
 }
 
-challenge_eval_retry_max_attempts() {
-  local max_attempts
-  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
-  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_attempts"
-  else
-    printf '1\n'
-  fi
-}
-
-challenge_eval_hard_failure_max_retries() {
-  local max_retries
-  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
-    return
-  fi
-
-  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
-  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$max_retries"
-  else
-    printf '2\n'
-  fi
-}
+# challenge_eval_retry_max_attempts() and challenge_eval_hard_failure_max_retries()
+# are provided by wavemill-common.sh (HOK-2924), sourced above.
 
 clear_challenge_pair_state() {
   local pair_id="$1"
@@ -1068,8 +1046,8 @@ check_routing_complete() {
 }
 
 
-set_window_attention_state() {
-  local win="$1" state="${2:-clear}"
+_resolve_window_attention_target() {
+  local win="$1"
   local target="$win" issue="" slug=""
   if [[ "$win" =~ ^([A-Z]+-[0-9]+(_c)?)-(.+)$ ]]; then
     issue="${BASH_REMATCH[1]}"
@@ -1079,13 +1057,25 @@ set_window_attention_state() {
     target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$expected_worktree" 2>/dev/null || true)"
   fi
   [[ -n "$target" ]] || target="$win"
-  target="$(_tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target")"
+  _tmux_target_join "$SESSION" "$target" 2>/dev/null || printf '%s:%s\n' "$SESSION" "$target"
+}
+
+clear_window_attention_state() {
+  local win="$1" target
+  target="$(_resolve_window_attention_target "$win")"
+  tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
+  tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+}
+
+set_window_attention_state() {
+  local win="$1" state="${2:-clear}"
   if [[ "$state" == "needs-user" ]]; then
+    local target
+    target="$(_resolve_window_attention_target "$win")"
     tmux set-window-option -t "$target" window-status-style bg=red,fg=white,bold >/dev/null 2>&1 || true
     tmux set-window-option -t "$target" window-status-current-style bg=red,fg=white,bold >/dev/null 2>&1 || true
   else
-    tmux set-window-option -u -t "$target" window-status-style >/dev/null 2>&1 || true
-    tmux set-window-option -u -t "$target" window-status-current-style >/dev/null 2>&1 || true
+    clear_window_attention_state "$win"
   fi
   tmux refresh-client -S >/dev/null 2>&1 || true
 }
@@ -1486,16 +1476,14 @@ cleanup_stale_tasks() {
       log "debug" "  Pruning $issue ($reason)"
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
-        if [[ -d "$worktree" ]]; then
-          execute git -C "$REPO_DIR" worktree remove "$worktree" --force 2>/dev/null || true
+        local cleanup_rc=0
+        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 20 ]]; then
+          log_warn "  $issue cleanup failed; keeping task state"
+          continue
         fi
-        if [[ "$reason" != "branch deleted" ]]; then
-          if [[ "$branch" == "main" || "$branch" == "master" ]]; then
-            log_warn "  Refusing to delete protected branch: $branch"
-          else
-            git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
-            git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
-          fi
+        if [[ "$cleanup_rc" -eq 0 && "$reason" != "branch deleted" && "$branch" != "main" && "$branch" != "master" ]]; then
+          git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
         fi
       fi
       # Remove from state file (dashboard will stop showing it)
@@ -1823,7 +1811,7 @@ if [[ "$SKIP_BACKLOG_SELECTION" != "true" ]]; then
       echo ""
       if [[ -n "$DRIFT_SUBSYSTEMS" ]]; then
         log "info" "Refreshing subsystem docs..."
-        npx tsx tools/init-project-context.ts --force "$REPO_DIR"
+        npx tsx tools/init-project-context.ts --refresh "$REPO_DIR"
         echo ""
         log "info" "Refresh complete. Re-displaying task list..."
       else

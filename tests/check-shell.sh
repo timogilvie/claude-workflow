@@ -82,6 +82,8 @@ echo "=== Syntax Check (bash -n) ==="
 
 for f in \
   "$LIB_DIR"/wavemill-*.sh \
+  "$LIB_DIR"/bounded-retry.sh \
+  "$LIB_DIR"/transient-marker.sh \
   "$LIB_DIR"/terminal-reconciler.sh \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
@@ -110,6 +112,7 @@ for f in \
   "$REPO_DIR"/tests/global-model-parity.test.sh \
   "$REPO_DIR"/tests/queue-health.test.sh \
   "$REPO_DIR"/tests/merge-queue-live-ci.test.sh \
+  "$REPO_DIR"/tests/merge-lane-progress-artifacts.test.sh \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/hook-write-context-guard.test.sh \
@@ -125,16 +128,25 @@ for f in \
   "$REPO_DIR"/tests/pr-state-merge-canonicalization.test.sh \
   "$REPO_DIR"/tests/with-timeout.test.sh \
   "$REPO_DIR"/tests/aborted-challenge-cleanup.test.sh \
+  "$REPO_DIR"/tests/safe-branch-cleanup.test.sh \
   "$REPO_DIR"/tests/challenge-primary-merge-cleanup.test.sh \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
+  "$REPO_DIR"/tests/transient-marker.test.sh \
   "$REPO_DIR"/tests/startup-terminal-prune.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
   "$REPO_DIR"/tests/hokusai-test-registration.test.sh \
   "$REPO_DIR"/tests/monitor-script-byte-identical.test.sh \
+  "$REPO_DIR"/tests/bounded-retry.test.sh \
+  "$REPO_DIR"/tests/handle-phase-launch-result.test.sh \
+  "$REPO_DIR"/tests/launch-pane-liveness.test.sh \
+  "$REPO_DIR"/tests/launch-failure-log-capture.test.sh \
+  "$REPO_DIR"/tests/challenge-eval-soft-retry.test.sh \
   "$REPO_DIR"/tests/run-shell-suite.sh \
   "$REPO_DIR"/tests/run-unit-tests.sh \
+  "$REPO_DIR"/tests/run-custom-tests.sh \
+  "$REPO_DIR"/tests/run-custom-tests-shard.test.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_launches_concurrently.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/startup_serializes_state_writes.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/worktree_collision.sh \
@@ -442,18 +454,24 @@ else
     # Extract function definitions from wavemill-common.sh (also sourced by monitor)
     COMMON_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/wavemill-common.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from bounded-retry.sh (sourced by wavemill-common.sh)
+    BOUNDED_RETRY_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/bounded-retry.sh" | sed 's/()//' | sort -u)
+
     # Extract function definitions from the hook protocol sourced by common helpers.
     HOOK_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$REPO_DIR/shared/hooks/wavemill-hook-protocol.sh" | sed 's/()//' | sort -u)
 
     # Extract function definitions from queue-health.sh (also sourced by monitor)
     QUEUE_HEALTH_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/queue-health.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from transient-marker.sh (also sourced by monitor)
+    MARKER_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/transient-marker.sh" | sed 's/()//' | sort -u)
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$HOOK_FUNCS" "$QUEUE_HEALTH_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$BOUNDED_RETRY_FUNCS" "$HOOK_FUNCS" "$QUEUE_HEALTH_FUNCS" "$MARKER_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
-    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|ps|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
+    KNOWN_EXTERNALS="bash|cat|cd|chmod|column|command|continue|cut|date|declare|diff|dirname|echo|eval|exec|exit|export|false|find|fold|git|grep|gh|head|jq|kill|local|ls|mkdir|mktemp|mv|node|npx|printf|ps|pwd|read|readlink|return|rm|sed|set|shift|sleep|sort|source|sqlite3|stat|tail|tee|test|tmux|touch|tr|trap|true|tput|tsx|type|to_entries|uniq|unset|wait|wc|xargs|basename|awk|seq|ascii_downcase"
 
     # Extract function calls from the heredoc.
     # Restrict matches to actual command positions instead of every bare word;
@@ -2291,7 +2309,7 @@ else
     fail "mill script is missing docs refresh hotkey support"
   fi
 
-  if grep -q 'npx tsx tools/init-project-context.ts --force "\$REPO_DIR"' "$MILL_SCRIPT" \
+  if grep -q 'npx tsx tools/init-project-context.ts --refresh "\$REPO_DIR"' "$MILL_SCRIPT" \
     && grep -q 'Subsystem docs are up to date' "$MILL_SCRIPT"; then
     pass "mill script refreshes docs and handles clean state"
   else

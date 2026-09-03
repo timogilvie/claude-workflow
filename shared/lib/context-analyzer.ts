@@ -215,21 +215,21 @@ export function detectTestPatterns(repoDir: string): string[] {
  */
 export function detectErrorHandling(repoDir: string, packageJson?: any): string | undefined {
   try {
+    const pkg = packageJson ?? parsePackageJson(repoDir);
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+
     // Check for error boundary usage (React)
-    const errorBoundary = execShellCommand(
-      'git ls-files | grep -E "\\.(tsx?|jsx?)$" | xargs grep -l "componentDidCatch\\|ErrorBoundary" 2>/dev/null | head -1',
-      { encoding: 'utf-8', cwd: repoDir }
-    ).trim();
+    const errorBoundary = deps.react
+      ? execShellCommand(
+          'git ls-files | grep -E "\\.(tsx?|jsx?)$" | grep -Ev "(^|/)(test|tests|fixtures?)/|\\.(test|spec)\\." | xargs grep -l "componentDidCatch\\|ErrorBoundary" 2>/dev/null | head -1',
+          { encoding: 'utf-8', cwd: repoDir }
+        ).trim()
+      : '';
 
     if (errorBoundary) return 'React Error Boundaries';
 
-    // Parse package.json if not provided
-    const pkg = packageJson ?? parsePackageJson(repoDir);
-
     // Check for Sentry
     if (pkg.dependencies || pkg.devDependencies) {
-      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-
       if (deps['@sentry/react'] || deps['@sentry/node']) return 'Sentry';
     }
   } catch {

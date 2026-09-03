@@ -9,7 +9,7 @@ const execFileAsync = promisify(execFile);
 export type NormalizedCheckStatus = 'success' | 'pending' | 'failure' | 'neutral' | 'skipped' | 'unknown';
 export type CiConclusion = 'pass' | 'fail' | 'pending' | 'none' | 'unknown';
 export type RequiredContextsSource = 'branch-protection' | 'config' | 'none';
-export type CheckReadErrorType = 'command-failed' | 'timeout' | 'malformed-json' | 'network' | 'unknown';
+export type CheckReadErrorType = 'command-failed' | 'timeout' | 'malformed-json' | 'network' | 'head-mismatch' | 'unknown';
 
 export interface NormalizedCheckSummary {
   name: string;
@@ -236,7 +236,7 @@ export async function fetchPrCiStatus(
   prNumber: number,
   repoDir: string,
   deps: Partial<PrCiStatusDeps> = {},
-  options: { baseBranch?: string; requireChecks?: boolean } = {},
+  options: { baseBranch?: string; requireChecks?: boolean; expectedHeadSha?: string } = {},
 ): Promise<PrCiStatus> {
   const resolvedDeps = { ...prCiStatusDeps, ...deps };
   let stdout = '';
@@ -267,6 +267,39 @@ export async function fetchPrCiStatus(
     });
   }
 
+  const observedHeadSha = typeof parsed.headRefOid === 'string' && parsed.headRefOid.trim()
+    ? parsed.headRefOid.trim()
+    : undefined;
+
+  // Head-provenance guard (HOK-2938): when the caller knows which head it
+  // expects (e.g. it just pushed one), never evaluate a rollup belonging to a
+  // different head — checks from separate heads must never be combined.
+  // Pending is the conservative verdict: the caller keeps waiting for truth
+  // about its own head instead of promoting or blocking on another head's
+  // checks (a cancelled superseded run must be informational only).
+  const expectedHeadSha = options.expectedHeadSha?.trim();
+  if (expectedHeadSha && observedHeadSha !== expectedHeadSha) {
+    return {
+      conclusion: 'pending',
+      observed: 0,
+      passing: 0,
+      failing: [],
+      pending: [],
+      missingRequired: [],
+      requiredContexts: [],
+      checks: [],
+      headSha: observedHeadSha,
+      state: typeof parsed.state === 'string' ? parsed.state : undefined,
+      mergeable: typeof parsed.mergeable === 'string' ? parsed.mergeable : undefined,
+      mergeStateStatus: typeof parsed.mergeStateStatus === 'string' ? parsed.mergeStateStatus : undefined,
+      requiredSource: 'none',
+      readError: {
+        errorType: 'head-mismatch',
+        reason: `PR head is ${observedHeadSha ?? 'unknown'}, expected ${expectedHeadSha}; not evaluating checks from a different head`,
+      },
+    };
+  }
+
   const baseBranch = options.baseBranch || (typeof parsed.baseRefName === 'string' ? parsed.baseRefName : '');
   const required = await resolveRequiredContexts(baseBranch, repoDir, resolvedDeps);
   const checks = normalizeStatusCheckRollup(parsed.statusCheckRollup);
@@ -278,7 +311,7 @@ export async function fetchPrCiStatus(
   return {
     ...evaluation,
     checks,
-    headSha: typeof parsed.headRefOid === 'string' ? parsed.headRefOid : undefined,
+    headSha: observedHeadSha,
     state: typeof parsed.state === 'string' ? parsed.state : undefined,
     mergeable: typeof parsed.mergeable === 'string' ? parsed.mergeable : undefined,
     mergeStateStatus: typeof parsed.mergeStateStatus === 'string' ? parsed.mergeStateStatus : undefined,

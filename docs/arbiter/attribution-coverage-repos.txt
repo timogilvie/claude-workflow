@@ -1,0 +1,26 @@
+# HOK-2791 candidate external-repository attribution sample
+#
+# Selection protocol:
+# - Public GitHub repositories outside wavemill.
+# - Chosen from GitHub PR search results on 2026-09-02 for visible agent/model
+#   activity, mostly merged PRs authored by the Copilot SWE-agent app plus a
+#   small number with explicit Codex/Claude mentions.
+# - Measurement window: the most recent merged PRs returned by GitHub's closed
+#   PR API sorted by updated timestamp, capped uniformly by the scan --limit.
+# - This is a feasibility sample for candidate repos, not a prevalence estimate
+#   across all public GitHub repositories.
+github/gh-aw
+lowgrade12/myplugins
+CommsLRSD/LRSD-LitLab
+xadupre/locodellm
+mantelimustikka-prog/multisite-network-email-manager
+kristofer/WorryBoards
+finos/open-source-readiness
+AdG-pbi/CheckOutputPBI
+genomescan/gaia
+dbritto-dev/amzn-selling-partner-python
+erkaa2323-sudo/oni-kishin-web
+maorun/buisness-calculation
+colin-gourlay/qwerty
+gituserc1140/SSReverse1VidApp
+zaffnet/whetstone

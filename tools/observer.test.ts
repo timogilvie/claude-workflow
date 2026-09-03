@@ -863,6 +863,51 @@ test('fresh active challenge arm is not surfaced as stale', () => {
   }
 });
 
+test('stale active task with a surviving pane is surfaced as stalled residue', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-stale-live-pane-'));
+  const worktree = join(repoDir, 'worktrees', 'parked-agent');
+  mkdirSync(worktree, { recursive: true });
+  try {
+    const findings = buildFindings({
+      timestamp: new Date().toISOString(),
+      sessions: ['wavemill'],
+      panes: [{
+        session: 'wavemill',
+        windowIndex: '2',
+        paneIndex: '0',
+        windowName: 'HOK-2999-parked-agent',
+        active: true,
+        pid: 2999,
+        command: 'bash',
+        title: 'coding · codex',
+      }],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        tasks: [{
+          issue: 'HOK-2999',
+          slug: 'parked-agent',
+          phase: 'coding',
+          status: 'active',
+          worktree,
+          updated: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const stuck = findings.find((finding) => finding.id === 'stale-active-task-live-process-wavemill-HOK-2999');
+    assert.ok(stuck);
+    assert.equal(stuck.severity, 'high');
+    assert.equal(stuck.category, 'stuck');
+    assert.equal(stuck.confidence, 'medium');
+    assert.match(stuck.title, /live pane or process residue but has not progressed/);
+    assert.match(stuck.recommendation, /parked at a prompt/);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 test('duplicate observer finding respects pane title override', () => {
   const previous = process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE;
   process.env.WAVEMILL_BACKSTAGE_OBSERVER_PANE_TITLE = 'Custom Observer';
@@ -1117,6 +1162,55 @@ test('a single failed-ready re-check stays below the loop threshold', () => {
     }, defaultObserverOptions());
 
     assert.equal(findings.filter((finding) => finding.id.startsWith('ready-recheck-loop-')).length, 0);
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('current ready refusal logs surface a loop and prefer needs-attention context', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-ready-refusal-'));
+  const slug = 'ready-refusal-fixture';
+  const featureDir = join(repoDir, 'features', slug);
+  mkdirSync(featureDir, { recursive: true });
+  writeFileSync(join(featureDir, '.needs-attention'), 'Native review is still running after a provider timeout.\n');
+  writeFileSync(join(featureDir, '.ready-result.json'), JSON.stringify({
+    stage: 'ready',
+    status: 'failed',
+    artifacts: { failureReason: 'less precise nested fallback' },
+  }));
+
+  const logPath = join(repoDir, 'mill-wavemill.log');
+  writeFileSync(logPath, [
+    '08:20:01 [ready] HOK-2919: refusing ready phase for PR #1311; review result status is running',
+    '08:20:41 [ready] HOK-2919: refusing ready phase for PR #1311; review result status is running',
+    '08:21:21 [ready] HOK-2919: refusing ready phase for PR #1311; review result status is running',
+  ].join('\n'));
+
+  try {
+    const findings = buildFindings({
+      timestamp: '2026-09-03T12:22:00.000Z',
+      sessions: ['wavemill'],
+      panes: [],
+      processes: [],
+      repos: [{
+        session: 'wavemill',
+        repoDir,
+        millLogPath: logPath,
+        tasks: [{
+          issue: 'HOK-2919',
+          slug,
+          phase: 'ready',
+          status: 'active',
+          pr: '1311',
+          worktree: repoDir,
+        }],
+      }],
+    }, defaultObserverOptions());
+
+    const loop = findings.find((finding) => finding.id === 'ready-recheck-loop-wavemill-HOK-2919-1311');
+    assert.ok(loop);
+    assert.equal(loop.evidence[0], 'occurrences=3');
+    assert.match(loop.evidence[2], /Native review is still running/);
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
@@ -1596,6 +1690,69 @@ test('generic log errors do not fire pr-create-failed', () => {
 
     assert.equal(findings.some((finding) => finding.id.startsWith('pr-create-failed-')), false);
     assert.ok(findings.some((finding) => finding.id.startsWith('log-error-')));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+test('merge-lane disagreement and stalled-lane JSONL findings survive ingestion and dedup (HOK-2919)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-merge-lane-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const disagreement = {
+      subsystem: 'merge-lane',
+      title: 'Mill and tend disagree on PR #1265 merge candidacy',
+      body: 'The mill merge queue holds PR #1265 as a merge candidate (live CI pass: 16/3 checks @eb20cac), '
+        + "but tend blocks it with gate 'challenge:pair-unresolved:branch-pair'.",
+      severity: 'high',
+      recommendation: 'Reconcile the mill and tend views of PR #1265.',
+      context: {
+        markerPath: 'merge-lane/1265/mill-tend-disagreement',
+        markerKind: 'merge-lane-disagreement',
+        prNumber: 1265,
+        labels: 'wavemill,wm:ready',
+        tendBlockReason: 'challenge:pair-unresolved:branch-pair',
+        millQueueState: 'merge-candidate',
+      },
+    };
+    const stalled = {
+      subsystem: 'merge-lane',
+      title: 'Merge lane stalled: 1 blocked PR, 0 eligible for 30 consecutive polls',
+      severity: 'urgent',
+      context: {
+        markerPath: 'merge-lane/idle-stall/#1265',
+        markerKind: 'merge-lane-idle-stall',
+        firstBlockedPr: 1265,
+        firstBlockedGate: 'challenge:pair-unresolved:branch-pair',
+        consecutivePolls: 30,
+      },
+    };
+    mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+    writeFileSync(
+      join(repoDir, '.wavemill', 'observer-findings.jsonl'),
+      [disagreement, stalled, disagreement].map((finding) => JSON.stringify(finding)).join('\n'),
+    );
+
+    const findings = buildFindings(basicSnapshot(repoDir), defaultObserverOptions());
+    const disagreementFindings = findings.filter((finding) => finding.id.includes('mill-tend-disagreement'));
+    const stalledFindings = findings.filter((finding) => finding.id.includes('merge-lane-idle-stall'));
+
+    // Distinct ids per finding kind; the duplicated disagreement line dedupes to one.
+    assert.equal(disagreementFindings.length, 1);
+    assert.equal(stalledFindings.length, 1);
+    assert.notEqual(disagreementFindings[0].id, stalledFindings[0].id);
+
+    // Severity and per-finding recommendation are preserved through ingestion.
+    assert.equal(disagreementFindings[0].severity, 'high');
+    assert.equal(disagreementFindings[0].recommendation, 'Reconcile the mill and tend views of PR #1265.');
+    assert.equal(stalledFindings[0].severity, 'urgent');
+
+    // Actionable evidence: PR number, gate, labels, and queue state survive.
+    assert.ok(disagreementFindings[0].evidence.includes('prNumber=1265'));
+    assert.ok(disagreementFindings[0].evidence.includes('tendBlockReason=challenge:pair-unresolved:branch-pair'));
+    assert.ok(disagreementFindings[0].evidence.includes('millQueueState=merge-candidate'));
+    assert.ok(stalledFindings[0].evidence.includes('firstBlockedGate=challenge:pair-unresolved:branch-pair'));
+    assert.ok(stalledFindings[0].evidence.includes('consecutivePolls=30'));
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }

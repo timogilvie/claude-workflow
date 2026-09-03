@@ -24,6 +24,13 @@ MONITOR_SCRIPT_FILE="$REPO_DIR/shared/lib/wavemill-monitor.sh"
 # HOK-2906: _with_timeout is gone from both local scopes; the canonical
 # implementation lives in shared/lib/wavemill-common.sh, alongside
 # wavemill_git_remote_with_timeout.
+# HOK-2924: challenge_eval_retry_max_attempts and
+# challenge_eval_hard_failure_max_retries are gone from both local scopes;
+# the canonical ceilings live in shared/lib/wavemill-common.sh next to
+# resolve_challenge_pair_hard_failure, which consumes them.
+# HOK-2923: set_window_attention_state and clear_window_attention_state remain
+# intentionally duplicated while both parent and monitor scopes are migrated
+# to the shared transient-marker lifecycle contract.
 EXPECTED_DIVERGENT=""
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/wavemill-parent-monitor-drift.XXXXXX")"

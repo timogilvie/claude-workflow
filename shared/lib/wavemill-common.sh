@@ -2,6 +2,13 @@
 # Wavemill Common Library
 # Shared functions used across wavemill-mill.sh and wavemill-expand.sh
 
+# Bounded-retry invariant helpers (HOK-2924): every relaunch path counts
+# attempts, backs off, terminalizes at a ceiling, and resets on a new head SHA
+# through this one module. Sourced here so the mill, monitor, and startup
+# runner all inherit the same implementation.
+# shellcheck source=bounded-retry.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded-retry.sh"
+
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
 WAVEMILL_WINDOW_BACKSTAGE="${WAVEMILL_WINDOW_BACKSTAGE:-backstage}"
@@ -369,6 +376,153 @@ cleanup_remote_task_branch() {
   fi
 }
 
+_wavemill_write_preserved_branch_incident() {
+  local reason="$1" branch="$2" wt_dir="$3" base_branch="$4" commits_ahead="$5" commit_shas="$6" caller="${7:-cleanup}"
+  local incident_dir marker_name marker_path tmp_path created_at
+
+  [[ -n "${REPO_DIR:-}" && -n "$branch" ]] || return 1
+
+  incident_dir="$REPO_DIR/.wavemill/incidents/preserved-branches"
+  marker_name="${branch//\//__}.json"
+  marker_path="$incident_dir/$marker_name"
+  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  mkdir -p "$incident_dir" 2>/dev/null || return 1
+  tmp_path="$(mktemp "$incident_dir/.${marker_name}.XXXXXX")" || return 1
+  if jq -cn \
+    --arg reason "$reason" \
+    --arg branch "$branch" \
+    --arg worktree "$wt_dir" \
+    --arg baseBranch "$base_branch" \
+    --arg commitsAhead "$commits_ahead" \
+    --arg commitShas "$commit_shas" \
+    --arg createdAt "$created_at" \
+    --arg caller "$caller" \
+    '{
+      reason: $reason,
+      branch: $branch,
+      worktree: $worktree,
+      baseBranch: $baseBranch,
+      commitsAhead: (if ($commitsAhead | test("^[0-9]+$")) then ($commitsAhead | tonumber) else null end),
+      commitShas: ($commitShas | split("\n") | map(select(length > 0))),
+      createdAt: $createdAt,
+      caller: $caller
+    }' > "$tmp_path"; then
+    mv "$tmp_path" "$marker_path"
+    return 0
+  fi
+
+  rm -f "$tmp_path" 2>/dev/null || true
+  return 1
+}
+
+safe_remove_task_worktree_and_branch() {
+  local wt_dir="${1:-}"
+  local task_branch="${2:-}"
+  local base_branch="${3:-${BASE_BRANCH:-main}}"
+  local caller="${4:-cleanup}"
+  local branch_is_deletable="false"
+  local dirty_status=""
+  local local_branch_exists="false"
+  local remote_branch_exists="false"
+  local base_ref=""
+  local commits_ahead=""
+  local commit_shas=""
+  local rev_list_ok="false"
+  local merged_to_base="false"
+
+  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
+    log_warn "  Refusing to delete protected branch: $task_branch"
+    return 0
+  fi
+
+  if [[ -n "$task_branch" ]]; then
+    case "$task_branch" in
+      task/*) branch_is_deletable="true" ;;
+      *) log "debug" "$caller: retaining non-task local branch $task_branch" ;;
+    esac
+  fi
+
+  if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
+    if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
+      if ! _wavemill_write_preserved_branch_incident "dirty_worktree" "$task_branch" "$wt_dir" "$base_branch" "" "" "$caller"; then
+        log_warn "  Failed to write preserved-branch incident marker for $task_branch"
+      fi
+      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} status could not be inspected; retained (branch=${task_branch})."
+      return 10
+    fi
+    if [[ -n "$dirty_status" ]]; then
+      if ! _wavemill_write_preserved_branch_incident "dirty_worktree" "$task_branch" "$wt_dir" "$base_branch" "" "" "$caller"; then
+        log_warn "  Failed to write preserved-branch incident marker for $task_branch"
+      fi
+      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} has uncommitted changes; retained (branch=${task_branch})."
+      return 10
+    fi
+  fi
+
+  if [[ "$branch_is_deletable" == "true" ]] \
+    && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+    local_branch_exists="true"
+    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/origin/$task_branch" 2>/dev/null; then
+      remote_branch_exists="true"
+    fi
+
+    if git -C "$REPO_DIR" rev-parse --verify --quiet "${base_branch}^{commit}" >/dev/null 2>&1; then
+      base_ref="$base_branch"
+    elif git -C "$REPO_DIR" rev-parse --verify --quiet "origin/${base_branch}^{commit}" >/dev/null 2>&1; then
+      base_ref="origin/$base_branch"
+    fi
+
+    if [[ -n "$base_ref" ]]; then
+      if git -C "$REPO_DIR" merge-base --is-ancestor "$task_branch" "$base_ref" 2>/dev/null; then
+        merged_to_base="true"
+      fi
+      if commits_ahead="$(git -C "$REPO_DIR" rev-list --count "${base_ref}..${task_branch}" 2>/dev/null)" \
+        && [[ "$commits_ahead" =~ ^[0-9]+$ ]]; then
+        rev_list_ok="true"
+        commit_shas="$(git -C "$REPO_DIR" rev-list "${base_ref}..${task_branch}" 2>/dev/null || true)"
+      fi
+    fi
+
+    if [[ "$rev_list_ok" != "true" ]]; then
+      commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
+      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "" "$commit_shas" "$caller"; then
+        log_warn "  Failed to write preserved-branch incident marker for $task_branch"
+      fi
+      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch could not be compared to $base_branch; retained. Recover with: git -C $REPO_DIR push origin $task_branch"
+      return 10
+    fi
+
+    if (( commits_ahead > 0 )) && [[ "$remote_branch_exists" != "true" && "$merged_to_base" != "true" ]]; then
+      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller"; then
+        log_warn "  Failed to write preserved-branch incident marker for $task_branch"
+      fi
+      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch has $commits_ahead unpushed commit(s) not on origin/${base_branch}; retained. Recover with: git -C $REPO_DIR push origin $task_branch"
+      return 10
+    fi
+  fi
+
+  if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" worktree remove "$wt_dir" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Removed worktree: $wt_dir"
+    else
+      log_warn "  Worktree cleanup failed: $wt_dir"
+      return 20
+    fi
+  fi
+
+  if [[ "$local_branch_exists" == "true" ]]; then
+    if wavemill_cleanup_run git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+      log "debug" "Deleted local branch: $task_branch"
+    else
+      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
+      return 20
+    fi
+  fi
+
+  return 0
+}
+
 # Canonical completed-task cleanup order:
 # 1. archive artifacts, 2. close pane/window, 3. remove worktree,
 # 4. remove local branch, 5. remove eligible remote branch,
@@ -411,28 +565,16 @@ cleanup_completed_task() {
   log "debug" "Closed window: $win"
 
   local wt_dir="${WORKTREE_ROOT}/${slug}"
-  if [[ -d "$wt_dir" ]]; then
-    if wavemill_cleanup_run git -C "$REPO_DIR" worktree remove "$wt_dir" --force >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "Removed worktree: $wt_dir"
-    else
-      log_warn "  Worktree cleanup failed: $wt_dir"
-      return 1
-    fi
-  fi
-
   local task_branch="task/${slug}"
-  if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
-    log_warn "  Refusing to delete protected branch: $task_branch"
-  elif git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
-    if wavemill_cleanup_run git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
-      log "debug" "Deleted local branch: $task_branch"
-    else
-      log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
-      return 1
-    fi
+  local cleanup_rc=0
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" || cleanup_rc=$?
+  if [[ "$cleanup_rc" -eq 20 ]]; then
+    return 1
   fi
 
-  cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+  if [[ "$cleanup_rc" -ne 10 ]]; then
+    cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+  fi
 
   wavemill_cleanup_run git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
@@ -444,6 +586,33 @@ cleanup_completed_task() {
     log "$issue: Complete ($completion_reason)"
   else
     log "$issue: Complete"
+  fi
+}
+
+# Canonical challenge-eval retry ceilings (HOK-2924). Formerly duplicated in
+# wavemill-mill.sh and the monitor; both scopes source this file.
+challenge_eval_retry_max_attempts() {
+  local max_attempts
+  max_attempts=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.retryMaxAttempts // 1' 2>/dev/null || echo "1")
+  if [[ "$max_attempts" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_attempts"
+  else
+    printf '1\n'
+  fi
+}
+
+challenge_eval_hard_failure_max_retries() {
+  local max_retries
+  if [[ -n "${WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES+x}" && "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$WAVEMILL_EVAL_HARD_FAILURE_MAX_RETRIES"
+    return
+  fi
+
+  max_retries=$(wavemill_load_config "$REPO_DIR" | jq -r '.challenge.eval.hardFailureRetryMaxAttempts // 2' 2>/dev/null || echo "2")
+  if [[ "$max_retries" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$max_retries"
+  else
+    printf '2\n'
   fi
 }
 

@@ -26,6 +26,14 @@ import { updateBranchWithBase, type BranchBaseUpdateResult } from './promotion-c
 import { escapeShellArg } from './shell-utils.ts';
 import { mutateJsonState } from './state-mutex.ts';
 import { readStageResult, updateStageResult, type ReadyArtifacts, type StageResult } from './stage-result.ts';
+import {
+  writeMarker,
+  clearMarker,
+  readMarker,
+  validateMarker,
+  buildStaleMarkerFinding,
+  type MarkerHandle,
+} from './transient-marker.ts';
 import { readChallengeComparisons, type StoredChallengeComparison } from './challenge-comparison.ts';
 import {
   classifyChallengeState,
@@ -178,6 +186,7 @@ export interface ReadyWatchdogStateEntry {
   updatedAt: string;
   idleMinutes: number | null;
   lastProgressAt: string | null;
+  currentHeadSha?: string | null;
   prStateKey?: string;
   detailFingerprint?: string;
   classificationSince?: string;
@@ -271,7 +280,7 @@ export interface ResolvedConflictResumeResult {
 }
 
 export interface ReadyRemediationLaunchResult {
-  status: 'launched' | 'skipped-in-flight' | 'skipped-max-attempts' | 'failed';
+  status: 'launched' | 'skipped-in-flight' | 'skipped-backoff' | 'skipped-max-attempts' | 'failed';
   detail: string;
   attemptNumber: number;
   launchHead?: string;
@@ -643,6 +652,14 @@ function readAttentionDetail(stateDir: string): string | null {
 
   try {
     const content = readFileSync(file, 'utf-8');
+    try {
+      const parsed = JSON.parse(content) as { schemaVersion?: unknown; reason?: unknown };
+      if (parsed?.schemaVersion === 1 && typeof parsed.reason === 'string') {
+        return parsed.reason.trim() || null;
+      }
+    } catch {
+      // Legacy plain-text marker.
+    }
     return content.split(/\r?\n/, 1)[0]?.trim() || null;
   } catch {
     return null;
@@ -1408,8 +1425,8 @@ async function recoverReadyState(
   deps: ReadyWatchdogDeps,
   note = 'Ready watchdog cleared stale local state and queued a re-check.',
 ): Promise<void> {
-  await rm(path.join(snapshot.readyStateDir, '.needs-attention'), { force: true });
-  await rm(path.join(snapshot.readyStateDir, '.conflict-detected'), { force: true });
+  clearMarker({ path: path.join(snapshot.readyStateDir, '.needs-attention'), kind: 'ready-attention' });
+  clearMarker({ path: path.join(snapshot.readyStateDir, '.conflict-detected'), kind: 'ready-conflict' });
   await rm(path.join(snapshot.readyStateDir, '.conflict-attention-head'), { force: true });
   await rm(path.join(snapshot.readyStateDir, '.conflict-attention-reported'), { force: true });
 
@@ -1452,7 +1469,12 @@ async function recoverReadyState(
 
 async function writeReadyAttention(snapshot: ReadyTaskSnapshot, detail: string): Promise<void> {
   const firstLine = detail.split(/\r?\n/, 1)[0]?.trim() || detail;
-  await writeFile(path.join(snapshot.readyStateDir, '.needs-attention'), `${firstLine}\n`, 'utf-8');
+  const markerPath = path.join(snapshot.readyStateDir, '.needs-attention');
+  const headSha = snapshot.currentHead || 'unknown';
+  writeMarker(
+    { path: markerPath, kind: 'ready-attention' },
+    { headSha, reason: firstLine },
+  );
 }
 
 async function writeAuditRecord(repoDir: string, record: ReadyWatchdogAuditRecord): Promise<void> {
@@ -1470,13 +1492,90 @@ async function loadPriorWatchdogState(repoDir: string): Promise<ReadyWatchdogSta
   }
 }
 
+function appendMarkerLifecycleFinding(repoDir: string, finding: ReturnType<typeof buildStaleMarkerFinding>): void {
+  if (!finding) {
+    return;
+  }
+  try {
+    const findingsFile = path.join(repoDir, '.wavemill', 'observer-findings.jsonl');
+    const normalized = {
+      subsystem: finding.subsystem,
+      title: finding.title,
+      body: finding.body,
+      severity: finding.severity ?? 'warning',
+      context: finding.context,
+    };
+    appendFile(findingsFile, `${JSON.stringify(normalized)}\n`, 'utf-8').catch(() => undefined);
+  } catch {
+    // Observer findings are diagnostic; state persistence must continue.
+  }
+}
+
+async function filterValidWatchdogEntries(
+  repoDir: string,
+  findings: ReadyWatchdogStateEntry[],
+): Promise<ReadyWatchdogStateEntry[]> {
+  const retained: ReadyWatchdogStateEntry[] = [];
+
+  for (const entry of findings) {
+    const recordedSha = entry.terminalHeadSha ?? entry.transientFailureHead;
+    const currentHead = entry.currentHeadSha;
+    if (!recordedSha || !currentHead) {
+      retained.push(entry);
+      continue;
+    }
+
+    const markerPath = path.join(repoDir, '.wavemill', 'ready-watchdog-state', `${entry.issueId}.json`);
+    const markerHandle: MarkerHandle = { path: markerPath, kind: 'ready-watchdog-classification' };
+    const existingMarker = readMarker(markerHandle);
+    if (
+      existingMarker.status !== 'present' ||
+      existingMarker.payload.headSha !== recordedSha ||
+      existingMarker.payload.reason !== entry.classification
+    ) {
+      writeMarker(markerHandle, {
+        headSha: recordedSha,
+        reason: entry.classification,
+        detail: {
+          issueId: entry.issueId,
+          prNumber: entry.prNumber,
+          action: entry.action,
+        },
+      });
+    }
+
+    const validation = await validateMarker(markerHandle, {
+      currentHead,
+      deriveCondition: (payload) => payload.reason === entry.classification,
+    });
+
+    if (validation.status === 'valid') {
+      retained.push(entry);
+      continue;
+    }
+
+    appendMarkerLifecycleFinding(
+      repoDir,
+      buildStaleMarkerFinding(markerHandle, validation, {
+        repo: repoDir,
+        prNumber: entry.prNumber,
+        taskId: entry.issueId,
+      }),
+    );
+    clearMarker(markerHandle);
+  }
+
+  return retained;
+}
+
 async function writeStateFile(repoDir: string, findings: ReadyWatchdogStateEntry[], now: Date): Promise<void> {
   const statePath = path.join(repoDir, '.wavemill', 'ready-watchdog-state.json');
+  const validFindings = await filterValidWatchdogEntries(repoDir, findings);
   await mutateJsonState<ReadyWatchdogStateFile>(
     statePath,
     () => ({
       updatedAt: now.toISOString(),
-      tasks: Object.fromEntries(findings.map((entry) => [entry.issueId, entry])),
+      tasks: Object.fromEntries(validFindings.map((entry) => [entry.issueId, entry])),
     }),
     {
       createIfMissing: true,
@@ -1525,6 +1624,7 @@ function buildFindingEntry(input: {
     updatedAt: input.now.toISOString(),
     idleMinutes: input.snapshot.idleMinutes,
     lastProgressAt: input.snapshot.lastProgressAt,
+    currentHeadSha: input.snapshot.currentHead,
     prStateKey: buildPrStateKey(input.githubTruth ?? null),
     detailFingerprint: buildReadyWatchdogFingerprint({ classification: input.classification, detail: input.detail }),
     autoUpdateAttempts: input.autoUpdateAttempts,
@@ -1640,6 +1740,44 @@ function buildRemediationPayloadSummary(classification: ReadyWatchdogClassificat
     classification.logExcerpt ? `logExcerpt:\n${classification.logExcerpt}` : '',
   ].filter(Boolean);
   return parts.join('\n');
+}
+
+/** Classify a failure for reconciliation purposes (REQ-F3: distinct categories for retry/LLM decisions). */
+export function classifyForReconciliation(options: {
+  mergeStatus?: string;
+  failedCheckSummary?: string;
+  checksRun?: number;
+  checksPassed?: number;
+}): 'stale_base_clean' | 'ci_transient' | 'ci_deterministic_safe' | 'merge_conflict' | 'ambiguous' {
+  const { mergeStatus, failedCheckSummary = '', checksRun = 0, checksPassed = 0 } = options;
+
+  if (mergeStatus === 'CONFLICTED') {
+    return 'merge_conflict';
+  }
+
+  if (!failedCheckSummary || checksRun === 0) {
+    return 'stale_base_clean';
+  }
+
+  const summary = failedCheckSummary.toLowerCase();
+  if (
+    summary.includes('timeout') ||
+    summary.includes('transient') ||
+    summary.includes('temporary') ||
+    summary.includes('intermittent')
+  ) {
+    return 'ci_transient';
+  }
+
+  if (summary.includes('conflicted') || summary.includes('merge')) {
+    return 'merge_conflict';
+  }
+
+  if (checksRun > 0 && checksPassed < checksRun) {
+    return 'ci_deterministic_safe';
+  }
+
+  return 'ambiguous';
 }
 
 /** Emit a ready-phase trace event from the feature directory — best-effort, never throws. */
@@ -2064,6 +2202,8 @@ export async function tickReadyWatchdog(options: TickReadyWatchdogOptions): Prom
               action = 'launched-remediation';
             } else if (launchResult.status === 'skipped-in-flight') {
               action = 'remediation-in-flight';
+            } else if (launchResult.status === 'skipped-backoff') {
+              action = 'remediation-backoff';
             } else if (launchResult.status === 'skipped-max-attempts') {
               action = 'remediation-exhausted';
             } else {

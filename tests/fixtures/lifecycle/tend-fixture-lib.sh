@@ -156,6 +156,16 @@ if [[ "${1:-}" == "rev-parse" && "${2:-}" == origin/* ]]; then
   exit 0
 fi
 
+if [[ "${1:-}" == "rev-parse" && "${2:-}" == "HEAD" ]]; then
+  printf '%s\n' "${GIT_HEAD_SHA:-${GIT_BRANCH_SHA:-2222222222222222222222222222222222222222}}"
+  exit 0
+fi
+
+if [[ "${1:-}" == "merge-base" && "${2:-}" == "--is-ancestor" ]]; then
+  # Exit 1 = "not an ancestor", so tend's pre-merge rebase still runs by default.
+  exit "${GIT_MERGE_BASE_ANCESTOR_EXIT:-1}"
+fi
+
 if [[ "${1:-}" == "show-ref" && "${2:-}" == "--verify" && "${3:-}" == "--quiet" ]]; then
   if [[ "${GIT_STUB_BASE_REF_AVAILABLE:-1}" != "0" ]] \
     && [[ "${4:-}" == "refs/remotes/origin/auto/integration" || "${4:-}" == "refs/heads/auto/integration" ]]; then
@@ -262,6 +272,7 @@ write_pr_view() {
   "state": "OPEN",
   "author": { "login": "wavemill" },
   "headRefName": "${branch}",
+  "headRefOid": "${GIT_HEAD_SHA:-${GIT_BRANCH_SHA:-2222222222222222222222222222222222222222}}",
   "baseRefName": "${base_branch}",
   "labels": ${labels_json},
   "url": "https://github.com/${GH_REPO:-acme/widgets}/pull/${pr_number}",

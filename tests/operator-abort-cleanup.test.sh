@@ -38,6 +38,12 @@ cleanup_file="$tmp/operator-abort-cleanup.sh"
 {
   extract_function "$MILL_SCRIPT" "set_task_phase"
   printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_cleanup_run"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "remove_task_state"
   printf '\n'
   extract_function "$MONITOR_SCRIPT_FILE" "mark_task_aborted_for_cleanup"
@@ -109,8 +115,13 @@ EOF
       fi
       GIT_CALLS+="$*;"
       case "${1:-} ${2:-}" in
+        "status --porcelain") return 0 ;;
         "worktree remove") ORDER+="git-worktree;" ; return 0 ;;
         "show-ref --verify") return 0 ;;
+        "rev-parse --verify") return 0 ;;
+        "merge-base --is-ancestor") return 0 ;;
+        "rev-list --count") printf "0\n" ; return 0 ;;
+        "rev-list "*) return 0 ;;
         "branch -D") ORDER+="git-branch;" ; return 0 ;;
         "worktree prune") return 0 ;;
       esac

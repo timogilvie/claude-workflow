@@ -1,7 +1,7 @@
 # Subsystem: {NAME}
 
 **Last updated:** {TIMESTAMP}
-**Files touched:** {FILE_COUNT} files in last 30 days
+**Recent commits:** {FILE_COUNT} in the last 30 days
 **Subsystem ID:** `{ID}`
 
 ## Purpose
