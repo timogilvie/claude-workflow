@@ -4259,6 +4259,160 @@ clear_challenger_transient_retry_state() {
   rm -f "$1/.challenger-transient-retries.json" 2>/dev/null || true
 }
 
+challenger_transient_retry_diagnostic_file() {
+  printf '%s\n' "$1/.challenger-transient-retry-diagnostic.json"
+}
+
+challenger_transient_retry_result_head() {
+  local feature_dir="$1" stage="$2"
+  jq -r '(.headSha // .head // .artifacts.headSha // .artifacts.launchHead // empty)' \
+    "$feature_dir/.${stage}-result.json" 2>/dev/null || true
+}
+
+challenger_transient_retry_intent_json() {
+  local issue="$1" feature_dir="$2"
+  local intent_json path
+
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    intent_json="$(jq -c --arg i "$issue" '(.tasks[$i].challengeExecutionIntent // .tasks[$i].challengeIntent // empty)' "$STATE_FILE" 2>/dev/null || true)"
+    [[ "$intent_json" != "null" && -n "$intent_json" ]] && {
+      printf '%s\n' "$intent_json"
+      return 0
+    }
+  fi
+
+  for path in "$feature_dir/challenge-intent.json" "$feature_dir/.challenge-intent.json"; do
+    [[ -f "$path" ]] || continue
+    jq -c '.' "$path" 2>/dev/null || {
+      printf '%s\n' '{"__wavemillInvalidIntent":true}'
+      return 0
+    }
+    return 0
+  done
+
+  return 1
+}
+
+resolve_challenger_transient_retry_launch_intent() {
+  local issue="$1" feature_dir="$2" stage="$3" current_head="${4:-}"
+  local pair_id intent_json launch_stage result_head intent_source
+
+  pair_id="$(get_task_meta "$issue" "challengePairId" 2>/dev/null || true)"
+  launch_stage="$(challenge_stage_for_launch_env "$stage")"
+  result_head="$(challenger_transient_retry_result_head "$feature_dir" "$stage")"
+  if [[ -n "$result_head" && -n "$current_head" && "$result_head" != "$current_head" ]]; then
+    jq -cn --arg reason "stale_head" --arg stage "$launch_stage" \
+      --arg resultHead "$result_head" --arg currentHead "$current_head" \
+      '{ok:false,reason:$reason,stage:$stage,resultHead:$resultHead,currentHead:$currentHead}'
+    return 0
+  fi
+
+  if ! intent_json="$(challenger_transient_retry_intent_json "$issue" "$feature_dir")"; then
+    jq -cn --arg reason "missing_challenge_intent" --arg stage "$launch_stage" \
+      '{ok:false,reason:$reason,stage:$stage}'
+    return 0
+  fi
+
+  if printf '%s' "$intent_json" | jq -e '.__wavemillInvalidIntent == true' >/dev/null 2>&1; then
+    jq -cn --arg reason "invalid_challenge_intent_json" --arg stage "$launch_stage" \
+      '{ok:false,reason:$reason,stage:$stage}'
+    return 0
+  fi
+
+  intent_source="state"
+  jq -c \
+    --arg issue "$issue" \
+    --arg pair "$pair_id" \
+    --arg stage "$launch_stage" \
+    --arg source "$intent_source" \
+    --arg resultHead "$result_head" \
+    --arg currentHead "$current_head" \
+    '
+      if (type != "object") then
+        {ok:false, reason:"invalid_challenge_intent_schema"}
+      elif (($pair == "") or ((.pairId // "") != $pair)) then
+        {ok:false, reason:"pair_mismatch"}
+      elif ((.selectedStage // .challengeStage // "") != $stage) then
+        {ok:false, reason:"stage_mismatch"}
+      elif ((.challenger // null) == null or (.challenger | type) != "object") then
+        {ok:false, reason:"missing_challenger_intent"}
+      else
+        (.challenger) as $side
+        | ($side.role // $side.side // "") as $role
+        | ($side.key // "") as $key
+        | ($side.expectedStageAgent // (if $stage == "plan" then $side.planner.agent elif $stage == "implementation" then $side.coder.agent else $side.reviewer.agent end) // "") as $agent
+        | ($side.expectedStageModel // (if $stage == "plan" then $side.planner.model elif $stage == "implementation" then $side.coder.model else $side.reviewer.model end) // "") as $model
+        | if ($role != "challenger") then
+            {ok:false, reason:"challenger_side_mismatch"}
+          elif ($key != "" and $key != $issue) then
+            {ok:false, reason:"challenger_key_mismatch"}
+          elif ((($agent | type) != "string") or ($agent == "")) then
+            {ok:false, reason:"missing_launch_agent"}
+          elif ((($model | type) != "string") or ($model == "")) then
+            {ok:false, reason:"missing_launch_model"}
+          elif ($agent == "native") then
+            {ok:false, reason:"ambiguous_launch_agent"}
+          else
+            {ok:true, agent:$agent, model:$model, stage:$stage, source:$source}
+          end
+      end
+      | . + {resultHead:$resultHead, currentHead:$currentHead}
+    ' <<< "$intent_json" 2>/dev/null || jq -cn --arg reason "invalid_challenge_intent_schema" '{ok:false,reason:$reason}'
+}
+
+record_challenger_transient_retry_contract_failure() {
+  local issue="$1" feature_dir="$2" win="$3" stage="$4" reason="$5" detail="$6"
+  local result_agent="${7:-}" launch_agent="${8:-}" model="${9:-}"
+  local terminal_reason next_action diag_file tmp now terminal_class
+
+  case "$reason" in
+    stale_head)
+      terminal_class="retry_intent_mismatch"
+      ;;
+    stage_mismatch)
+      terminal_class="retry_intent_mismatch"
+      ;;
+    pair_mismatch)
+      terminal_class="retry_intent_mismatch"
+      ;;
+    challenger_key_mismatch)
+      terminal_class="retry_intent_mismatch"
+      ;;
+    challenger_side_mismatch)
+      terminal_class="retry_intent_mismatch"
+      ;;
+    *)
+      terminal_class="retry_contract_invalid"
+      ;;
+  esac
+  terminal_reason="${terminal_class}:${reason}"
+  next_action="Fix the persisted challenge execution intent before retrying this challenger."
+  now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+  mkdir -p "$feature_dir" 2>/dev/null || true
+  diag_file="$(challenger_transient_retry_diagnostic_file "$feature_dir")"
+  tmp="$diag_file.tmp.$$"
+  jq -n -S \
+    --arg issue "$issue" \
+    --arg stage "$(challenge_stage_for_launch_env "$stage")" \
+    --arg reason "$terminal_reason" \
+    --arg detail "$detail" \
+    --arg resultAgent "$result_agent" \
+    --arg launchAgent "$launch_agent" \
+    --arg model "$model" \
+    --arg recordedAt "$now" \
+    '{issue:$issue, stage:$stage, reason:$reason, detail:$detail, recordedAt:$recordedAt}
+     + (if $resultAgent == "" then {} else {resultAgent:$resultAgent} end)
+     + (if $launchAgent == "" then {} else {launchAdapter:$launchAgent} end)
+     + (if $model == "" then {} else {model:$model} end)' \
+    > "$tmp" 2>/dev/null && mv "$tmp" "$diag_file" || rm -f "$tmp"
+
+  challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
+    "$terminal_reason" "$detail" "$next_action" "single" || true
+  cleanup_quarantined_no_pr_challenge_arm "$issue" "$feature_dir" "$stage" "$terminal_reason" || true
+  log_warn "$issue → challenger transient retry blocked at ${stage} (${terminal_reason}), no relaunch attempted."
+}
+
 # Relaunch a challenger arm's failed phase after a transient provider error.
 #
 # Called from the three stage-failed branches of monitor_issue_state, before
@@ -4273,8 +4427,9 @@ clear_challenger_transient_retry_state() {
 maybe_retry_challenger_transient_phase() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4"
   local is_challenge role existing detail failure_kind retry_file retry_state
-  local stored_stage count last_at now max backoff agent model
+  local stored_stage stored_head count last_at now max backoff agent model result_agent
   local slug wt_dir branch title issue_json contract_payload depth review_mode rc=0
+  local current_head launch_identity launch_ok launch_reason launch_detail lock_dir lock_acquired=0
 
   # 1. Applicability: challenger arm of a live challenge, transient failure kind.
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
@@ -4292,15 +4447,45 @@ maybe_retry_challenger_transient_phase() {
   failure_kind="$(native_terminal_failure_kind "$detail")"
   [[ "$failure_kind" == "provider-transient-error" ]] || return 1
 
+  slug="$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')"
+  [[ -n "$slug" ]] || return 1
+  wt_dir="$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')"
+  [[ -n "$wt_dir" ]] || wt_dir="${WORKTREE_ROOT}/${slug}"
+  [[ -d "$wt_dir" ]] || return 1
+  current_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+
+  # Result provenance and launch adapter identity are different contracts. The
+  # failed stage may record agent=native for audit history; relaunch must recover
+  # the provider-aware adapter, such as native-openrouter, from immutable intent.
+  result_agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
+  launch_identity="$(resolve_challenger_transient_retry_launch_intent "$issue" "$feature_dir" "$stage" "$current_head")"
+  launch_ok="$(printf '%s' "$launch_identity" | jq -r 'if .ok == true then "true" else "false" end' 2>/dev/null || echo false)"
+  agent="$(printf '%s' "$launch_identity" | jq -r '.agent // ""' 2>/dev/null || echo "")"
+  model="$(printf '%s' "$launch_identity" | jq -r '.model // ""' 2>/dev/null || echo "")"
+  if [[ "$launch_ok" != "true" ]]; then
+    launch_reason="$(printf '%s' "$launch_identity" | jq -r '.reason // "invalid_challenge_intent_schema"' 2>/dev/null || echo "invalid_challenge_intent_schema")"
+    launch_detail="Challenger ${stage} transient retry could not reconstruct launch identity from challenge execution intent: ${launch_reason}"
+    record_challenger_transient_retry_contract_failure "$issue" "$feature_dir" "$win" "$stage" "$launch_reason" "$launch_detail" "$result_agent" "$agent" "${model:-$(stage_result_field "$feature_dir" "$stage" "model")}"
+    return 1
+  fi
+  if ! agent_validate_phase_launch "$agent" "$stage" "$model" "$REPO_DIR"; then
+    launch_reason="unsupported_launch_identity"
+    launch_detail="Challenger ${stage} transient retry intent is not launchable (adapter=${agent:-?} model=${model:-?})"
+    record_challenger_transient_retry_contract_failure "$issue" "$feature_dir" "$win" "$stage" "$launch_reason" "$launch_detail" "$result_agent" "$agent" "$model"
+    return 1
+  fi
+
   # 2. Read the counter; a different stored stage means a new phase gets a
-  # fresh budget.
+  # fresh budget. A recorded head keeps the budget scoped to the worktree head
+  # that produced the transient failure while old headless files stay readable.
   retry_file="$(challenger_transient_retry_file "$feature_dir")"
   count=0
   last_at=0
   if [[ -f "$retry_file" ]]; then
     retry_state="$(cat "$retry_file" 2>/dev/null || printf '{}')"
     stored_stage="$(printf '%s' "$retry_state" | jq -r '.stage // empty' 2>/dev/null || true)"
-    if [[ "$stored_stage" == "$stage" ]]; then
+    stored_head="$(printf '%s' "$retry_state" | jq -r '.head // empty' 2>/dev/null || true)"
+    if [[ "$stored_stage" == "$stage" && ( -z "$stored_head" || -z "$current_head" || "$stored_head" == "$current_head" ) ]]; then
       count="$(printf '%s' "$retry_state" | jq -r '.count // 0' 2>/dev/null || echo 0)"
       last_at="$(printf '%s' "$retry_state" | jq -r '.lastAt // 0' 2>/dev/null || echo 0)"
     fi
@@ -4327,8 +4512,8 @@ maybe_retry_challenger_transient_phase() {
   # 4. First observation of this failure: start the backoff clock instead of
   # relaunching immediately — the upstream stall needs time to clear.
   if (( last_at == 0 )); then
-    if jq -n --arg stage "$stage" --argjson count "$count" --argjson lastAt "$now" \
-      '{stage:$stage,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
+    if jq -n --arg stage "$stage" --arg head "$current_head" --argjson count "$count" --argjson lastAt "$now" \
+      '{stage:$stage,head:$head,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
       mv "$retry_file.tmp.$$" "$retry_file" 2>/dev/null || rm -f "$retry_file.tmp.$$"
     else
       rm -f "$retry_file.tmp.$$"
@@ -4341,22 +4526,12 @@ maybe_retry_challenger_transient_phase() {
     return 2
   fi
 
-  # 5. Validate the relaunch the way the review-infra retry does.
-  agent="$(stage_result_field "$feature_dir" "$stage" "agent")"
-  model="$(stage_result_field "$feature_dir" "$stage" "model")"
-  [[ -n "$agent" ]] || agent="$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')"
-  [[ -n "$model" ]] || model="$(read_state_value "" --arg i "$issue" '.tasks[$i].model // ""')"
-  if [[ -z "$agent" || -z "$model" ]] \
-    || ! agent_validate_phase_launch "$agent" "$stage" "$model" "$REPO_DIR"; then
-    log_warn "$issue → challenger transient retry not launchable (agent=${agent:-?} model=${model:-?}); falling through to quarantine"
-    return 1
+  lock_dir="${retry_file}.lock"
+  if ! mkdir "$lock_dir" 2>/dev/null; then
+    return 2
   fi
+  lock_acquired=1
 
-  slug="$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')"
-  [[ -n "$slug" ]] || return 1
-  wt_dir="$(read_state_value "" --arg i "$issue" '.tasks[$i].worktree // empty')"
-  [[ -n "$wt_dir" ]] || wt_dir="${WORKTREE_ROOT}/${slug}"
-  [[ -d "$wt_dir" ]] || return 1
   branch="$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // empty')"
   [[ -n "$branch" ]] || branch="task/${slug}"
   title="$(read_state_value "" --arg i "$issue" '.tasks[$i].title // ""')"
@@ -4367,15 +4542,15 @@ maybe_retry_challenger_transient_phase() {
 
   # 6. Increment the counter first (crash-safe), then re-arm and relaunch.
   count=$((count + 1))
-  if jq -n --arg stage "$stage" --argjson count "$count" --argjson lastAt "$now" \
-    '{stage:$stage,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
+  if jq -n --arg stage "$stage" --arg head "$current_head" --argjson count "$count" --argjson lastAt "$now" \
+    '{stage:$stage,head:$head,count:$count,lastAt:$lastAt}' > "$retry_file.tmp.$$" 2>/dev/null; then
     mv "$retry_file.tmp.$$" "$retry_file" 2>/dev/null || rm -f "$retry_file.tmp.$$"
   else
     rm -f "$retry_file.tmp.$$"
   fi
 
-  contract_payload="$(jq -cn --arg stageRole "$stage" --arg agent "$agent" --arg model "$model" \
-    '{stageRole:$stageRole,agent:$agent,model:$model}' 2>/dev/null || printf '{}')"
+  contract_payload="$(jq -cn --arg stageRole "$stage" --arg agent "$agent" --arg model "$model" --arg resultAgent "$result_agent" \
+    '{stageRole:$stageRole,agent:$agent,model:$model,resultAgent:$resultAgent}' 2>/dev/null || printf '{}')"
 
   # Clear the stale terminal-error hook before relaunching. Launch paths never
   # reset it, and _prepare_recovery_phase_launch's hook write is a no-op in the
@@ -4389,7 +4564,10 @@ maybe_retry_challenger_transient_phase() {
       depth="$(read_phase_config "$feature_dir" "planning" "depth")"
       [[ -n "$depth" ]] || depth="$(get_task_meta "$issue" "planDepth")"
       [[ -n "$depth" ]] || depth="light"
-      _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || return 1
+      _prepare_recovery_phase_launch "$issue" "$slug" "planning" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || {
+        rm -rf "$lock_dir" 2>/dev/null || true
+        return 1
+      }
       launch_planning_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent" "$depth" || rc=$?
       ;;
@@ -4397,7 +4575,10 @@ maybe_retry_challenger_transient_phase() {
       depth="$(read_phase_config "$feature_dir" "coding" "depth")"
       [[ -n "$depth" ]] || depth="$(get_task_meta "$issue" "codeDepth")"
       [[ -n "$depth" ]] || depth="medium"
-      _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || return 1
+      _prepare_recovery_phase_launch "$issue" "$slug" "coding" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" || {
+        rm -rf "$lock_dir" 2>/dev/null || true
+        return 1
+      }
       launch_coding_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent" "$depth" || rc=$?
       ;;
@@ -4405,22 +4586,30 @@ maybe_retry_challenger_transient_phase() {
       review_mode="$(read_phase_config "$feature_dir" "review" "mode")"
       [[ -n "$review_mode" ]] || review_mode="$(get_task_meta "$issue" "reviewMode")"
       [[ -n "$review_mode" ]] || review_mode="static"
-      _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" "review" || return 1
+      _prepare_recovery_phase_launch "$issue" "$slug" "review" "$feature_dir" "$wt_dir" "$agent" "$model" "$contract_payload" "review" || {
+        rm -rf "$lock_dir" 2>/dev/null || true
+        return 1
+      }
       launch_review_phase "$issue" "$slug" "$title" "$wt_dir" "$branch" "$BASE_BRANCH" \
         "$model" "$agent" "$review_mode" || rc=$?
       ;;
     *)
+      rm -rf "$lock_dir" 2>/dev/null || true
       return 1
       ;;
   esac
 
   if [[ "$rc" -ne 0 ]]; then
     log_warn "$issue → challenger transient relaunch of ${stage} failed (rc=$rc); falling through to quarantine"
+    rm -rf "$lock_dir" 2>/dev/null || true
     return 1
   fi
 
   set_window_attention_state "$win" "clear"
-  log "status" "♻ $issue → challenger_transient_retry attempt=${count}/${max}: relaunched ${stage} after transient provider error"
+  log "status" "♻ $issue → challenger_transient_retry attempt=${count}/${max}: relaunched ${stage} after transient provider error (result_agent=${result_agent:-?} launch_adapter=${agent})"
+  if [[ "$lock_acquired" -eq 1 ]]; then
+    rm -rf "$lock_dir" 2>/dev/null || true
+  fi
   return 0
 }
 

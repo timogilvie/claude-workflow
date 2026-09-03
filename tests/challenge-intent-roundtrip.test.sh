@@ -203,6 +203,24 @@ done
   rm -rf "$root"
 }
 
+# Transient challenger retries resolve the launch adapter from this immutable
+# intent, not from stage-result provenance. Keep both runtime and projection
+# fields available so native OpenRouter can relaunch as native-openrouter.
+{
+  intent="$(real_challenge_intent --stage implementation --pair-id HOK-900 --slug pair-slug \
+    --challenger-coder llama-4-scout --challenger-coder-agent native-openrouter)"
+  if jq -e \
+    '.challenger.coder.model == "llama-4-scout"
+     and .challenger.coder.agent == "native-openrouter"
+     and .challenger.expectedStageModel == "llama-4-scout"
+     and .challenger.expectedStageAgent == "native-openrouter"' \
+    <<< "$intent" >/dev/null; then
+    pass "native OpenRouter intent carries provider-aware retry launch identity"
+  else
+    fail "native OpenRouter intent lost provider-aware retry launch identity"
+  fi
+}
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 
