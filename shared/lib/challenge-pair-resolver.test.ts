@@ -820,6 +820,54 @@ test('resolver writes forfeit when a sibling challenge-aborted and survivor comp
   }
 });
 
+test('resolver restores a cleaned aborted challenger from archived evidence', async () => {
+  const { repoDir, cleanup } = setupRepoDir();
+  try {
+    const mirroredReason = 'terminal_stage_failure:native-provider-error';
+    const mirroredDetail = 'Native coding failed in features/pair-cleaned-challenger/.coding-failure-handoff.json';
+    writeWorkflowState(repoDir, {
+      HOK_1: {
+        pr: 1312,
+        branch: 'task/pair-cleaned',
+        updated: '2026-09-03T02:58:08Z',
+        challengePairId: 'pair-cleaned',
+        challengeRole: 'primary',
+        challengeModel: 'gpt-5.5',
+        evalCompleted: true,
+        challengeAborted: mirroredReason,
+        challengeAbortedDetail: mirroredDetail,
+        challengeAbortedStage: 'implementation',
+      },
+    });
+    const archiveDir = join(repoDir, '.wavemill', 'evals', 'artifacts', 'pair-cleaned_c');
+    mkdirSync(archiveDir, { recursive: true });
+    writeFileSync(join(archiveDir, '.challenge-aborted.json'), JSON.stringify({
+      pairId: 'pair-cleaned',
+      model: 'llama-4-scout',
+      reason: mirroredReason,
+      detail: mirroredDetail,
+      stage: 'implementation',
+      abortedAt: '2026-09-03T01:52:40Z',
+    }));
+
+    const result = await resolveUnresolvablePair({ pairId: 'pair-cleaned', repoDir });
+
+    assert.equal(result.status, 'resolved');
+    assert.equal(result.reason, 'sibling-challenge-aborted');
+    assert.equal(result.outcome, 'forfeit');
+    assert.equal(result.record.winner, 'primary');
+    assert.equal(result.record.primaryModel, 'gpt-5.5');
+    assert.equal(result.record.challengerModel, 'llama-4-scout');
+    assert.equal(result.record.terminalReason, 'challenger_challenge_aborted');
+    assert.equal(result.record.armFailures?.length, 1);
+    assert.equal(result.record.armFailures?.[0]?.side, 'challenger');
+    assert.equal(result.record.armFailures?.[0]?.model, 'llama-4-scout');
+    assert.match(result.record.rationale, /surviving primary side wins by forfeit/);
+  } finally {
+    cleanup();
+  }
+});
+
 test('resolver forfeits to the primary when a challenger exhausts transient-provider retries', async () => {
   // HOK-2885 shape: a native challenger stalls upstream, exhausts the bounded
   // phase-relaunch budget, and is aborted single-side with a retry_exhausted
