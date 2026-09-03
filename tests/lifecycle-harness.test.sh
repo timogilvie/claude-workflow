@@ -161,6 +161,7 @@ harness_extract_real_functions() {
     get_main_head_sha \
     ready_stage_allows_merge \
     ready_stage_pending_verdict \
+    clear_transient_mergeability_state \
     post_pr_reconciliation_config_json \
     post_pr_reconciliation_enabled \
     pane_release_config_json \
@@ -3897,7 +3898,13 @@ test_restart_does_not_recreate_queue_owned_panes() {
 
   tick="$(harness_run_tick "$repo" "$slug" "$issue" '
     CURRENT_PHASE="ready"
-    read_state_value() { return 1; }
+    PR_BY_ISSUE["$ISSUE"]="701"
+    get_main_head_sha() { printf "%s\n" "base-current"; }
+    merge_queue_enabled() { return 0; }
+    ready_candidate_selected() { return 0; }
+    ready_queue_state() { jq -r ".artifacts.queueState // empty" "$1/.ready-result.json"; }
+    ready_base_sha() { jq -r ".artifacts.readyBaseSha // empty" "$1/.ready-result.json"; }
+    ready_queue_field() { jq -r ".artifacts.${2} // empty" "$1/.ready-result.json"; }
     _ensure_window_exists() {
       echo "ERROR: _ensure_window_exists should not be called for released panes" > /dev/stderr
       return 1
@@ -3923,9 +3930,10 @@ test_terminal_cleanup_queue_owned_merged_pr_idempotent() {
       if [[ "$*" == *".status"* ]]; then
         printf "%s\n" "merged"
       else
-        return 1
+        printf "%s\n" "${1-}"
       fi
     }
+    cleanup_completed_task() { remove_task_state "$1"; }
   ')"
 
   # Verify cleanup happened once
@@ -3935,7 +3943,6 @@ test_terminal_cleanup_queue_owned_merged_pr_idempotent() {
   # Second cleanup tick - should be idempotent
   tick2="$(harness_run_tick "$repo" "$slug" "$issue" '
     CURRENT_PHASE="ready"
-    read_state_value() { return 1; }
   ')"
 
   check_eq "terminal cleanup merged: remains cleaned up" "0" "$(jq -r '.tasks | length' "$repo/.wavemill/state.json" 2>/dev/null || echo 0)"
@@ -3957,7 +3964,7 @@ test_terminal_cleanup_queue_owned_closed_unmerged_preserves_unsafe_work() {
       if [[ "$*" == *".status"* ]]; then
         printf "%s\n" "closed-unmerged"
       else
-        return 1
+        printf "%s\n" "${1-}"
       fi
     }
     git_worktree_has_unpushed() { return 0; }
