@@ -140,7 +140,11 @@ TESTS=(
   shared/lib/challenge-attestation-backfill.test.ts
   shared/lib/challenge-pair-recovery.test.ts
   shared/lib/harness-replay.test.ts
-  shared/lib/cross-repo-parity.test.ts
+  shared/lib/cross-repo-parity.valid.test.ts
+  shared/lib/cross-repo-parity.missing.test.ts
+  shared/lib/cross-repo-parity.wrong-suite.test.ts
+  shared/lib/cross-repo-parity.stale.test.ts
+  shared/lib/cross-repo-parity.partial.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts

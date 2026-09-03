@@ -11,6 +11,13 @@ aggregator finishes in under five minutes. Two suites are sharded by
 Shell shards, preflight, smoke, and certification were already under budget
 and are unchanged.
 
+One test-only refactor accompanied the resharding:
+`shared/lib/cross-repo-parity.test.ts` was a single ~6-minute serial file (an
+indivisible hotspot no shard count can absorb) and now runs as five per-mode
+files (`cross-repo-parity.<mode>.test.ts`) delegating to
+`cross-repo-parity-suite.ts`. Assertions are unchanged; every mode still runs
+exactly once.
+
 ## How assignment works
 
 1. The bash `TESTS=(...)` / `TS_TESTS=(...)`+`SH_TESTS=(...)` arrays in the

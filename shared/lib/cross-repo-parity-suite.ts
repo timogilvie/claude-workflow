@@ -1,3 +1,17 @@
+/**
+ * Shared body of the cross-repo global model parity suite.
+ *
+ * Each artifact mode takes ~60-90s of fixture-heavy synchronous work, so the
+ * modes run as five separate registered test files
+ * (cross-repo-parity.<mode>.test.ts) instead of one ~6-minute serial file --
+ * one file per mode lets the weighted CI sharding (HOK-2939) spread them
+ * across shards, where a single indivisible 6-minute file would set the
+ * critical path of the whole required gate. The assertions are unchanged and
+ * every mode still runs exactly once per CI run.
+ *
+ * The modes must stay in separate processes (not concurrent tests in one
+ * file): the fixture mutates GLOBAL_CERTIFICATION_ROOT_ENV via process.env.
+ */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { buildParityFixture, type ParityArtifactMode } from './cross-repo-parity.ts';
@@ -14,7 +28,12 @@ import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/stor
 import { pickChallengeModelsWithReason } from './challenge-mode.ts';
 import { diagnoseOpenRouter, type OpenRouterDoctorStage } from './openrouter-doctor.ts';
 
-const MODES: ParityArtifactMode[] = ['valid', 'missing', 'wrong-suite', 'stale', 'partial'];
+/**
+ * Every artifact mode must have a corresponding registered
+ * cross-repo-parity.<mode>.test.ts file; adding a mode here without one means
+ * that mode never runs in CI.
+ */
+export const PARITY_MODES: ParityArtifactMode[] = ['valid', 'missing', 'wrong-suite', 'stale', 'partial'];
 const STAGES: SupportedModelStage[] = ['planning', 'coding', 'review'];
 const STAGE_TO_ROLE: Record<SupportedModelStage, RouterRole> = {
   expansion: 'reviewer',
@@ -174,8 +193,8 @@ function snapshot(repoDir: string, stage: SupportedModelStage) {
   };
 }
 
-describe('cross-repo global model parity', () => {
-  for (const mode of MODES) {
+export function runParityModeSuite(mode: ParityArtifactMode): void {
+  describe('cross-repo global model parity', () => {
     it(`keeps Wavemill, gtm-backend, and gtm-frontend in parity for ${mode} global artifacts`, () => {
       const fixture = buildParityFixture({ globalArtifacts: mode });
       try {
@@ -205,5 +224,5 @@ describe('cross-repo global model parity', () => {
         fixture.cleanup();
       }
     });
-  }
-});
+  });
+}

@@ -68,7 +68,17 @@ export default async function* fileTimingReporter(source) {
 
   let json = '{"results":[]}';
   try {
+    // Case-level events attribute `file` to the module where the test
+    // callback is DEFINED, so a delegated suite (a .test.ts file calling a
+    // helper in another module) produces phantom entries for the helper
+    // module. Only spawned test files emit test:summary, so when any summary
+    // was seen, keep summary-backed entries exclusively; the all-entries
+    // fallback covers runs where no summary appeared at all (e.g. every file
+    // crashed before its plan completed). A file dropped here simply gets the
+    // manifest's conservative default weight.
+    const anySummary = [...files.values()].some((entry) => entry.sawSummary);
     const results = [...files.entries()]
+      .filter(([, entry]) => !anySummary || entry.sawSummary)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
       .map(([file, entry]) => ({
         file,
