@@ -329,6 +329,9 @@ EOF
     log_error() { LOG_ERROR_OUTPUT+="$*\n"; }
     log_warn() { LOG_WARN_OUTPUT+="$*\n"; }
     build_conflict_resolution_prompt() { :; }
+    ensure_ready_worker_window() {
+      printf "%s\n" "win-1"
+    }
     build_ready_remediation_prompt() {
       READY_PROMPT_CALLS=$((READY_PROMPT_CALLS + 1))
       READY_PROMPT_SUMMARY="${8-}"
@@ -636,6 +639,9 @@ run_watchdog_launch_case() {
     write_stage_result() {
       printf -v WRITE_STAGE_CALLS "%s%s|%s|%s|%s|%s|%s|%s\n" \
         "$WRITE_STAGE_CALLS" "${1-}" "${2-}" "${3-}" "${4-}" "${5-}" "${6-}" "${7-}"
+    }
+    ensure_ready_worker_window() {
+      _ensure_task_window_exists "$SESSION" "$1" "$2" "$4"
     }
     write_ready_attention_file() { :; }
     log() { :; }

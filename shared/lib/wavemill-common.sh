@@ -577,6 +577,8 @@ cleanup_completed_task() {
   fi
 
   wavemill_cleanup_run git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  reconciliation_lease_release "${WORKTREE_ROOT}/${slug}/features/${slug}" 2>/dev/null || true
+  rm -f "${WORKTREE_ROOT}/${slug}/features/${slug}/.pane-release-blocked.json" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
   remove_task_state "$issue"
@@ -3812,6 +3814,193 @@ state_mutate() {
 # ============================================================================
 # TASK STATE LEDGER
 # ============================================================================
+
+get_task_execution_owner() {
+  local issue="$1" owner=""
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    owner="$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner // "task"' "$STATE_FILE" 2>/dev/null || echo "task")"
+  fi
+  case "$owner" in
+    task|queue|reconciliation) printf '%s\n' "$owner" ;;
+    *) printf '%s\n' "task" ;;
+  esac
+}
+
+get_task_pane_state() {
+  local issue="$1" pane_state=""
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // "active"' "$STATE_FILE" 2>/dev/null || echo "active")"
+  fi
+  case "$pane_state" in
+    active|released|rehydrating) printf '%s\n' "$pane_state" ;;
+    *) printf '%s\n' "active" ;;
+  esac
+}
+
+set_task_queue_owned() {
+  local issue="$1" capsule_digest="${2:-}" handoff_at="${3:-}"
+  [[ -n "$handoff_at" ]] || handoff_at="$(date +%s)"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "queue",
+         paneState: "released",
+         queueHandoffAt: ($handoffAt | tonumber),
+         capsuleDigest: $capsuleDigest,
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue" \
+    --arg capsuleDigest "$capsule_digest" \
+    --arg handoffAt "$handoff_at"
+}
+
+set_task_reconciliation_owned() {
+  local issue="$1"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "reconciliation",
+         paneState: "rehydrating",
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue"
+}
+
+set_task_task_owned() {
+  local issue="$1" pane_state="${2:-active}"
+  [[ "$pane_state" == "active" || "$pane_state" == "rehydrating" || "$pane_state" == "released" ]] || pane_state="active"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "task",
+         paneState: $paneState,
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue" \
+    --arg paneState "$pane_state"
+}
+
+task_worktree_release_safety() {
+  local wt_dir="${1:-}" task_branch="${2:-}" base_branch="${3:-${BASE_BRANCH:-main}}"
+  local dirty_status="" commits_ahead=""
+
+  if [[ -z "$wt_dir" || ! -d "$wt_dir" ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if [[ -z "$task_branch" ]]; then
+    task_branch="$(git -C "$wt_dir" branch --show-current 2>/dev/null || true)"
+  fi
+  if [[ -z "$task_branch" ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if [[ -n "$dirty_status" ]]; then
+    printf '%s\n' "dirty-worktree"
+    return 1
+  fi
+  if ! git -C "$wt_dir" rev-parse --verify --quiet "origin/${task_branch}^{commit}" >/dev/null 2>&1; then
+    printf '%s\n' "no-remote-branch"
+    return 1
+  fi
+  if ! commits_ahead="$(git -C "$wt_dir" rev-list --count "origin/${task_branch}..${task_branch}" 2>/dev/null)" \
+    || [[ ! "$commits_ahead" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if (( commits_ahead > 0 )); then
+    printf '%s\n' "unpushed-commits"
+    return 1
+  fi
+  printf '%s\n' "ok"
+  return 0
+}
+
+reconciliation_lease_dir() {
+  local state_dir="$1"
+  printf '%s\n' "$state_dir/.reconciliation-lease"
+}
+
+reconciliation_lease_info() {
+  local state_dir="$1" lease_file
+  lease_file="$(reconciliation_lease_dir "$state_dir")/lease.json"
+  [[ -f "$lease_file" ]] || return 1
+  cat "$lease_file"
+}
+
+reconciliation_lease_release() {
+  local state_dir="$1" lease_dir
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  rm -f "$lease_dir/lease.json" 2>/dev/null || true
+  rmdir "$lease_dir" 2>/dev/null || true
+}
+
+reconciliation_lease_held() {
+  local state_dir="$1" lease_dir lease_pid
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  [[ -d "$lease_dir" ]] || return 1
+  lease_pid="$(jq -r '.pid // empty' "$lease_dir/lease.json" 2>/dev/null || true)"
+  if [[ "$lease_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lease_pid" 2>/dev/null; then
+    local task_state issue slug wt_dir pane_state target
+    task_state=""
+    if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+      task_state="$(jq -c --arg state_dir "$state_dir" '
+        (.tasks // {}) | to_entries[]
+        | select((.value.worktree + "/features/" + .value.slug) == $state_dir)
+        | {issue:.key, slug:.value.slug, worktree:.value.worktree, paneState:(.value.paneState // "active")}
+      ' "$STATE_FILE" 2>/dev/null | head -n 1 || true)"
+    fi
+    issue="$(jq -r '.issue // empty' <<< "$task_state" 2>/dev/null || true)"
+    slug="$(jq -r '.slug // empty' <<< "$task_state" 2>/dev/null || true)"
+    wt_dir="$(jq -r '.worktree // empty' <<< "$task_state" 2>/dev/null || true)"
+    pane_state="$(jq -r '.paneState // "active"' <<< "$task_state" 2>/dev/null || echo "active")"
+    if [[ -n "$issue" && -n "$slug" && "$pane_state" != "rehydrating" ]]; then
+      target="$(_tmux_task_window_target "${SESSION:-wavemill}" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+      if [[ -z "$target" ]]; then
+        reconciliation_lease_release "$state_dir"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+
+reconciliation_lease_acquire() {
+  local state_dir="$1" pr="$2" head="$3" lease_dir lease_file tmp_file
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  if reconciliation_lease_held "$state_dir"; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+  if ! mkdir "$lease_dir" 2>/dev/null; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+  lease_file="$lease_dir/lease.json"
+  tmp_file="$lease_dir/lease.json.tmp.$$"
+  jq -n \
+    --arg pr "$pr" \
+    --arg headSha "$head" \
+    --arg session "${SESSION:-}" \
+    --argjson pid "$$" \
+    --argjson acquiredAt "$(date +%s)" \
+    '{pr:$pr, headSha:$headSha, session:$session, pid:$pid, acquiredAt:$acquiredAt}' > "$tmp_file" 2>/dev/null \
+    && mv "$tmp_file" "$lease_file" 2>/dev/null || {
+      rm -f "$tmp_file" 2>/dev/null || true
+      rmdir "$lease_dir" 2>/dev/null || true
+      printf '%s\n' "reconciliation-lease-write-failed"
+      return 1
+    }
+  printf '%s\n' "ok"
+  return 0
+}
 
 # Canonical task-state writer (HOK-2900). Before canonicalization the parent
 # mill, the startup runner, and the extracted monitor each carried a private

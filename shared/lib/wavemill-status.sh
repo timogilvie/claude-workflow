@@ -1290,6 +1290,14 @@ task_window_target() {
 
 window_index() {
   local issue="$1" slug="$2" worktree="$3"
+  local pane_state=""
+  if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
+    pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  if [[ "$pane_state" == "released" ]]; then
+    echo "—"
+    return
+  fi
   local target
   target="$(task_window_target "$issue" "$slug" "$worktree")"
   [[ -n "$target" ]] || { echo "—"; return; }
@@ -1320,9 +1328,16 @@ render_task_row() {
   local issue="$1" slug="$2" branch="$3" worktree="$4" win="$5"
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
   local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail launch_failure_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail coding_auto_detail
+  local execution_owner pane_state queue_handoff_at queue_wait_age queue_gate queue_head
 
   t=$(elapsed "$worktree")
   reported=""
+  execution_owner="task"
+  pane_state="active"
+  if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
+    execution_owner="$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner // "task"' "$STATE_FILE" 2>/dev/null || echo "task")"
+    pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // "active"' "$STATE_FILE" 2>/dev/null || echo "active")"
+  fi
   watchdog_classification=""
   watchdog_detail=""
   coding_blocked_detail=""
@@ -1332,6 +1347,8 @@ render_task_row() {
 
   if [[ "$task_status" == "merged" ]]; then
     st_str="${G}✓ merged${N}"
+  elif [[ "$execution_owner" == "queue" && "$pane_state" == "released" ]]; then
+    st_str="${G}queue-owned${N}"
   else
     # Prefer rich hook detail (tool names, errors) over legacy text files.
     reported=$(agent_hook_detail "$issue")
@@ -1438,7 +1455,9 @@ render_task_row() {
       watchdog_classification=$(ready_watchdog_field "$issue" "classification")
       watchdog_detail=$(ready_watchdog_field "$issue" "detail")
       ready_queue_state=$(get_ready_queue_state "$worktree" "$slug")
-      if is_ready_conflicted "$worktree" "$slug"; then
+      if [[ "$execution_owner" == "queue" && "$pane_state" == "released" ]]; then
+        phase_str="${G}queue-owned${N}"
+      elif is_ready_conflicted "$worktree" "$slug"; then
         phase_str="${Y}⚠ ready${N}"
       else
         case "$watchdog_classification" in
@@ -1509,6 +1528,24 @@ render_task_row() {
   esac
   if [[ -n "$reported" ]]; then
     render_task_detail_lines "$reported"
+  fi
+
+  if [[ "$execution_owner" == "queue" && "$pane_state" == "released" ]]; then
+    queue_handoff_at="$(jq -r --arg issue "$issue" '.tasks[$issue].queueHandoffAt // empty' "$STATE_FILE" 2>/dev/null || true)"
+    queue_head="$(git -C "$worktree" rev-parse --short=7 HEAD 2>/dev/null || true)"
+    queue_gate="$(get_ready_queue_state "$worktree" "$slug")"
+    [[ -n "$queue_gate" ]] || queue_gate="waiting"
+    queue_wait_age=""
+    if [[ "$queue_handoff_at" =~ ^[0-9]+$ ]]; then
+      local queue_wait_mins
+      queue_wait_mins=$(( ($(date +%s) - queue_handoff_at) / 60 ))
+      if (( queue_wait_mins < 60 )); then
+        queue_wait_age="${queue_wait_mins}m"
+      else
+        queue_wait_age="$((queue_wait_mins / 60))h$((queue_wait_mins % 60))m"
+      fi
+    fi
+    render_task_detail_lines "queue-owned PR #${state_pr:-?}${queue_head:+ · $queue_head}${queue_wait_age:+ · waiting $queue_wait_age} · gate: $queue_gate"
   fi
 
   # For actionable hook states, surface next_action as a follow-up detail line.
@@ -1889,7 +1926,7 @@ backstage_health_dashboard_line() {
 
 render_dashboard() {
   local tasks line issue slug branch worktree task_status task_phase state_pr
-  local win agent_state classification task_data free_slots usage_tip openrouter_warning backstage_health_line malformed_challenge_warning
+  local win agent_state classification task_data free_slots queue_owned_tasks usage_tip openrouter_warning backstage_health_line malformed_challenge_warning
   declare -ga inbox_tasks=()
   declare -ga active_tasks=()
 
@@ -1897,11 +1934,16 @@ render_dashboard() {
   : > "$FRAME"
   printf "${B}Wavemill Dashboard${N}  ${D}%s${N}${EL}\n" "$(date '+%H:%M:%S')" >> "$FRAME"
   free_slots=""
+  queue_owned_tasks=""
   if [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]]; then
     free_slots=$(jq -r '.freeSlots // empty' "$STATE_FILE" 2>/dev/null || echo "")
+    queue_owned_tasks=$(jq -r '.queueOwnedTasks // empty' "$STATE_FILE" 2>/dev/null || echo "")
   fi
   if [[ -n "$free_slots" ]]; then
     printf "${D}├─ %b${N}${EL}\n" "${G}${free_slots} slot(s) available${N}" >> "$FRAME"
+  fi
+  if [[ "$queue_owned_tasks" =~ ^[0-9]+$ ]] && (( queue_owned_tasks > 0 )); then
+    printf "${D}├─ %b${N}${EL}\n" "${G}${queue_owned_tasks} queue-owned task(s) pane-released${N}" >> "$FRAME"
   fi
   if openrouter_warning="$(cached_openrouter_warning)"; then
     printf "${D}├─ WARN: %s${N}${EL}\n" "$openrouter_warning" >> "$FRAME"
@@ -1935,11 +1977,18 @@ render_dashboard() {
       agent_state=""
       if [[ "$task_status" == "merged" ]]; then
         agent_state="exited"
+      elif [[ "$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner // "task"' "$STATE_FILE" 2>/dev/null || echo "task")" == "queue" \
+        && "$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // "active"' "$STATE_FILE" 2>/dev/null || echo "active")" == "released" ]]; then
+        agent_state="queue-owned"
       else
         agent_state=$(agent_status "$issue" "$(task_window_target "$issue" "$slug" "$worktree")")
       fi
 
-      classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug" "$issue")
+      if [[ "$agent_state" == "queue-owned" ]]; then
+        classification="active"
+      else
+        classification=$(is_actionable_state "$agent_state" "$task_phase" "$worktree" "$slug" "$issue")
+      fi
       task_data="$issue|$slug|$branch|$worktree|$win|$task_status|$task_phase|$state_pr|$agent_state"
 
       if [[ "$classification" == "actionable" ]]; then

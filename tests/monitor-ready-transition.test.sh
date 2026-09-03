@@ -54,6 +54,10 @@ extract_function "$MONITOR_SCRIPT_FILE" "get_main_head_sha" >> "$MONITOR_FUNC_FI
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_allows_merge" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_warn_bypass_once" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_stage_pending_verdict" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "pane_release_marker_path" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "pane_release_reason_actionable" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "clear_stale_pane_release_blocked_marker" >> "$MONITOR_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "release_task_pane_window_only" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_remediation_launch_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_attention_head" >> "$MONITOR_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "ready_conflict_recheck_interval_seconds" >> "$MONITOR_FUNC_FILE"
@@ -95,9 +99,10 @@ run_monitor_case() {
   local case_dir="$TEST_TMP/$case_name"
   mkdir -p "$case_dir"
 
-  CASE_NAME="$case_name" CASE_DIR="$case_dir" MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" bash -lc '
+  CASE_NAME="$case_name" CASE_DIR="$case_dir" MONITOR_FUNC_FILE="$MONITOR_FUNC_FILE" SOURCE_REPO_DIR="$REPO_DIR" bash -lc '
     set -euo pipefail
     shopt -s expand_aliases
+    source "$SOURCE_REPO_DIR/shared/lib/wavemill-common.sh"
     source "$MONITOR_FUNC_FILE"
 
     declare -Ag BRANCH_BY_ISSUE=()

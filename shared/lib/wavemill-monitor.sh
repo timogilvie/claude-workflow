@@ -1532,10 +1532,12 @@ challenge_assert_arms_diverge() {
 
 update_free_slots_state() {
   local slots="$1"
+  local queue_owned="${queue_owned_count:-0}"
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
   if ! state_mutate "$STATE_FILE" \
-     '.freeSlots = $slots | .updated = (now | todate)' \
-     --argjson slots "$slots"; then
+     '.freeSlots = $slots | .queueOwnedTasks = $queueOwned | .updated = (now | todate)' \
+     --argjson slots "$slots" \
+     --argjson queueOwned "$queue_owned"; then
     log_warn "update_free_slots_state: failed to update free slots"
   fi
 }
@@ -2357,6 +2359,244 @@ post_pr_reconciliation_enabled() {
   local recon_json
   recon_json=$(post_pr_reconciliation_config_json "$wt_dir")
   jq -r 'if .enabled == true then "true" else "false" end' <<< "$recon_json" 2>/dev/null || echo "false"
+}
+
+# ── Queue-owned pane release (HOK-2937) ─────────────────────────────────────
+
+PANE_RELEASE_PREREQ_WARNED=false
+
+pane_release_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
+  local user_json='{}' repo_json='{}' local_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '
+    ({ready:{paneRelease:{enabled:false}}} * $user * $repo * $local).ready.paneRelease
+    ' 2>/dev/null || echo '{"enabled":false}'
+}
+
+pane_release_enabled() {
+  local wt_dir="$1"
+  local release_json
+  release_json=$(pane_release_config_json "$wt_dir")
+  if [[ "$(jq -r 'if .enabled == true then "true" else "false" end' <<< "$release_json" 2>/dev/null || echo "false")" != "true" ]]; then
+    printf '%s\n' "false"
+    return 0
+  fi
+  if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" != "true" ]]; then
+    if [[ "${PANE_RELEASE_PREREQ_WARNED:-false}" != "true" ]]; then
+      log_warn "ready.paneRelease.enabled requires ready.postPrReconciliation.enabled, retaining legacy panes"
+      PANE_RELEASE_PREREQ_WARNED=true
+    fi
+    printf '%s\n' "false"
+    return 0
+  fi
+  printf '%s\n' "true"
+}
+
+pane_release_marker_path() {
+  local state_dir="$1"
+  printf '%s\n' "$state_dir/.pane-release-blocked.json"
+}
+
+pane_release_reason_actionable() {
+  case "$1" in
+    dirty-worktree|unpushed-commits|no-remote-branch|git-error|capsule-invalid:*|capsule-head-mismatch|review-not-passed|review-stale|live-agent-child|liveness-indeterminate|pending-approval|attention-marker-present|reconciliation-lease-held|pr-not-open)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+write_pane_release_blocked_marker() {
+  local state_dir="$1" reason="$2" wt_dir="${3:-}" head_sha=""
+  [[ -n "$state_dir" ]] || return 0
+  if [[ -n "$wt_dir" ]]; then
+    head_sha="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$head_sha" ]] || head_sha="$(git -C "$state_dir" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$head_sha" ]] || return 0
+  marker_write "$(pane_release_marker_path "$state_dir")" --kind pane-release-blocked --head "$head_sha" --reason "$reason"
+}
+
+clear_stale_pane_release_blocked_marker() {
+  local state_dir="$1" wt_dir="${2:-}" marker head_sha=""
+  marker="$(pane_release_marker_path "$state_dir")"
+  [[ -f "$marker" ]] || return 0
+  if [[ -n "$wt_dir" ]]; then
+    head_sha="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$head_sha" ]] || return 0
+  if marker_is_stale "$marker" "$head_sha"; then
+    marker_clear "$marker"
+  fi
+}
+
+fresh_hook_state_for_issue() {
+  local issue="$1" hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local hook_ts now staleness
+  [[ -f "$hook_file" ]] || return 1
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  [[ "$hook_ts" =~ ^[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  staleness=$((now - hook_ts))
+  (( staleness < 300 )) || return 1
+  jq -r '.state // empty' "$hook_file" 2>/dev/null || true
+}
+
+pane_release_preflight() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5"
+  local branch="${6:-}" base_branch="${7:-${BASE_BRANCH:-main}}" pr_state_value current_head review_status
+  local validate_out validate_reason capsule_review_head safety_reason target pane_pid live_rc hook_state
+
+  if [[ "$(pane_release_enabled "$wt_dir")" != "true" ]]; then
+    printf '%s\n' "flag-off"
+    return 1
+  fi
+  [[ -n "$state_dir" && -d "$state_dir" ]] || { printf '%s\n' "context-missing"; return 1; }
+  [[ -n "$wt_dir" && -d "$wt_dir" ]] || { printf '%s\n' "worktree-missing"; return 1; }
+  [[ -n "$pr_number" ]] || { printf '%s\n' "pr-missing"; return 1; }
+
+  pr_state_value="$(pr_state "$pr_number" 2>/dev/null || echo "")"
+  [[ "$pr_state_value" == "OPEN" ]] || { printf '%s\n' "pr-not-open"; return 1; }
+
+  review_result_passes_ready_gate "$state_dir" || { printf '%s\n' "review-not-passed"; return 1; }
+  review_status="$(jq -r '.status // empty' "$state_dir/.review-result.json" 2>/dev/null || echo "")"
+  [[ "$review_status" != "stale" ]] || { printf '%s\n' "review-stale"; return 1; }
+  if reconciliation_review_invalidated_by_commit "$state_dir" "$wt_dir"; then
+    printf '%s\n' "review-stale"
+    return 1
+  fi
+
+  if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
+    validate_reason="$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")"
+    printf 'capsule-invalid:%s\n' "$validate_reason"
+    return 1
+  fi
+  current_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$current_head" ]] || { printf '%s\n' "git-error"; return 1; }
+  capsule_review_head="$(jq -r '.review.reviewHeadSha // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || echo "")"
+  [[ "$capsule_review_head" == "$current_head" ]] || { printf '%s\n' "capsule-head-mismatch"; return 1; }
+
+  safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "$base_branch" 2>/dev/null || true)"
+  [[ "$safety_reason" == "ok" ]] || { printf '%s\n' "${safety_reason:-git-error}"; return 1; }
+
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -n "$target" && "$(command -v tmux 2>/dev/null || true)" != "" ]]; then
+    pane_pid="$(tmux list-panes -t "$(_tmux_target_join "$SESSION" "$target")" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
+    mill_pane_has_live_blocking_process "$pane_pid" || live_rc=$?
+    live_rc="${live_rc:-0}"
+    case "$live_rc" in
+      0) printf '%s\n' "live-agent-child"; return 1 ;;
+      2) printf '%s\n' "liveness-indeterminate"; return 1 ;;
+    esac
+  fi
+
+  hook_state="$(fresh_hook_state_for_issue "$issue" 2>/dev/null || true)"
+  case "$hook_state" in
+    working|waiting|approval-needed)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+    blocked)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+    error)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+  esac
+  if [[ -f "$state_dir/.needs-attention" ]] && ! marker_is_stale "$state_dir/.needs-attention" "$current_head"; then
+    printf '%s\n' "attention-marker-present"
+    return 1
+  fi
+  if reconciliation_lease_held "$state_dir"; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+
+  printf '%s\n' "ok"
+  return 0
+}
+
+release_task_pane_window_only() {
+  local issue="$1" slug="$2" wt_dir="$3" target
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -n "$target" ]] && command -v tmux >/dev/null 2>&1; then
+    tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if _tmux_window_target_exists "$SESSION" "$target" "$wt_dir"; then
+      return 1
+    fi
+  fi
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  return 0
+}
+
+release_task_pane() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5"
+  local current_head capsule_digest=""
+  current_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  capsule_digest="$(jq -r '.foundationDigest // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || true)"
+  set_task_queue_owned "$issue" "$capsule_digest" || return 1
+  release_task_pane_window_only "$issue" "$slug" "$wt_dir" || return 1
+  marker_clear "$(pane_release_marker_path "$state_dir")"
+  log "status" "🪁 $issue → pane released; queue-owned (PR #$pr_number, head ${current_head:0:7})"
+  return 0
+}
+
+prepare_released_task_for_reconciliation() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5" current_head="$6"
+  local validate_out validate_reason capsule_head lease_out
+  if [[ "$(get_task_execution_owner "$issue")" != "queue" || "$(get_task_pane_state "$issue")" != "released" ]]; then
+    return 0
+  fi
+  if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
+    validate_reason="$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")"
+    write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($validate_reason) for PR #$pr_number - refusing pane rehydration."
+    return 1
+  fi
+  capsule_head="$(jq -r '.incident.headSha // .review.reviewHeadSha // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || echo "")"
+  if [[ -n "$capsule_head" && -n "$current_head" && "$capsule_head" != "$current_head" ]]; then
+    bounded_retry_clear "$state_dir" "ready-remediation"
+    log "status" "  ⏭ $issue: stale reconciliation request at ${capsule_head:0:7}, current head ${current_head:0:7}"
+    return 1
+  fi
+  lease_out="$(reconciliation_lease_acquire "$state_dir" "$pr_number" "$current_head" 2>/dev/null || true)"
+  if [[ "$lease_out" != "ok" ]]; then
+    log "debug" "  $issue: reconciliation launch skipped ($lease_out)"
+    return 1
+  fi
+  if ! set_task_reconciliation_owned "$issue"; then
+    reconciliation_lease_release "$state_dir"
+    return 1
+  fi
+  return 0
+}
+
+ensure_ready_worker_window() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5" current_head="$6"
+  local win
+  if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
+    prepare_released_task_for_reconciliation "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head" || return 1
+  elif [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]] \
+    && reconciliation_lease_held "$state_dir"; then
+    return 1
+  fi
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")" || return 1
+  persist_task_window_id "$issue" "$win"
+  printf '%s\n' "$win"
+  return 0
 }
 
 reconciliation_feature_task_packet() {
@@ -5775,6 +6015,26 @@ _restore_inflight_task_window_if_missing() {
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
 
+  if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
+    log "debug" "$issue → queue-owned released task has no pane to restore"
+    return 0
+  fi
+
+  if [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]]; then
+    local pr_number safety_reason release_reason
+    pr_number="$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')"
+    safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+    if [[ "$safety_reason" == "ok" ]]; then
+      reconciliation_lease_release "$feature_dir"
+      release_reason="$(pane_release_preflight "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+      if [[ "$release_reason" == "ok" ]]; then
+        release_task_pane "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" || true
+        return 0
+      fi
+    fi
+    set_task_task_owned "$issue" "active" || true
+  fi
+
   # A prior resume may already have determined that this task has no valid
   # recovery contract.  Its phase remains persisted for diagnosis, but it is
   # terminal from the resume controller's perspective; retrying it every poll
@@ -7917,9 +8177,13 @@ _launch_ready_remediation_attempt() {
   fi
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    reconciliation_lease_release "$state_dir"
+    set_task_task_owned "$issue" "active" || true
     return 2
   fi
 
+  reconciliation_lease_release "$state_dir"
+  set_task_task_owned "$issue" "active" || true
   remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
     "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
     "candidate-progress")
@@ -7938,8 +8202,6 @@ launch_ready_watchdog_remediation() {
   local ready_status checks_run checks_passed merge_status ready_result_file helper_rc resolved_model
 
   : "${SESSION:=wavemill}"
-  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-  persist_task_window_id "$issue" "$win"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -7986,6 +8248,12 @@ launch_ready_watchdog_remediation() {
     return 0
   fi
 
+  if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head")"; then
+    jq -cn --arg detail "Ready remediation already has a reconciliation owner or could not acquire ownership for PR #$pr_number." \
+      '{status:"skipped-lease-held", detail:$detail}'
+    return 0
+  fi
+
   _launch_ready_remediation_attempt \
     "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
     "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
@@ -8020,8 +8288,11 @@ launch_ready_phase() {
   local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
-  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-  persist_task_window_id "$issue" "$win"
+  win=""
+  if [[ "$(get_task_pane_state "$issue")" != "released" ]]; then
+    win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+    persist_task_window_id "$issue" "$win"
+  fi
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -8180,6 +8451,12 @@ launch_ready_phase() {
       cat "$prompt_file" >> "$prompt_file.capsule"
       mv "$prompt_file.capsule" "$prompt_file"
     fi
+    local conflict_launch_head
+    conflict_launch_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")"
+    if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$conflict_launch_head")"; then
+      log "debug" "  $issue: conflict reconciliation launch skipped because ownership is already held"
+      return 5
+    fi
     _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue" "coding"
     launch_rc=$?
 
@@ -8198,9 +8475,13 @@ launch_ready_phase() {
       return 3
     fi
     if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+      reconciliation_lease_release "$state_dir"
+      set_task_task_owned "$issue" "active" || true
       return 2
     fi
 
+    reconciliation_lease_release "$state_dir"
+    set_task_task_owned "$issue" "active" || true
     write_ready_attention_file "$state_dir" "Automatic merge-conflict resolution could not be launched for PR #$pr_number."
     log_error "  Failed to launch conflict-resolution agent for $issue"
     return 1
@@ -8396,6 +8677,10 @@ launch_ready_phase() {
 
     failed_check_summary=$(ready_failed_check_summary "$result")
     [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
+    if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head")"; then
+      log "debug" "  $issue: ready remediation launch skipped because ownership is already held"
+      return 5
+    fi
     _launch_ready_remediation_attempt \
       "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
       "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
@@ -12772,6 +13057,7 @@ monitor_issue_state() {
   local BRANCH SLUG PR
   local task_status WIN WT_DIR task_branch current_phase eval_agent debug_flag current_agent needs_attention
 
+  : "${queue_owned_count:=0}"
   BRANCH="${BRANCH_BY_ISSUE[$ISSUE]}"
   SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
@@ -14429,6 +14715,37 @@ monitor_issue_state() {
         else
           log "debug" "✓ $ISSUE → PR #$PR is a merge candidate (live CI unverified, saved verdict only)"
         fi
+
+        if [[ "$(get_task_execution_owner "$ISSUE")" == "queue" && "$(get_task_pane_state "$ISSUE")" == "released" ]]; then
+          release_task_pane_window_only "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" || true
+          queue_owned_count=$((queue_owned_count + 1))
+          set_window_attention_state "$WIN" "clear"
+          return 0
+        fi
+
+        if [[ "$(get_task_execution_owner "$ISSUE")" == "reconciliation" && "$(get_task_pane_state "$ISSUE")" == "rehydrating" ]]; then
+          reconciliation_lease_release "$ready_state_dir_path"
+        fi
+
+        local release_reason
+        release_reason="$(pane_release_preflight "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR" "$BRANCH" "$BASE_BRANCH" 2>/dev/null || true)"
+        if [[ "$release_reason" == "ok" ]]; then
+          if release_task_pane "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR"; then
+            queue_owned_count=$((queue_owned_count + 1))
+            set_window_attention_state "$WIN" "clear"
+            return 0
+          fi
+          set_task_task_owned "$ISSUE" "active" || true
+          write_pane_release_blocked_marker "$ready_state_dir_path" "pane-release-failed" "${WORKTREE_ROOT}/${SLUG}"
+        elif pane_release_reason_actionable "$release_reason"; then
+          if [[ "$(get_task_execution_owner "$ISSUE")" == "reconciliation" ]]; then
+            set_task_task_owned "$ISSUE" "active" || true
+          fi
+          write_pane_release_blocked_marker "$ready_state_dir_path" "$release_reason" "${WORKTREE_ROOT}/${SLUG}"
+          log "debug" "  $ISSUE: pane release blocked ($release_reason)"
+        else
+          clear_stale_pane_release_blocked_marker "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}"
+        fi
       fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
@@ -15324,6 +15641,7 @@ while :; do
   refresh_ready_merge_queue_tick
   active_count=0
   active_challenger_count=0
+  queue_owned_count=0
 
   for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
     [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue
