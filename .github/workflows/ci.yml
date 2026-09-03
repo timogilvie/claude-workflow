@@ -74,8 +74,41 @@ jobs:
       - name: Run shell test shard
         run: bash tests/run-shell-suite.sh --shard ${{ matrix.shard }}/4
 
+  # Shard-count rule (HOK-2939): the smallest count whose LPT-estimated max
+  # shard (per tests/ci-test-weights.json) stays at or below ~240s, leaving
+  # headroom against the 5:00 aggregator budget. Update the matrix together
+  # with the weights manifest; tools/check-shard-balance.ts (preflight) reads
+  # the counts from this file, so matrix and check cannot drift.
   unit:
-    name: Unit Tests (shard ${{ matrix.shard }}/3)
+    name: Unit Tests (shard ${{ matrix.shard }}/7)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Run unit test shard
+        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/7 --timing-out "timing-unit-shard-${{ matrix.shard }}.json"
+
+      - name: Upload timing artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timing-unit-shard-${{ matrix.shard }}
+          path: timing-unit-shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  custom:
+    name: Custom Harness Tests (shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -90,23 +123,17 @@ jobs:
       - name: Setup
         uses: ./.github/actions/setup
 
-      - name: Run unit test shard
-        run: bash tests/run-unit-tests.sh --shard ${{ matrix.shard }}/3
+      - name: Run custom harness test shard
+        run: bash tests/run-custom-tests.sh --shard ${{ matrix.shard }}/3 --timing-out "timing-custom-shard-${{ matrix.shard }}.json"
 
-  custom:
-    name: Custom Harness Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Setup
-        uses: ./.github/actions/setup
-
-      - name: Run custom harness tests
-        run: npm run test:custom
+      - name: Upload timing artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: timing-custom-shard-${{ matrix.shard }}
+          path: timing-custom-shard-${{ matrix.shard }}.json
+          if-no-files-found: warn
+          retention-days: 7
 
   smoke:
     name: Smoke and Config Tests
