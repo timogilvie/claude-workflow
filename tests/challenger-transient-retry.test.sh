@@ -59,6 +59,7 @@ for fn in \
   challenge_abort_pair \
   _challenge_side_for_issue \
   native_hook_terminal_failure_detail \
+  native_coding_failure_handoff_reason \
   native_terminal_failure_kind \
   native_terminal_failure_next_action \
   emit_challenge_stage_failure_quarantine \

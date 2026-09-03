@@ -121,6 +121,7 @@ for f in \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
   "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
   "$REPO_DIR"/tests/native-terminal-failure.test.sh \
+  "$REPO_DIR"/tests/native-failure-classification.test.sh \
   "$REPO_DIR"/tests/challenger-transient-retry.test.sh \
   "$REPO_DIR"/tests/parent-monitor-function-drift.test.sh \
   "$REPO_DIR"/tests/linear-state-canonicalization.test.sh \

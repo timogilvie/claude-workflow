@@ -32,6 +32,7 @@ extract_function() {
 }
 
 eval "$(extract_function native_hook_terminal_failure_detail)"
+eval "$(extract_function native_coding_failure_handoff_reason)"
 eval "$(extract_function native_terminal_failure_kind)"
 eval "$(extract_function native_terminal_failure_next_action)"
 eval "$(extract_function agent_or_model_is_native_for_recovery)"
@@ -170,10 +171,10 @@ else
   fail "empty model turns misclassified as $(native_terminal_failure_kind "$empty_turn_detail")"
 fi
 
-if [[ "$(native_terminal_failure_kind "something else entirely")" == "native-provider-error" ]]; then
-  pass "unrecognised provider errors fall back to a generic kind"
+if [[ "$(native_terminal_failure_kind "something else entirely")" == "native-unclassified" ]]; then
+  pass "unrecognised failures without typed evidence fall back to native-unclassified"
 else
-  fail "generic provider error fallback changed"
+  fail "untyped unrecognised failure misclassified as $(native_terminal_failure_kind "something else entirely")"
 fi
 
 if [[ "$(native_terminal_failure_next_action context-window-exceeded)" == *"compressed context"* ]]; then
