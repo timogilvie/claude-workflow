@@ -87,6 +87,7 @@ TESTS=(
   merge-retry-marker.test.sh
   queue-health.test.sh
   merge-queue-live-ci.test.sh
+  merge-lane-progress-artifacts.test.sh
   queue-planner-stdin-policy.test.sh
   openrouter-warning-surfaces.test.sh
   hokusai-test-registration.test.sh
@@ -95,6 +96,7 @@ TESTS=(
   startup-handoff.test.sh
   monitor-script-byte-identical.test.sh
   transient-marker.test.sh
+  run-custom-tests-shard.test.sh
 )
 
 SHARD_INDEX=1

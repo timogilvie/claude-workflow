@@ -1,0 +1,150 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "reconciliation-context.schema.json",
+  "title": "Post-PR reconciliation capsule (HOK-2936)",
+  "description": "Durable, head-keyed context contract that lets a fresh agent safely reconcile an existing PR (deterministic CI failures or merge conflicts) without relying on the original pane or conversation. The foundation section is immutable per task; the incident section is volatile per failure episode.",
+  "type": "object",
+  "required": ["schemaVersion", "foundation", "foundationDigest", "review", "attempts", "updatedAt"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "type": "integer", "const": 1 },
+    "foundation": {
+      "type": "object",
+      "description": "Immutable task context. Serialized in canonical stable key order; must not change across incident updates.",
+      "required": ["taskId", "taskTitle", "slug", "branch", "baseBranch", "prNumber", "executionContractPath", "createdAt"],
+      "additionalProperties": false,
+      "properties": {
+        "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "taskTitle": { "type": "string", "maxLength": 512 },
+        "slug": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "branch": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "baseBranch": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "prNumber": { "type": "integer", "minimum": 1 },
+        "taskPacketPath": { "type": ["string", "null"], "maxLength": 1024 },
+        "taskPacketDigest": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "executionContractPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "executionContractStage": { "type": "string", "enum": ["planning", "coding", "review"] },
+        "scopeSummary": { "type": ["string", "null"], "maxLength": 4096 },
+        "createdAt": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "foundationDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "review": {
+      "type": "object",
+      "description": "Identity of the review evidence the capsule was built against. A worker commit that advances the head past reviewHeadSha invalidates this verdict.",
+      "required": ["reviewResultPath", "recordedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "reviewHeadSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,64}$" },
+        "reviewResultPath": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "verdict": { "type": ["string", "null"], "maxLength": 64 },
+        "recordedAt": { "type": "string", "maxLength": 64 }
+      }
+    },
+    "incident": {
+      "type": ["object", "null"],
+      "description": "Volatile evidence for the current failure episode.",
+      "required": ["classification", "headSha", "failureFingerprint", "observedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "classification": {
+          "type": "string",
+          "enum": ["stale_base_clean", "ci_transient", "ci_deterministic_safe", "merge_conflict", "ambiguous", "exhausted"]
+        },
+        "headSha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+        "baseSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,64}$" },
+        "failureFingerprint": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "detail": { "type": "string", "maxLength": 4096 },
+        "observedAt": { "type": "string", "maxLength": 64 },
+        "failingChecks": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["name"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "failingJob": { "type": ["string", "null"], "maxLength": 256 },
+              "localCommand": { "type": ["string", "null"], "maxLength": 1024 },
+              "logExcerpt": { "type": ["string", "null"], "maxLength": 4096 },
+              "logUrl": { "type": ["string", "null"], "maxLength": 1024 }
+            }
+          }
+        },
+        "conflictFiles": {
+          "type": "array",
+          "maxItems": 200,
+          "items": { "type": "string", "maxLength": 1024 }
+        },
+        "evidenceGaps": {
+          "type": "array",
+          "maxItems": 20,
+          "items": { "type": "string", "maxLength": 512 },
+          "description": "Typed reasons evidence could not be collected (e.g. github-logs-unavailable). Never fabricate missing evidence."
+        }
+      }
+    },
+    "incidentFingerprint": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+    "attempts": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["attemptNumber", "classification", "failureFingerprint", "headSha", "launchMode", "startedAt", "outcome"],
+        "additionalProperties": false,
+        "properties": {
+          "attemptNumber": { "type": "integer", "minimum": 1 },
+          "classification": {
+            "type": "string",
+            "enum": ["stale_base_clean", "ci_transient", "ci_deterministic_safe", "merge_conflict", "ambiguous", "exhausted"]
+          },
+          "failureFingerprint": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "headSha": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+          "agent": { "type": ["string", "null"], "maxLength": 128 },
+          "model": { "type": ["string", "null"], "maxLength": 256 },
+          "provider": { "type": ["string", "null"], "maxLength": 128 },
+          "launchMode": { "type": "string", "enum": ["fresh", "resume"] },
+          "startedAt": { "type": "string", "maxLength": 64 },
+          "finishedAt": { "type": ["string", "null"], "maxLength": 64 },
+          "usage": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "properties": {
+              "inputTokens": { "type": ["integer", "null"], "minimum": 0 },
+              "outputTokens": { "type": ["integer", "null"], "minimum": 0 },
+              "cacheReadTokens": { "type": ["integer", "null"], "minimum": 0 },
+              "cacheWriteTokens": { "type": ["integer", "null"], "minimum": 0 }
+            }
+          },
+          "cost": {
+            "type": "object",
+            "required": ["available"],
+            "additionalProperties": false,
+            "properties": {
+              "available": { "type": "boolean" },
+              "usd": { "type": "number", "minimum": 0 },
+              "reason": { "type": "string", "maxLength": 256 }
+            }
+          },
+          "outcome": {
+            "type": "string",
+            "enum": ["launched", "commit_pushed", "no_commit", "push_failed", "launch_failed", "unknown"]
+          },
+          "resultCommitSha": { "type": ["string", "null"], "pattern": "^[0-9a-f]{7,64}$" }
+        }
+      }
+    },
+    "sessionResume": {
+      "type": ["object", "null"],
+      "description": "Optional provider session-resume metadata. Never correctness-critical: a fresh launch from the capsule must always be sufficient.",
+      "required": ["provider", "sessionId"],
+      "additionalProperties": false,
+      "properties": {
+        "provider": { "type": "string", "maxLength": 128 },
+        "sessionId": { "type": "string", "maxLength": 256 }
+      }
+    },
+    "updatedAt": { "type": "string", "maxLength": 64 }
+  }
+}

@@ -1568,6 +1568,18 @@
                     },
                     "additionalProperties": false
                 },
+                "postPrReconciliation": {
+                    "type": "object",
+                    "description": "Durable post-PR reconciliation capsule (HOK-2936). When enabled, ready remediation and merge-conflict recovery launch fresh agents from a persisted, validated capsule (stable foundation prefix + volatile incident suffix), record attempt telemetry, and invalidate the prior review verdict after any reconciliation commit. Default off during rollout.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Gate recovery launches on a validated reconciliation capsule and capsule-projected prompts."
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "watchdog": {
                     "type": "object",
                     "description": "Ready-stage stale-state watchdog settings.",

@@ -100,6 +100,15 @@ extract_function "$MONITOR_SCRIPT_FILE" "review_result_summary" >> "$LAUNCH_FUNC
 extract_function "$MONITOR_SCRIPT_FILE" "review_artifacts_with_pr_number" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "strip_ready_label_if_review_not_passed" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "set_ready_pass_labels" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "post_pr_reconciliation_config_json" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "post_pr_reconciliation_enabled" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_feature_task_packet" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_capsule_refresh" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_project_prompt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_reset_retry_if_new_fingerprint" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_record_attempt" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_review_invalidated_by_commit" >> "$LAUNCH_FUNC_FILE"
+extract_function "$MONITOR_SCRIPT_FILE" "reconciliation_mark_review_stale" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "_launch_ready_remediation_attempt" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "launch_ready_watchdog_remediation" >> "$LAUNCH_FUNC_FILE"
 extract_function "$MONITOR_SCRIPT_FILE" "launch_ready_phase" >> "$LAUNCH_FUNC_FILE"
@@ -1285,6 +1294,125 @@ echo "=== Launch Phase Propagation ==="
 
 output="$(run_launch_case remediation_launch)"
 check_contains "remediation passes explicit phase" "$output" "phase_used=coding"
+
+echo "=== Post-PR Reconciliation Capsule (HOK-2936) ==="
+
+run_recon_case() {
+  local test_case="$1"
+  local case_dir="$TEST_TMP/recon-$test_case"
+  rm -rf "$case_dir"
+  mkdir -p "$case_dir"
+
+  CASE_DIR="$case_dir" LAUNCH_FUNC_FILE="$LAUNCH_FUNC_FILE" COMMON_SCRIPT="$COMMON_SCRIPT" \
+    REAL_REPO_DIR="$REPO_DIR" TEST_CASE="$test_case" bash -lc '
+    set -euo pipefail
+    source "$COMMON_SCRIPT"
+    source "$LAUNCH_FUNC_FILE"
+
+    TOOLS_DIR="$REAL_REPO_DIR/tools"
+    STATE_DIR="$CASE_DIR/feature"
+    WT_DIR="$CASE_DIR/worktree"
+    mkdir -p "$STATE_DIR" "$WT_DIR"
+
+    case "$TEST_CASE" in
+      flag_default_off)
+        echo "default_enabled=$(post_pr_reconciliation_enabled "$WT_DIR")"
+        printf "%s\n" "{\"ready\":{\"postPrReconciliation\":{\"enabled\":true}}}" > "$WT_DIR/.wavemill-config.json"
+        HOME="$CASE_DIR" echo "repo_enabled=$(post_pr_reconciliation_enabled "$WT_DIR")"
+        ;;
+      fingerprint_reset)
+        printf "%s\n" "2" > "$STATE_DIR/.retry-ready-remediation-count"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-one"
+        echo "same_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-one"
+        echo "repeat_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        reconciliation_reset_retry_if_new_fingerprint "$STATE_DIR" "ready-remediation" "fp-two"
+        echo "new_fp_count=$(bounded_retry_count "$STATE_DIR" "ready-remediation")"
+        ;;
+      capsule_gate)
+        git -C "$CASE_DIR" init -q
+        git -C "$CASE_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m fixture
+        printf "%s\n" "{not json" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "malformed_rc=$rc"
+        echo "malformed_attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null | tr "\n" " ")"
+        rm -f "$STATE_DIR/.reconciliation-context.json" "$STATE_DIR/.needs-attention"
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "missing_rc=$rc"
+        echo "missing_attention=$(cat "$STATE_DIR/.needs-attention" 2>/dev/null | tr "\n" " ")"
+        ;;
+      capsule_project)
+        npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" build \
+          --feature-dir "$STATE_DIR" --task-id HOK-2936 --title "Recon test" \
+          --slug recon-test --branch task/recon --base-branch main --pr 304 \
+          --review-head aaa111aaa111aaa111aaa111aaa111aaa111aaa1 --review-verdict ready >/dev/null
+        npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" update-incident \
+          --feature-dir "$STATE_DIR" --classification merge_conflict \
+          --head aaa111aaa111aaa111aaa111aaa111aaa111aaa1 --detail "conflict test" >/dev/null
+        rc=0
+        reconciliation_project_prompt "$STATE_DIR" 304 "$CASE_DIR/prompt.txt" || rc=$?
+        echo "project_rc=$rc"
+        foundation_line=$(grep -n "Task foundation" "$CASE_DIR/prompt.txt" | head -1 | cut -d: -f1)
+        incident_line=$(grep -n "Current incident" "$CASE_DIR/prompt.txt" | head -1 | cut -d: -f1)
+        if [[ -n "$foundation_line" && -n "$incident_line" ]] && (( foundation_line < incident_line )); then
+          echo "projection_order=foundation-first"
+        else
+          echo "projection_order=wrong"
+        fi
+        ;;
+      review_invalidation)
+        git -C "$WT_DIR" init -q
+        git -C "$WT_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m one
+        old_head=$(git -C "$WT_DIR" rev-parse HEAD)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","artifacts":{"type":"review","prNumber":304,"exitCode":0,"verdict":"ready","iterations":1,"blockerCount":0}}
+EOF
+        printf "%s\n" "{\"review\":{\"reviewHeadSha\":\"$old_head\"},\"attempts\":[]}" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "no_attempts_same_head_rc=$rc"
+        git -C "$WT_DIR" -c user.email=t@t -c user.name=t commit -q --allow-empty -m two
+        new_head=$(git -C "$WT_DIR" rev-parse HEAD)
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "no_attempts_new_head_rc=$rc"
+        printf "%s\n" "{\"review\":{\"reviewHeadSha\":\"$old_head\"},\"attempts\":[{\"attemptNumber\":1}]}" > "$STATE_DIR/.reconciliation-context.json"
+        rc=0; reconciliation_review_invalidated_by_commit "$STATE_DIR" "$WT_DIR" || rc=$?
+        echo "attempt_new_head_rc=$rc"
+        reconciliation_mark_review_stale "$STATE_DIR" 304 "$old_head" "$new_head" || true
+        echo "stale_status=$(jq -r .status "$STATE_DIR/.review-result.json")"
+        rc=0; review_result_passes_ready_gate "$STATE_DIR" || rc=$?
+        echo "gate_after_stale_rc=$rc"
+        ;;
+    esac
+  '
+}
+
+output="$(run_recon_case flag_default_off)"
+check_contains "reconciliation flag defaults off" "$output" "default_enabled=false"
+check_contains "reconciliation flag honors repo config" "$output" "repo_enabled=true"
+
+output="$(run_recon_case fingerprint_reset)"
+check_contains "same fingerprint keeps retry budget" "$output" "same_count=2"
+check_contains "repeat fingerprint keeps retry budget" "$output" "repeat_count=2"
+check_contains "new fingerprint starts a new episode" "$output" "new_fp_count=0"
+
+output="$(run_recon_case capsule_gate)"
+check_contains "malformed capsule refuses projection" "$output" "malformed_rc=1"
+check_contains "malformed capsule surfaces typed reason" "$output" "capsule_malformed"
+check_contains "missing capsule refuses projection" "$output" "missing_rc=1"
+check_contains "missing capsule surfaces typed reason" "$output" "capsule_missing"
+
+output="$(run_recon_case capsule_project)"
+check_contains "valid capsule projects a prompt" "$output" "project_rc=0"
+check_contains "projection puts foundation before incident" "$output" "projection_order=foundation-first"
+
+output="$(run_recon_case review_invalidation)"
+check_contains "no attempts and same head keeps review valid" "$output" "no_attempts_same_head_rc=1"
+check_contains "head advance without attempts keeps review valid" "$output" "no_attempts_new_head_rc=1"
+check_contains "reconciliation commit invalidates review" "$output" "attempt_new_head_rc=0"
+check_contains "stale review is recorded" "$output" "stale_status=stale"
+check_contains "ready gate refuses stale review" "$output" "gate_after_stale_rc=1"
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

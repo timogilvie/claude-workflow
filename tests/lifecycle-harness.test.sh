@@ -155,6 +155,7 @@ harness_extract_real_functions() {
   for func in \
     trim_outer_whitespace \
     merge_retry_marker_until \
+    lane_progress_patch_json \
     refresh_ready_merge_queue_tick \
     wavemill_run_tsx_tool \
     get_main_head_sha \

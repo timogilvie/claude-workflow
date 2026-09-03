@@ -477,3 +477,83 @@ test('blocked merge state is not green even with passing checks', () => {
   });
   assert.deepEqual(selected.map((item) => item.issue), []);
 });
+
+test('lane progress telemetry (HOK-2919)', async (t) => {
+  const { mkdtempSync, rmSync, readFileSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { laneProgressPath, mergeLaneStateDir, readLaneProgress, recordLaneProgress } = await import('./merge-queue.ts');
+
+  await t.test('records lane entry, wait time, and per-event counters', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-lane-progress-'));
+    try {
+      await recordLaneProgress(42, repoDir, 'merge-attempt', {
+        now: '2026-08-28T12:10:00Z',
+        readyAt: '2026-08-28T12:00:00Z',
+      });
+      await recordLaneProgress(42, repoDir, 'rebase', { now: '2026-08-28T12:11:00Z' });
+      await recordLaneProgress(42, repoDir, 'ci-restart', { now: '2026-08-28T12:11:30Z' });
+      await recordLaneProgress(42, repoDir, 'stale-base-refresh', { now: '2026-08-28T12:20:00Z' });
+      const record = await recordLaneProgress(42, repoDir, 'merged', { now: '2026-08-28T12:30:00Z' });
+
+      assert.equal(record.prNumber, 42);
+      assert.equal(record.enteredLaneAt, '2026-08-28T12:10:00Z');
+      assert.equal(record.laneWaitSeconds, 600);
+      assert.equal(record.lastProgressAt, '2026-08-28T12:30:00Z');
+      assert.equal(record.lastEvent, 'merged');
+      assert.equal(record.laneHoldSeconds, 1200);
+      // stale-base-refresh counts as both a rebase and a CI restart.
+      assert.equal(record.rebaseCount, 2);
+      assert.equal(record.ciRestartCount, 2);
+      assert.equal(record.mergeAttemptCount, 1);
+
+      const roundTrip = readLaneProgress(42, repoDir);
+      assert.deepEqual(roundTrip, record);
+      assert.equal(laneProgressPath(42, repoDir), join(mergeLaneStateDir(42, repoDir), 'progress.json'));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('readLaneProgress returns null for absent or malformed records', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-lane-progress-'));
+    try {
+      assert.equal(readLaneProgress(99, repoDir), null);
+      mkdirSync(mergeLaneStateDir(99, repoDir), { recursive: true });
+      writeFileSync(laneProgressPath(99, repoDir), 'not json', 'utf-8');
+      assert.equal(readLaneProgress(99, repoDir), null);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('poll ticks never move lastProgressAt: only recorded events do', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-lane-progress-'));
+    try {
+      await recordLaneProgress(7, repoDir, 'merge-attempt', { now: '2026-08-28T12:00:00Z' });
+      const before = readFileSync(laneProgressPath(7, repoDir), 'utf-8');
+      // Reading (what a poll does) leaves the record byte-identical.
+      readLaneProgress(7, repoDir);
+      readLaneProgress(7, repoDir);
+      assert.equal(readFileSync(laneProgressPath(7, repoDir), 'utf-8'), before);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('isCandidateStuck honors tend lane progress (HOK-2919)', () => {
+  const config = { stuckTimeoutSeconds: 900 };
+  const now = '2026-08-28T12:30:00Z';
+  // Queue-side progress is old, but tend refreshed the branch recently.
+  assert.equal(isCandidateStuck({
+    candidatePromotedAt: '2026-08-28T11:00:00Z',
+    candidateLastProgressAt: '2026-08-28T11:00:00Z',
+    lastProgressAt: '2026-08-28T12:25:00Z',
+  }, now, config), false);
+  // Without the tend stamp the same candidate would be stuck.
+  assert.equal(isCandidateStuck({
+    candidatePromotedAt: '2026-08-28T11:00:00Z',
+    candidateLastProgressAt: '2026-08-28T11:00:00Z',
+  }, now, config), true);
+});
