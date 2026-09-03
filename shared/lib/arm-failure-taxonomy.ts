@@ -9,7 +9,9 @@ export type TerminalFailureKind =
   | 'provider-config-error'
   | 'tool-use-unsupported'
   | 'empty-model-turn'
-  | 'native-provider-error';
+  | 'native-provider-error'
+  | 'native-completion-protocol'
+  | 'native-unclassified';
 
 export type ArmFaultClass =
   | 'harness-fault'
@@ -65,6 +67,15 @@ export function classifyArmFault(input: { failureKind?: string | null; detail?: 
       if (/(5\d\d|server error|overloaded|bad gateway|unavailable|service unavailable|gateway timeout|upstream)/.test(detail)) {
         return 'provider-fault';
       }
+      return 'unknown-fault';
+    // The model violated the coding completion/tool protocol (typed
+    // no_completion_artifact / invalid_completion_artifact handoff): the
+    // provider delivered output, so this is model quality signal.
+    case 'native-completion-protocol':
+      return 'model-fault';
+    // Unattributed failures stay excluded from quality signal so routing
+    // never learns from evidence-free classifications.
+    case 'native-unclassified':
       return 'unknown-fault';
     default:
       return 'unknown-fault';

@@ -34,6 +34,7 @@ TESTS=(
   challenge-varied-model-abort.test.sh
   challenge-record-decisive.test.sh
   native-terminal-failure.test.sh
+  native-failure-classification.test.sh
   challenger-transient-retry.test.sh
   parent-monitor-function-drift.test.sh
   save-task-state-canonicalization.test.sh

@@ -4256,9 +4256,40 @@ native_hook_terminal_failure_detail() {
   printf '%s\n' "$detail"
 }
 
+# Read the typed reason from the coding stage's failure handoff, if present.
+# Prints the reason on stdout; returns non-zero when the file is absent,
+# malformed, fails schema validation, or the tool cannot run — callers treat
+# every non-zero as "no typed evidence" and fall back to substring matching.
+native_coding_failure_handoff_reason() {
+  local feature_dir="${1:-}"
+  local handoff_file="$feature_dir/.coding-failure-handoff.json"
+  [[ -n "$feature_dir" && -f "$handoff_file" ]] || return 1
+  [[ -n "${TOOLS_DIR:-}" ]] || return 1
+  npx tsx "$TOOLS_DIR/read-coding-failure-handoff.ts" "$handoff_file" 2>/dev/null
+}
+
+# Classify a terminal native failure (HOK-2933). Precedence contract:
+#   1. Typed handoff reason (optional 2nd arg, from .coding-failure-handoff.json):
+#      no_completion_artifact / invalid_completion_artifact →
+#      native-completion-protocol. The model violated the coding
+#      completion/tool protocol — never a provider fault, so substring
+#      matching is skipped entirely.
+#   2. Substring matching on the failure detail. A typed provider_error also
+#      runs this so it can refine into transient/credit/config sub-kinds.
+#   3. Default: native-provider-error only when the handoff typed
+#      provider_error; native-unclassified otherwise — never blame the
+#      provider without evidence.
 native_terminal_failure_kind() {
-  local detail="${1:-}"
+  local detail="${1:-}" handoff_reason="${2:-}"
   local lower
+
+  case "$handoff_reason" in
+    no_completion_artifact)
+      printf 'native-completion-protocol\n'; return 0 ;;
+    invalid_completion_artifact)
+      printf 'native-completion-protocol\n'; return 0 ;;
+  esac
+
   lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
 
   case "$lower" in
@@ -4283,7 +4314,11 @@ native_terminal_failure_kind() {
     *"finish_reason: error"*|*"finish reason"*"error"*|*"idle timeout"*|*"stream ended without"*|*"without finish_reason"*|*"truncated stream"*|*"server error"*|*"bad gateway"*|*"service unavailable"*|*"gateway timeout"*|*"overloaded"*|*"upstream"*)
       printf 'provider-transient-error\n'; return 0 ;;
   esac
-  printf 'native-provider-error\n'
+  if [[ "$handoff_reason" == "provider_error" ]]; then
+    printf 'native-provider-error\n'
+  else
+    printf 'native-unclassified\n'
+  fi
 }
 
 native_terminal_failure_next_action() {
@@ -4304,6 +4339,10 @@ native_terminal_failure_next_action() {
       printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
+    native-completion-protocol)
+      printf "model ended the phase without a valid completion artifact (protocol violation, not a provider fault) - check the model's structured tool-call compatibility before relaunching\n" ;;
+    native-unclassified)
+      printf 'inspect the terminal failure detail and classify it manually - unrecognized failure signature, extend the classifier when this shape recurs\n' ;;
     *)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
   esac
@@ -4313,7 +4352,7 @@ native_terminal_failure_next_action() {
 # quarantined pair. Returns 0 when it handled the issue (caller should stop).
 emit_native_terminal_failure_attention() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
-  local stage_status detail failure_kind next_action agent model notes artifacts_json is_challenge
+  local stage_status detail handoff_reason failure_kind next_action agent model notes artifacts_json is_challenge
 
   stage_status="$(read_stage_status "$feature_dir" "$stage")"
   [[ "$stage_status" == "running" ]] || return 1
@@ -4328,20 +4367,29 @@ emit_native_terminal_failure_attention() {
   agent_or_model_is_native_for_recovery "$agent" "$model" "" || return 1
 
   detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # Only the coding stage produces a typed failure handoff; other stages use
+  # the substring/default classification path unchanged.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   if [[ "$failure_kind" == "provider-credit-exhausted" ]]; then
     write_openrouter_warning_cache "OpenRouter credits exhausted: $next_action"
   fi
 
   notes="Native ${stage} failed (${failure_kind}): ${detail} Next: ${next_action}"
+  [[ -z "$handoff_reason" ]] || notes+=" (typed handoff: ${handoff_reason})"
 
   artifacts_json="$(jq -cn \
     --arg paneTarget "$win_target" \
     --arg failureKind "$failure_kind" \
     --arg detail "$detail" \
     --arg nextAction "$next_action" \
-    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction}' \
+    --arg handoffReason "$handoff_reason" \
+    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction,
+      handoffReason:(if $handoffReason == "" then null else $handoffReason end)}' \
     2>/dev/null || printf '{}')"
 
   # Quarantine first: challenge_abort_pair also writes a stage result, so the
@@ -4383,7 +4431,7 @@ emit_native_terminal_failure_attention() {
 # state on every monitor cycle.
 emit_challenge_stage_failure_quarantine() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4"
-  local is_challenge existing detail failure_kind next_action model
+  local is_challenge existing detail handoff_reason failure_kind next_action model
 
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
   [[ "$is_challenge" == "true" ]] || return 1
@@ -4396,9 +4444,18 @@ emit_challenge_stage_failure_quarantine() {
   [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
   [[ -n "$detail" ]] || detail="${stage} stage reported failed without detail"
 
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # Typed handoff evidence (coding stage only) takes precedence over the
+  # substring heuristics; other stages never produce one.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  # Preserve the typed reason in the abort record. Appended only after
+  # classification so the token never perturbs substring matching.
+  [[ -z "$handoff_reason" ]] || detail+=" [typed handoff reason: ${handoff_reason}]"
 
   challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" \
@@ -4602,7 +4659,7 @@ record_challenger_transient_retry_contract_failure() {
 #       emit_challenge_stage_failure_quarantine call is then an idempotent no-op.
 maybe_retry_challenger_transient_phase() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4"
-  local is_challenge role existing detail failure_kind retry_file retry_state
+  local is_challenge role existing detail handoff_reason failure_kind retry_file retry_state
   local stored_stage stored_head count last_at now max backoff agent model result_agent
   local slug wt_dir branch title issue_json contract_payload depth review_mode rc=0
   local current_head launch_identity launch_ok launch_reason launch_detail lock_dir lock_acquired=0
@@ -4620,7 +4677,14 @@ maybe_retry_challenger_transient_phase() {
   detail="$(native_hook_terminal_failure_detail "$issue" 2>/dev/null || true)"
   [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
   [[ -n "$detail" ]] || return 1
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # A typed completion-protocol handoff must never be relaunched as a
+  # transient provider stall, even when the detail contains a transient-looking
+  # word — the typed evidence wins over the substring heuristics.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   [[ "$failure_kind" == "provider-transient-error" ]] || return 1
 
   slug="$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')"
