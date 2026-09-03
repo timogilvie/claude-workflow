@@ -1742,6 +1742,44 @@ function buildRemediationPayloadSummary(classification: ReadyWatchdogClassificat
   return parts.join('\n');
 }
 
+/** Classify a failure for reconciliation purposes (REQ-F3: distinct categories for retry/LLM decisions). */
+export function classifyForReconciliation(options: {
+  mergeStatus?: string;
+  failedCheckSummary?: string;
+  checksRun?: number;
+  checksPassed?: number;
+}): 'stale_base_clean' | 'ci_transient' | 'ci_deterministic_safe' | 'merge_conflict' | 'ambiguous' {
+  const { mergeStatus, failedCheckSummary = '', checksRun = 0, checksPassed = 0 } = options;
+
+  if (mergeStatus === 'CONFLICTED') {
+    return 'merge_conflict';
+  }
+
+  if (!failedCheckSummary || checksRun === 0) {
+    return 'stale_base_clean';
+  }
+
+  const summary = failedCheckSummary.toLowerCase();
+  if (
+    summary.includes('timeout') ||
+    summary.includes('transient') ||
+    summary.includes('temporary') ||
+    summary.includes('intermittent')
+  ) {
+    return 'ci_transient';
+  }
+
+  if (summary.includes('conflicted') || summary.includes('merge')) {
+    return 'merge_conflict';
+  }
+
+  if (checksRun > 0 && checksPassed < checksRun) {
+    return 'ci_deterministic_safe';
+  }
+
+  return 'ambiguous';
+}
+
 /** Emit a ready-phase trace event from the feature directory — best-effort, never throws. */
 function emitReadyTraceEvent(
   featureDir: string,

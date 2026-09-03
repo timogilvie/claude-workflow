@@ -5,18 +5,26 @@ set -euo pipefail
 # package.json). Supports sharding so CI can spread it across parallel jobs.
 #
 # Usage:
-#   bash tests/run-unit-tests.sh                 # run every test
-#   bash tests/run-unit-tests.sh --shard 2/3     # run shard 2 of 3
-#   bash tests/run-unit-tests.sh --list          # print selected tests and exit
+#   bash tests/run-unit-tests.sh                    # run every test
+#   bash tests/run-unit-tests.sh --shard 2/7        # run shard 2 of 7
+#   bash tests/run-unit-tests.sh --list             # print selected tests and exit
+#   bash tests/run-unit-tests.sh --timing-out FILE  # also write per-file timing JSON
 #
-# Shards are assigned round-robin rather than in contiguous blocks. Cost is
-# heavily skewed -- a handful of files that spawn subprocesses dominate, and
-# they cluster together in the list -- so contiguous blocks would land them all
-# in one shard.
+# Shards are assigned by the deterministic weighted partitioner
+# (tools/partition-tests.ts + tests/ci-test-weights.json): cost is heavily
+# skewed toward a few subprocess-spawning files, so weighted assignment keeps
+# shard runtimes balanced where round-robin could not. --shard 1/1 (the
+# default) short-circuits to the full list without invoking the partitioner,
+# so plain local runs have no extra dependency.
 #
 # Each shard hands its whole subset to a single 'node --test' invocation, which
 # parallelizes across cores internally; sharding adds a second level on top by
 # giving each shard its own runner.
+#
+# Timing output (--timing-out or TIMING_OUTPUT env) is a single bounded JSON
+# document produced by tests/lib/unit-timing-reporter.mjs: one entry per test
+# file with id, elapsed ms, and result. It contains only test ids, durations,
+# and results -- never environment content.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -133,7 +141,11 @@ TESTS=(
   shared/lib/challenge-attestation-backfill.test.ts
   shared/lib/challenge-pair-recovery.test.ts
   shared/lib/harness-replay.test.ts
-  shared/lib/cross-repo-parity.test.ts
+  shared/lib/cross-repo-parity.valid.test.ts
+  shared/lib/cross-repo-parity.missing.test.ts
+  shared/lib/cross-repo-parity.wrong-suite.test.ts
+  shared/lib/cross-repo-parity.stale.test.ts
+  shared/lib/cross-repo-parity.partial.test.ts
   shared/lib/challenge-execution-contract.test.ts
   shared/lib/challenge-pairing-repair.test.ts
   shared/lib/config.test.ts
@@ -315,6 +327,7 @@ TESTS=(
   shared/lib/evals-paths.test.ts
   shared/lib/execution-contract.test.ts
   shared/lib/expanded-route-cache.test.ts
+  shared/lib/reconciliation-context.test.ts
   shared/lib/launch-priority-audit.consistency.test.ts
   shared/lib/launch-priority-audit.test.ts
   shared/lib/linear.test.ts
@@ -390,17 +403,21 @@ TESTS=(
   tools/openrouter-smoke.test.ts
   tools/plan-launch-priority-certifications.test.ts
   tools/reap-stale-challengers.test.ts
+  shared/lib/test-partitioner.test.ts
+  shared/lib/shard-balance.test.ts
+  shared/lib/ci-test-timings.test.ts
 )
 
 SHARD_INDEX=1
 SHARD_TOTAL=1
 LIST_ONLY=0
+TIMING_OUT="${TIMING_OUTPUT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --shard)
       if [[ ! "${2:-}" =~ ^[0-9]+/[0-9]+$ ]]; then
-        echo "run-unit-tests.sh: --shard requires INDEX/TOTAL (e.g. 2/3)" >&2
+        echo "run-unit-tests.sh: --shard requires INDEX/TOTAL (e.g. 2/5)" >&2
         exit 2
       fi
       SHARD_INDEX="${2%%/*}"
@@ -410,6 +427,14 @@ while [[ $# -gt 0 ]]; do
     --list)
       LIST_ONLY=1
       shift
+      ;;
+    --timing-out)
+      if [[ -z "${2:-}" ]]; then
+        echo "run-unit-tests.sh: --timing-out requires a file path" >&2
+        exit 2
+      fi
+      TIMING_OUT="$2"
+      shift 2
       ;;
     *)
       echo "run-unit-tests.sh: unknown argument '$1'" >&2
@@ -423,12 +448,24 @@ if (( SHARD_TOTAL < 1 || SHARD_INDEX < 1 || SHARD_INDEX > SHARD_TOTAL )); then
   exit 2
 fi
 
-SELECTED=()
-for i in "${!TESTS[@]}"; do
-  if (( i % SHARD_TOTAL == SHARD_INDEX - 1 )); then
-    SELECTED+=("${TESTS[$i]}")
+if (( SHARD_TOTAL == 1 )); then
+  SELECTED=("${TESTS[@]}")
+else
+  # Deterministic weighted partitioning. A partitioner failure must fail the
+  # shard loudly: a silent fallback could drop or duplicate tests across the
+  # matrix if one leg fell back while others did not.
+  if ! SELECTION="$(
+    printf '%s\n' "${TESTS[@]}" |
+      npx tsx "$REPO_DIR/tools/partition-tests.ts" --suite unit --shard "${SHARD_INDEX}/${SHARD_TOTAL}"
+  )"; then
+    echo "run-unit-tests.sh: partitioner failed for shard ${SHARD_INDEX}/${SHARD_TOTAL}" >&2
+    exit 2
   fi
-done
+  SELECTED=()
+  while IFS= read -r line; do
+    [[ -n "$line" ]] && SELECTED+=("$line")
+  done <<< "$SELECTION"
+fi
 
 # A shard with no work is a configuration error, not a silent pass.
 if (( ${#SELECTED[@]} == 0 )); then
@@ -441,9 +478,11 @@ if (( LIST_ONLY == 1 )); then
   exit 0
 fi
 
-# node --test already exits non-zero on a missing path, so this is a
-# convenience rather than a safety net: it names the offending entry against
-# this script's own list, which is where a stale path actually needs fixing.
+# This check is a real safety net: node --test only exits non-zero on a
+# missing path when it is the sole argument -- alongside other existing paths
+# it silently ignores the missing one (verified on Node 22). It also names the
+# offending entry against this script's own list, which is where a stale path
+# actually needs fixing.
 missing=0
 for f in "${SELECTED[@]}"; do
   if [[ ! -f "$REPO_DIR/$f" ]]; then
@@ -462,4 +501,17 @@ else
 fi
 
 cd "$REPO_DIR"
+
+if [[ -n "$TIMING_OUT" ]]; then
+  # Second reporter writes the bounded per-file timing JSON to $TIMING_OUT
+  # while the spec reporter keeps human-readable output on stdout. The shard
+  # label reaches the reporter through the environment.
+  export WAVEMILL_TIMING_SHARD="${SHARD_INDEX}/${SHARD_TOTAL}"
+  exec node --test \
+    --test-reporter spec --test-reporter-destination stdout \
+    --test-reporter "$REPO_DIR/tests/lib/unit-timing-reporter.mjs" \
+    --test-reporter-destination "$TIMING_OUT" \
+    "${SELECTED[@]}"
+fi
+
 exec node --test "${SELECTED[@]}"
