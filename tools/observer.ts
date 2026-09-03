@@ -1745,7 +1745,9 @@ function readObserverFindingsJsonl(repos: RepoRow[]): Finding[] {
               ...(jsonFinding.body ? [`detail=${jsonFinding.body}`] : []),
               ...(jsonFinding.context ? Object.entries(jsonFinding.context).map(([k, v]) => `${k}=${v}`) : []),
             ],
-            recommendation: 'Marker was stale or contradicted and was cleared. This should not happen; check marker lifecycle on re-derivation paths.',
+            recommendation: typeof jsonFinding.recommendation === 'string' && jsonFinding.recommendation.length > 0
+              ? jsonFinding.recommendation
+              : 'Marker was stale or contradicted and was cleared. This should not happen; check marker lifecycle on re-derivation paths.',
           });
         } catch {
           // Ignore malformed JSONL lines

@@ -1600,3 +1600,66 @@ test('generic log errors do not fire pr-create-failed', () => {
     rmSync(repoDir, { recursive: true, force: true });
   }
 });
+
+test('merge-lane disagreement and stalled-lane JSONL findings survive ingestion and dedup (HOK-2919)', () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'observer-merge-lane-'));
+  try {
+    writePermissiveSchema(repoDir);
+    const disagreement = {
+      subsystem: 'merge-lane',
+      title: 'Mill and tend disagree on PR #1265 merge candidacy',
+      body: 'The mill merge queue holds PR #1265 as a merge candidate (live CI pass: 16/3 checks @eb20cac), '
+        + "but tend blocks it with gate 'challenge:pair-unresolved:branch-pair'.",
+      severity: 'high',
+      recommendation: 'Reconcile the mill and tend views of PR #1265.',
+      context: {
+        markerPath: 'merge-lane/1265/mill-tend-disagreement',
+        markerKind: 'merge-lane-disagreement',
+        prNumber: 1265,
+        labels: 'wavemill,wm:ready',
+        tendBlockReason: 'challenge:pair-unresolved:branch-pair',
+        millQueueState: 'merge-candidate',
+      },
+    };
+    const stalled = {
+      subsystem: 'merge-lane',
+      title: 'Merge lane stalled: 1 blocked PR, 0 eligible for 30 consecutive polls',
+      severity: 'urgent',
+      context: {
+        markerPath: 'merge-lane/idle-stall/#1265',
+        markerKind: 'merge-lane-idle-stall',
+        firstBlockedPr: 1265,
+        firstBlockedGate: 'challenge:pair-unresolved:branch-pair',
+        consecutivePolls: 30,
+      },
+    };
+    mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
+    writeFileSync(
+      join(repoDir, '.wavemill', 'observer-findings.jsonl'),
+      [disagreement, stalled, disagreement].map((finding) => JSON.stringify(finding)).join('\n'),
+    );
+
+    const findings = buildFindings(basicSnapshot(repoDir), defaultObserverOptions());
+    const disagreementFindings = findings.filter((finding) => finding.id.includes('mill-tend-disagreement'));
+    const stalledFindings = findings.filter((finding) => finding.id.includes('merge-lane-idle-stall'));
+
+    // Distinct ids per finding kind; the duplicated disagreement line dedupes to one.
+    assert.equal(disagreementFindings.length, 1);
+    assert.equal(stalledFindings.length, 1);
+    assert.notEqual(disagreementFindings[0].id, stalledFindings[0].id);
+
+    // Severity and per-finding recommendation are preserved through ingestion.
+    assert.equal(disagreementFindings[0].severity, 'high');
+    assert.equal(disagreementFindings[0].recommendation, 'Reconcile the mill and tend views of PR #1265.');
+    assert.equal(stalledFindings[0].severity, 'urgent');
+
+    // Actionable evidence: PR number, gate, labels, and queue state survive.
+    assert.ok(disagreementFindings[0].evidence.includes('prNumber=1265'));
+    assert.ok(disagreementFindings[0].evidence.includes('tendBlockReason=challenge:pair-unresolved:branch-pair'));
+    assert.ok(disagreementFindings[0].evidence.includes('millQueueState=merge-candidate'));
+    assert.ok(stalledFindings[0].evidence.includes('firstBlockedGate=challenge:pair-unresolved:branch-pair'));
+    assert.ok(stalledFindings[0].evidence.includes('consecutivePolls=30'));
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});

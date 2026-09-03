@@ -6292,6 +6292,25 @@ merge_queue_enabled() {
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]]
 }
 
+# Mirrors the tend process's per-PR lane-progress record (HOK-2919, written by
+# shared/lib/merge-queue.ts recordLaneProgress) into a merge-queue artifacts
+# patch so queue residence is explainable from the ready artifacts alone.
+# Emits '{}' when no record exists or it is unreadable.
+lane_progress_patch_json() {
+  local pr="$1"
+  local progress_file="$REPO_DIR/.wavemill/merge-lane/${pr}/progress.json"
+  [[ -n "$pr" && -f "$progress_file" ]] || { echo "{}"; return 0; }
+  jq -c '
+    {
+      lastProgressAt: (.lastProgressAt // null),
+      laneWaitSeconds: (.laneWaitSeconds // null),
+      laneHoldSeconds: (.laneHoldSeconds // null),
+      rebaseCount: (.rebaseCount // null),
+      ciRestartCount: (.ciRestartCount // null)
+    } | with_entries(select(.value != null))
+  ' "$progress_file" 2>/dev/null || echo "{}"
+}
+
 wavemill_run_tsx_tool() {
   local tool="$1"
   shift
@@ -6364,23 +6383,37 @@ mark_ready_stale() {
 
 promote_merge_candidate() {
   local issue="$1" state_dir="$2" new_sha="$3"
-  local now existing_promoted_at patch_json
+  local now existing_promoted_at patch_json ready_at ready_epoch now_epoch lane_wait_seconds
   now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   existing_promoted_at=$(ready_queue_field "$state_dir" "candidatePromotedAt")
   [[ -z "$existing_promoted_at" ]] && existing_promoted_at="$now"
+  # Progress telemetry (HOK-2919): laneWaitSeconds is the ready-verdict → lane
+  # entry span, computable only here where the ready timestamps live.
+  lane_wait_seconds=""
+  ready_at=$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")
+  if [[ -n "$ready_at" ]]; then
+    ready_epoch="$(wavemill_iso8601_to_epoch "$ready_at" 2>/dev/null || echo 0)"
+    now_epoch="$(wavemill_iso8601_to_epoch "$now" 2>/dev/null || echo 0)"
+    if [[ "$ready_epoch" =~ ^[0-9]+$ && "$now_epoch" =~ ^[0-9]+$ && "$ready_epoch" -gt 0 && "$now_epoch" -ge "$ready_epoch" ]]; then
+      lane_wait_seconds=$(( now_epoch - ready_epoch ))
+    fi
+  fi
   patch_json=$(jq -cn \
     --arg new_sha "$new_sha" \
     --arg now "$now" \
-    --arg promoted_at "$existing_promoted_at" '
+    --arg promoted_at "$existing_promoted_at" \
+    --arg lane_wait_seconds "$lane_wait_seconds" '
       {
         queueState: "merge-candidate",
         targetBaseSha: $new_sha,
         candidatePromotedAt: $promoted_at,
         candidateLastProgressAt: $now,
+        lastProgressAt: $now,
+        laneWaitSeconds: (if $lane_wait_seconds == "" then null else ($lane_wait_seconds | tonumber) end),
         staleAt: null,
         staleBaseSha: null,
         candidateSkipReason: null
-      }
+      } | with_entries(select(.key != "laneWaitSeconds" or .value != null))
     ')
   write_ready_queue_artifacts "$state_dir" "$patch_json"
 }
@@ -6548,7 +6581,7 @@ merge_queue_enrich_ready_artifacts() {
 refresh_ready_merge_queue_tick() {
   local now input_file output_file input_json output_json config_json
   local issue phase slug pr state_dir ready_status ready_verdict stored_base current_main queue_state wt_dir workflow_status pr_state_val
-  local ci_json ci_conclusion ci_head ci_summary stored_head
+  local ci_json ci_conclusion ci_head ci_summary stored_head lane_progress_patch
   local ready_prs='[]'
 
   : > "$MERGE_QUEUE_SELECTION_FILE"
@@ -6600,6 +6633,14 @@ refresh_ready_merge_queue_tick() {
         lastCiSummary: $summary
       }')"
 
+    # Mirror tend's lane-progress telemetry (rebase/CI-restart counts, hold
+    # time) into the queue artifacts so both subsystems explain residence from
+    # the same numbers (HOK-2919).
+    lane_progress_patch="$(lane_progress_patch_json "$pr")"
+    if [[ -n "$lane_progress_patch" && "$lane_progress_patch" != "{}" ]]; then
+      write_ready_queue_artifacts "$state_dir" "$lane_progress_patch"
+    fi
+
     if [[ "$ready_status" == "completed" && ( "$ready_verdict" == "pass" || "$ready_verdict" == "warn" ) && -n "$current_main" && "$stored_base" != "$current_main" && "$queue_state" != "merge-candidate" ]]; then
       mark_ready_stale "$issue" "$state_dir" "$stored_base" "$current_main"
       queue_state="ready-stale"
@@ -6631,6 +6672,7 @@ refresh_ready_merge_queue_tick() {
         --arg ready_at "$(jq -r '.finishedAt // .startedAt // empty' "$state_dir/.ready-result.json" 2>/dev/null || echo "")" \
         --arg candidate_promoted_at "$(ready_queue_field "$state_dir" candidatePromotedAt)" \
         --arg candidate_last_progress_at "$(ready_queue_field "$state_dir" candidateLastProgressAt)" \
+        --arg last_progress_at "$(ready_queue_field "$state_dir" lastProgressAt)" \
         --arg merge_retry_in_progress_until "$(merge_retry_marker_until "$pr")" \
         --arg candidate_skipped_at "$(ready_queue_field "$state_dir" candidateSkippedAt)" \
         --argjson changed_files "$(ready_changed_files_json "$state_dir" "$wt_dir" "$pr")" '
@@ -6646,6 +6688,7 @@ refresh_ready_merge_queue_tick() {
             unblocksCount: 0,
             candidatePromotedAt: (if $candidate_promoted_at == "" then null else $candidate_promoted_at end),
             candidateLastProgressAt: (if $candidate_last_progress_at == "" then null else $candidate_last_progress_at end),
+            lastProgressAt: (if $last_progress_at == "" then null else $last_progress_at end),
             mergeRetryInProgressUntil: (if $merge_retry_in_progress_until == "" then null else $merge_retry_in_progress_until end),
             candidateSkippedAt: (if $candidate_skipped_at == "" then null else $candidate_skipped_at end),
             workflowStatus: (if $workflow_status == "" then null else $workflow_status end),

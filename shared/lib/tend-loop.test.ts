@@ -4,12 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import {
+  TEND_READY_UNMERGED_WARN_MS,
+  buildReadyPrUnmergedFinding,
   classifyTendLoopError,
+  formatIdleStallWarning,
   formatLaneStallWarning,
   runTendLoop,
   tendLoopBackoffMs,
   writeTendFailureState,
   writeTendHeartbeat,
+  type MergeLaneObserverFinding,
   type TendLoopDeps,
 } from './tend-loop.ts';
 import type { StatusRenderer } from './tend-status-renderer.ts';
@@ -339,5 +343,196 @@ describe('writeTendHeartbeat', () => {
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('merge-lane progress detection (HOK-2919)', () => {
+  function blockedDecision(reason = 'challenge:pair-unresolved:branch-pair', labels = ['wavemill']): TendDecision {
+    return {
+      integrationHealth: { state: 'healthy' },
+      eligible: [],
+      blocked: [{ number: 1265, title: 'Blocked PR', headBranch: 'task/blocked', reason, labels }],
+      nextPR: null,
+    };
+  }
+
+  function loopHarness(options: {
+    decision: (iteration: number) => TendDecision;
+    iterations: number;
+    minutesPerPoll?: number;
+  }) {
+    const repoDir = mkdtempSync(join(tmpdir(), 'wavemill-tend-loop-'));
+    const findings: Array<{ repoDir: string; finding: MergeLaneObserverFinding }> = [];
+    const heartbeats: Array<Record<string, unknown>> = [];
+    const r = renderer();
+    let iteration = 0;
+    let clockMs = Date.parse('2026-08-28T00:00:00Z');
+    const d: Partial<TendLoopDeps> = {
+      selectNextCandidate: async () => {
+        iteration += 1;
+        return options.decision(iteration);
+      },
+      executeMerge: async () => ({ status: 'merged', prNumber: 1, haltLoop: false }),
+      writePollHeartbeat: async (_repoDir, health) => {
+        heartbeats.push({ ...health });
+      },
+      writeFailureState: async () => {},
+      emitObserverFinding: (findingRepoDir, finding) => {
+        findings.push({ repoDir: findingRepoDir, finding });
+      },
+      sleep: async () => {
+        clockMs += (options.minutesPerPoll ?? 1) * 60_000;
+        if (iteration >= options.iterations) {
+          throw new TypeError('stop');
+        }
+      },
+      now: () => new Date(clockMs),
+      log: () => undefined,
+      random: () => 0.5,
+    };
+    return {
+      repoDir,
+      findings,
+      heartbeats,
+      renderer: r,
+      run: async () => {
+        await assert.rejects(
+          runTendLoop({ repoDir, renderer: r, deps: d, intervalMs: 60_000 }),
+          TypeError,
+        );
+      },
+      cleanup: () => rmSync(repoDir, { recursive: true, force: true }),
+    };
+  }
+
+  it('fires a high finding at 30 idle-blocked polls and escalates to urgent at 120 (REQ-F1/REQ-F3)', async () => {
+    const harness = loopHarness({ decision: () => blockedDecision(), iterations: 121 });
+    try {
+      await harness.run();
+
+      const stallFindings = harness.findings.filter(
+        (entry) => entry.finding.context?.markerKind === 'merge-lane-idle-stall',
+      );
+      assert.equal(stallFindings.length, 2);
+      assert.equal(stallFindings[0]?.finding.severity, 'high');
+      assert.equal(stallFindings[0]?.finding.context?.consecutivePolls, 30);
+      assert.equal(stallFindings[1]?.finding.severity, 'urgent');
+      assert.equal(stallFindings[1]?.finding.context?.consecutivePolls, 120);
+
+      // REQ-F2: the finding names the blocked PR, its labels, and the gate.
+      assert.equal(stallFindings[0]?.finding.context?.firstBlockedPr, 1265);
+      assert.equal(stallFindings[0]?.finding.context?.firstBlockedGate, 'challenge:pair-unresolved:branch-pair');
+      assert.equal(stallFindings[0]?.finding.context?.firstBlockedLabels, 'wavemill');
+      assert.match(stallFindings[0]?.finding.body ?? '', /PR #1265 \(task\/blocked\)/);
+
+      // The status stream carries a greppable warning once past the threshold.
+      assert.ok(harness.renderer.lines.some((line) => /warn=merge-lane-idle-stalled severity=high/.test(line)));
+      assert.ok(harness.renderer.lines.some((line) => /warn=merge-lane-idle-stalled severity=urgent/.test(line)));
+
+      // Heartbeats flip to stalled once the threshold is crossed.
+      const stalledHeartbeats = harness.heartbeats.filter((heartbeat) => heartbeat.progressState === 'stalled');
+      assert.ok(stalledHeartbeats.length > 0);
+      assert.equal(harness.heartbeats[0]?.progressState, 'progressing');
+      assert.ok(typeof harness.heartbeats[0]?.lastProgressAt === 'string');
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('produces no stall finding while the lane state keeps changing', async () => {
+    const harness = loopHarness({
+      decision: (iteration) => blockedDecision(`gate-variant-${iteration % 2}`),
+      iterations: 80,
+    });
+    try {
+      await harness.run();
+      assert.deepEqual(
+        harness.findings.filter((entry) => entry.finding.context?.markerKind === 'merge-lane-idle-stall'),
+        [],
+      );
+      // Every poll changed the lane signature, so progress stays current and
+      // the heartbeat never reports a stall.
+      assert.ok(harness.heartbeats.every((heartbeat) => heartbeat.progressState !== 'stalled'));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('treats an empty lane as idle, never stalled', async () => {
+    const harness = loopHarness({ decision: () => idleDecision(), iterations: 60 });
+    try {
+      await harness.run();
+      assert.deepEqual(harness.findings, []);
+      assert.ok(harness.heartbeats.every((heartbeat) => heartbeat.progressState === 'idle'));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('flags a green wm:ready PR unmerged past the threshold regardless of lane health (REQ-F4)', async () => {
+    const harness = loopHarness({
+      decision: () => blockedDecision('challenge:pair-unresolved:branch-pair', ['wavemill', 'wm:ready']),
+      iterations: 45,
+      minutesPerPoll: 1,
+    });
+    try {
+      await harness.run();
+      const readyFindings = harness.findings.filter(
+        (entry) => entry.finding.context?.markerKind === 'merge-lane-ready-unmerged',
+      );
+      assert.ok(readyFindings.length >= 1);
+      assert.equal(readyFindings[0]?.finding.context?.prNumber, 1265);
+      assert.equal(readyFindings[0]?.finding.context?.gate, 'challenge:pair-unresolved:branch-pair');
+      assert.match(readyFindings[0]?.finding.title ?? '', /unmerged for \d+ minutes/);
+      // Throttled: 45 minutes of waiting emits once, not once per poll.
+      assert.equal(readyFindings.length, 1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it('does not flag a wm:ready PR whose gate already names failing checks', async () => {
+    const harness = loopHarness({
+      decision: () => blockedDecision('blocked-label:checks-failing:ci', ['wavemill', 'wm:ready']),
+      iterations: 45,
+    });
+    try {
+      await harness.run();
+      assert.deepEqual(
+        harness.findings.filter((entry) => entry.finding.context?.markerKind === 'merge-lane-ready-unmerged'),
+        [],
+      );
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+describe('merge-lane finding builders', () => {
+  it('formatIdleStallWarning names each blocked PR with its gate', () => {
+    const line = formatIdleStallWarning({
+      blocked: [
+        { number: 1265, title: 'a', headBranch: 'task/a', reason: 'challenge:pair-unresolved' },
+        { number: 1267, title: 'b', headBranch: 'task/b', reason: 'blocked-label:behind-base' },
+      ],
+      consecutive: 31,
+      severity: 'high',
+    });
+    assert.equal(
+      line,
+      'warn=merge-lane-idle-stalled severity=high blocked=#1265(challenge:pair-unresolved),#1267(blocked-label:behind-base) consecutive=31',
+    );
+  });
+
+  it('buildReadyPrUnmergedFinding escalates to urgent past twice the threshold', () => {
+    const candidate = { number: 9, title: 'x', headBranch: 'task/x', reason: 'gate', labels: ['wm:ready'] };
+    assert.equal(
+      buildReadyPrUnmergedFinding({ candidate, waitedMs: TEND_READY_UNMERGED_WARN_MS, now: '2026-08-28T00:00:00Z' }).severity,
+      'high',
+    );
+    assert.equal(
+      buildReadyPrUnmergedFinding({ candidate, waitedMs: 2 * TEND_READY_UNMERGED_WARN_MS, now: '2026-08-28T00:00:00Z' }).severity,
+      'urgent',
+    );
   });
 });

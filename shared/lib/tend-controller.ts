@@ -1,5 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { mergeLaneStateDir, recordLaneProgress, type LaneProgressEvent } from './merge-queue.ts';
 import {
   setWavemillBlocked,
   setWavemillMerged,
@@ -43,6 +45,8 @@ export interface BlockedCandidate {
   title: string;
   headBranch: string;
   reason: string;
+  /** Current PR labels, for stall-finding attribution (absent on some paths). */
+  labels?: string[];
 }
 
 export interface IntegrationHealth {
@@ -58,13 +62,35 @@ export interface TendDecision {
 }
 
 export interface MergeExecutionResult {
-  status: 'merged' | 'blocked' | 'skipped' | 'halted';
+  /**
+   * 'retried' means the merge was rejected by strict base protection while the
+   * PR remained otherwise eligible (MERGEABLE/BEHIND with green checks); the
+   * branch was refreshed in place, CI restarted, and the PR returned to
+   * wm:ready for the next pass instead of being terminally blocked.
+   */
+  status: 'merged' | 'blocked' | 'skipped' | 'halted' | 'retried';
   prNumber: number;
   phase?: string;
   failureExcerpt?: string;
   /** PRs still holding the wm:merging lane lock when phase is 'merge-lane-held'. */
   heldBy?: number[];
   haltLoop: boolean;
+}
+
+/** Composed bounded-retry decision for the strict-base refresh path (HOK-2924). */
+export type StrictBaseRetryDecision = 'proceed' | 'backoff' | 'exhausted' | 'exhausted-quiet';
+
+/**
+ * Bounded-retry operations for the strict-base refresh path. The default
+ * implementation shells out to shared/lib/bounded-retry.sh (the HOK-2924
+ * invariant helper) keyed by `(merge-lane state dir, strict-base-refresh
+ * bucket, rejected head SHA)`; tests may inject fakes.
+ */
+export interface StrictBaseRetryOps {
+  gate: (prNumber: number, headSha: string, repoDir: string) => StrictBaseRetryDecision;
+  increment: (prNumber: number, headSha: string, repoDir: string) => void;
+  markExhausted: (prNumber: number, reason: string, repoDir: string) => void;
+  clear: (prNumber: number, repoDir: string) => void;
 }
 
 export interface MergeExecutionDeps {
@@ -79,6 +105,9 @@ export interface MergeExecutionDeps {
   retrySleep: (ms: number) => Promise<void>;
   currentTimeMs: () => number;
   setMergeRetryWindow: (prNumber: number, untilIso: string | null, repoDir: string) => void;
+  strictBaseRetry: StrictBaseRetryOps;
+  /** Best-effort lane-progress telemetry recorder; must never fail the merge. */
+  recordLaneProgress: (prNumber: number, event: LaneProgressEvent, repoDir: string) => Promise<void>;
 }
 
 export interface ExecuteMergeOptions {
@@ -112,10 +141,26 @@ export interface SelectNextCandidateOptions {
   blockedLabelClearer?: BlockedLabelClearer;
   prStateMarkerReader?: PrStateMarkerReader;
   prStateMarkerWriter?: PrStateMarkerWriter;
+  blockedPrLiveStateProber?: BlockedPrLiveStateProber;
   loserCleanup?: (candidate: ChallengeLoserCleanupCandidate, repoDir: string) => void;
   challengeGateDeps?: ChallengeGateDeps;
   challengeGateOptions?: ChallengeGateOptions;
 }
+
+/**
+ * Live GitHub truth for a PR carrying wm:blocked, read before the label is
+ * honoured. `available: false` means the probe failed — callers must treat
+ * that as "gate unverifiable", never as evidence in either direction.
+ */
+export interface BlockedPrLiveState {
+  available: boolean;
+  mergeable?: string;
+  mergeStateStatus?: string;
+  failingChecks?: string[];
+  pendingChecks?: string[];
+}
+
+export type BlockedPrLiveStateProber = (prNumber: number, repoDir: string) => Promise<BlockedPrLiveState>;
 
 export interface CrossPrGuardCheckResult {
   status: 'pass' | 'blocked' | 'tool-error';
@@ -174,8 +219,9 @@ const CROSS_PR_GUARD_PROVENANCE_TEXT = [
   'without explicit acknowledgement',
 ];
 
-interface PrMergeDiagnostics {
+export interface PrMergeDiagnostics {
   mergeStateStatus?: string;
+  mergeable?: string;
   statusCheckRollup?: unknown;
   headRefOid?: string;
   baseRefOid?: string;
@@ -365,9 +411,12 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   const blockedLabelClearer = options.blockedLabelClearer ?? defaultBlockedLabelClearer;
   const prStateMarkerReader = options.prStateMarkerReader ?? readPrStateMarker;
   const prStateMarkerWriter = options.prStateMarkerWriter ?? writePrStateMarker;
+  const blockedPrLiveStateProber = options.blockedPrLiveStateProber ?? defaultBlockedPrLiveStateProber;
+  const workItemByNumber = new Map<number, { pr: GhPrListEntry; metadata: PrMetadata | null }>();
 
   for (const pr of wavemillPrs) {
     const metadataResult = getValidMetadata(pr.body);
+    workItemByNumber.set(pr.number, { pr, metadata: metadataResult.metadata });
     const reason = await getInitialBlockReason(
       pr,
       metadataResult.metadata,
@@ -379,6 +428,7 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
         blockedLabelClearer,
         prStateMarkerReader,
         prStateMarkerWriter,
+        blockedPrLiveStateProber,
       },
     );
 
@@ -424,6 +474,21 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
       dependencyDepth: item.dependencyDepth,
     }))
     .sort((a, b) => a.dependencyDepth - b.dependencyDepth || a.createdAt.localeCompare(b.createdAt));
+
+  // REQ-F5 (HOK-2919): when the mill's merge queue calls a PR a merge
+  // candidate while tend blocks it, the two subsystems hold contradictory
+  // views. Surface the disagreement instead of silently resolving it in
+  // favour of the block.
+  for (const blockedCandidate of blocked) {
+    const workItem = workItemByNumber.get(blockedCandidate.number);
+    if (!workItem) {
+      continue;
+    }
+    if (blockedCandidate.labels === undefined) {
+      blockedCandidate.labels = [...labelSet(workItem.pr)];
+    }
+    emitMillTendDisagreementFinding(options.repoDir, workItem.pr, workItem.metadata, blockedCandidate);
+  }
 
   return {
     integrationHealth,
@@ -562,9 +627,16 @@ export async function executeMerge(
       candidate.headBranch,
       options.repoDir,
       async (worktreePath) => {
+        await recordLaneProgressSafe(deps, candidate.number, 'merge-attempt', options.repoDir);
+
         let pushedHeadSha: string | undefined;
         try {
-          pushedHeadSha = rebaseAndPush(worktreePath, candidate.headBranch, integrationBranch, deps.shellRunner).headSha || undefined;
+          const rebaseResult = rebaseAndPush(worktreePath, candidate.headBranch, integrationBranch, deps.shellRunner);
+          pushedHeadSha = rebaseResult.headSha || undefined;
+          if (rebaseResult.rebased) {
+            await recordLaneProgressSafe(deps, candidate.number, 'rebase', options.repoDir);
+            await recordLaneProgressSafe(deps, candidate.number, 'ci-restart', options.repoDir);
+          }
         } catch (error) {
           return block('rebase', outputFromError(error));
         }
@@ -601,7 +673,25 @@ export async function executeMerge(
             deps,
           );
         } catch (error) {
-          return block('merge', outputFromError(error));
+          const recovery = await attemptStrictBaseRecovery({
+            candidate,
+            worktreePath,
+            integrationBranch,
+            repoDir: options.repoDir,
+            deps,
+            mergeErrorOutput: outputFromError(error),
+          });
+          if (recovery.result) {
+            return recovery.result;
+          }
+          return block('merge', recovery.blockDetail ?? outputFromError(error));
+        }
+
+        await recordLaneProgressSafe(deps, candidate.number, 'merged', options.repoDir);
+        try {
+          deps.strictBaseRetry.clear(candidate.number, options.repoDir);
+        } catch (error) {
+          console.warn(`tend: failed to clear strict-base retry budget for PR #${candidate.number}: ${errorMessage(error)}`);
         }
 
         if (integrationConfig.deleteBranchAfterMerge) {
@@ -962,7 +1052,7 @@ function rebaseAndPush(
   prBranch: string,
   integrationBranch: string,
   shellRunner: MergeExecutionDeps['shellRunner'],
-): { output: string; headSha: string } {
+): { output: string; headSha: string; rebased: boolean } {
   validateBranchName(prBranch, 'PR branch');
   validateBranchName(integrationBranch, 'integration branch');
 
@@ -984,7 +1074,7 @@ function rebaseAndPush(
   const integrationRemoteRef = `origin/${integrationBranch}`;
   if (isRemoteIntegrationAncestorOfPrHead(integrationRemoteRef, prBranchSha, worktreePath, shellRunner)) {
     output.push(`tend: skipping pre-merge rebase because ${integrationRemoteRef} is already an ancestor of ${prBranchSha}`);
-    return { output: output.join('\n'), headSha: prBranchSha };
+    return { output: output.join('\n'), headSha: prBranchSha, rebased: false };
   }
 
   try {
@@ -1024,7 +1114,7 @@ function rebaseAndPush(
     { encoding: 'utf-8', cwd: worktreePath, timeout: GIT_MUTATION_TIMEOUT_MS },
   )));
 
-  return { output: output.join('\n'), headSha: rebasedHeadSha };
+  return { output: output.join('\n'), headSha: rebasedHeadSha, rebased: true };
 }
 
 function isRemoteIntegrationAncestorOfPrHead(
@@ -1347,6 +1437,281 @@ function isAlreadyMergedOutput(output: string): boolean {
   return /\balready merged\b|pull request .* was merged/i.test(output);
 }
 
+const BASE_POLICY_MERGE_ERROR_PATTERN = /base branch policy prohibits the merge/i;
+
+/**
+ * GitHub's strict-mode rejection text. On a serially drained lane every merge
+ * makes every queued PR stale, so this exact message is expected churn — but
+ * only the live PR state can distinguish staleness from a genuine policy
+ * failure (failing required checks, conflicts, missing approvals).
+ */
+export function isBasePolicyMergeError(output: string): boolean {
+  return BASE_POLICY_MERGE_ERROR_PATTERN.test(output);
+}
+
+export type BasePolicyRejectionClass = 'stale-base' | 'policy-failure';
+
+export interface BasePolicyRejectionClassification {
+  classification: BasePolicyRejectionClass;
+  detail: string;
+}
+
+/**
+ * Classify a base-policy merge rejection from fresh post-rejection diagnostics
+ * (REQ-F1/REQ-F2). 'stale-base' — the transient strict-mode case — requires
+ * ALL of: mergeable MERGEABLE, mergeStateStatus BEHIND, and no failing check
+ * in the status rollup. Anything else (including unreadable diagnostics) is a
+ * 'policy-failure' and keeps the terminal blocking path — an unreadable
+ * current state is never enough to retry.
+ */
+export function classifyBasePolicyRejection(diagnostics: PrMergeDiagnostics): BasePolicyRejectionClassification {
+  if (diagnostics.unavailableReason) {
+    return {
+      classification: 'policy-failure',
+      detail: `post-rejection PR state unavailable: ${truncateReason(diagnostics.unavailableReason, 200)}`,
+    };
+  }
+
+  const mergeable = (diagnostics.mergeable ?? '').toUpperCase();
+  const mergeStateStatus = (diagnostics.mergeStateStatus ?? '').toUpperCase();
+  const failingChecks = failingRollupCheckNames(diagnostics.statusCheckRollup);
+  const stateSummary = `mergeable=${mergeable || '(missing)'} mergeStateStatus=${mergeStateStatus || '(missing)'}`
+    + `${failingChecks.length > 0 ? ` failingChecks=${failingChecks.join(',')}` : ''}`;
+
+  if (mergeable === 'MERGEABLE' && mergeStateStatus === 'BEHIND' && failingChecks.length === 0) {
+    return {
+      classification: 'stale-base',
+      detail: `strict base protection rejected a stale head (${stateSummary}); refresh and retry`,
+    };
+  }
+
+  return {
+    classification: 'policy-failure',
+    detail: `base-policy rejection is not stale-base churn (${stateSummary})`,
+  };
+}
+
+function failingRollupCheckNames(rollup: unknown): string[] {
+  return extractStatusCheckRollupEntries(rollup)
+    .filter((entry) => {
+      const conclusion = (stringField(entry, 'conclusion') ?? '').toLowerCase();
+      const state = (stringField(entry, 'state') ?? '').toLowerCase();
+      return FAILING_CHECK_CONCLUSIONS.has(conclusion) || FAILING_CHECK_CONCLUSIONS.has(state);
+    })
+    .map((entry) => stringField(entry, 'name') ?? stringField(entry, 'context') ?? 'check');
+}
+
+const STRICT_BASE_REFRESH_BUCKET = 'strict-base-refresh';
+const STRICT_BASE_REFRESH_MAX_ATTEMPTS = 4;
+const BOUNDED_RETRY_HELPER_TIMEOUT_MS = 30_000;
+const BOUNDED_RETRY_HELPER_PATH = join(dirname(fileURLToPath(import.meta.url)), 'bounded-retry.sh');
+const STRICT_BASE_RETRY_DECISIONS = new Set<StrictBaseRetryDecision>(['proceed', 'backoff', 'exhausted', 'exhausted-quiet']);
+
+function runBoundedRetryHelper(repoDir: string, invocation: string): string {
+  const result = execArgvCommand(
+    'bash',
+    ['-c', `source ${escapeShellArg(BOUNDED_RETRY_HELPER_PATH)} && ${invocation}`],
+    { cwd: repoDir, encoding: 'utf-8', timeout: BOUNDED_RETRY_HELPER_TIMEOUT_MS },
+  );
+  if (result.failed) {
+    throw new Error(`bounded-retry helper unavailable: ${truncateReason(result.stderr || 'bash not found', 200)}`);
+  }
+  return result.stdout.trim();
+}
+
+function sanitizeHeadShaForRetryKey(headSha: string): string {
+  return /^[0-9a-fA-F]{4,64}$/.test(headSha) ? headSha : '';
+}
+
+/**
+ * Default HOK-2924 bounded-retry wiring for strict-base refreshes. Never adds
+ * a private counter: all state lives in the shared helper's files under
+ * `.wavemill/merge-lane/<pr>/` with the `strict-base-refresh` bucket, so the
+ * budget is head-keyed, backed off, terminalized at a ceiling with a
+ * greppable `.retry-strict-base-refresh-exhausted` sentinel, and reset by a
+ * new head or a successful merge.
+ */
+export const defaultStrictBaseRetryOps: StrictBaseRetryOps = {
+  gate: (prNumber, headSha, repoDir) => {
+    const stateDir = mergeLaneStateDir(prNumber, repoDir);
+    const decision = runBoundedRetryHelper(
+      repoDir,
+      `bounded_retry_gate ${escapeShellArg(stateDir)} ${escapeShellArg(STRICT_BASE_REFRESH_BUCKET)} `
+      + `${escapeShellArg(sanitizeHeadShaForRetryKey(headSha))} ${STRICT_BASE_REFRESH_MAX_ATTEMPTS}`,
+    );
+    if (!STRICT_BASE_RETRY_DECISIONS.has(decision as StrictBaseRetryDecision)) {
+      throw new Error(`bounded_retry_gate returned unexpected decision: ${truncateReason(decision || '(empty)', 100)}`);
+    }
+    return decision as StrictBaseRetryDecision;
+  },
+  increment: (prNumber, headSha, repoDir) => {
+    const stateDir = mergeLaneStateDir(prNumber, repoDir);
+    runBoundedRetryHelper(
+      repoDir,
+      `bounded_retry_increment ${escapeShellArg(stateDir)} ${escapeShellArg(STRICT_BASE_REFRESH_BUCKET)} `
+      + `${escapeShellArg(sanitizeHeadShaForRetryKey(headSha))}`,
+    );
+  },
+  markExhausted: (prNumber, reason, repoDir) => {
+    const stateDir = mergeLaneStateDir(prNumber, repoDir);
+    runBoundedRetryHelper(
+      repoDir,
+      `bounded_retry_mark_exhausted ${escapeShellArg(stateDir)} ${escapeShellArg(STRICT_BASE_REFRESH_BUCKET)} `
+      + `${escapeShellArg(reason)} || true`,
+    );
+  },
+  clear: (prNumber, repoDir) => {
+    const stateDir = mergeLaneStateDir(prNumber, repoDir);
+    runBoundedRetryHelper(
+      repoDir,
+      `bounded_retry_clear ${escapeShellArg(stateDir)} ${escapeShellArg(STRICT_BASE_REFRESH_BUCKET)}`,
+    );
+  },
+};
+
+interface StrictBaseRecoveryOutcome {
+  /** Set when the rejection was recovered as transient; caller returns it. */
+  result?: MergeExecutionResult;
+  /** Detail to append to the terminal block when recovery does not apply. */
+  blockDetail?: string;
+}
+
+/**
+ * Attempt the REQ-F1 refresh-and-retry recovery after a base-policy merge
+ * rejection. Fail-closed on every uncertainty: unreadable diagnostics, a
+ * missing head, a failing helper, or a failed refresh push all fall back to
+ * the terminal blocking path with the classifier verdict recorded.
+ */
+async function attemptStrictBaseRecovery(args: {
+  candidate: TendCandidate;
+  worktreePath: string;
+  integrationBranch: string;
+  repoDir: string;
+  deps: MergeExecutionDeps;
+  mergeErrorOutput: string;
+}): Promise<StrictBaseRecoveryOutcome> {
+  const { candidate, deps } = args;
+
+  if (!isBasePolicyMergeError(args.mergeErrorOutput)) {
+    return {};
+  }
+
+  const diagnostics = readPrMergeDiagnostics(candidate.number, args.repoDir, deps.shellRunner);
+  const verdict = classifyBasePolicyRejection(diagnostics);
+  const classifierLine = `strict-base classifier: ${verdict.classification} — ${verdict.detail}`;
+
+  if (verdict.classification === 'policy-failure') {
+    return { blockDetail: `${args.mergeErrorOutput}\n\n${classifierLine}` };
+  }
+
+  const rejectedHead = diagnostics.headRefOid ?? '';
+  if (!rejectedHead) {
+    return {
+      blockDetail: `${args.mergeErrorOutput}\n\nstrict-base classifier: policy-failure — `
+        + 'stale-base state observed but the rejected head SHA is unknown; cannot key a bounded retry',
+    };
+  }
+
+  let decision: StrictBaseRetryDecision;
+  try {
+    decision = deps.strictBaseRetry.gate(candidate.number, rejectedHead, args.repoDir);
+  } catch (error) {
+    return {
+      blockDetail: `${args.mergeErrorOutput}\n\n${classifierLine}\n`
+        + `strict-base retry gate failed (fail-closed): ${errorMessage(error)}`,
+    };
+  }
+
+  if (decision === 'exhausted' || decision === 'exhausted-quiet') {
+    const reason = `strict-base-refresh budget exhausted after ${STRICT_BASE_REFRESH_MAX_ATTEMPTS} attempts at head ${rejectedHead}`;
+    if (decision === 'exhausted') {
+      try {
+        deps.strictBaseRetry.markExhausted(candidate.number, reason, args.repoDir);
+      } catch (error) {
+        console.warn(`tend: failed to record strict-base exhaustion for PR #${candidate.number}: ${errorMessage(error)}`);
+      }
+    }
+    return { blockDetail: `${args.mergeErrorOutput}\n\n${classifierLine}\n${reason}` };
+  }
+
+  if (decision === 'backoff') {
+    await restoreReadyAfterStrictBaseRetry(candidate, deps);
+    console.warn(
+      `tend: strict-base staleness on PR #${candidate.number} at ${rejectedHead}; `
+      + 'refresh backoff window active — PR returned to wm:ready for a later pass',
+    );
+    return {
+      result: {
+        status: 'retried',
+        prNumber: candidate.number,
+        phase: 'stale-base-backoff',
+        failureExcerpt: truncateOutput(`${classifierLine}\nrefresh deferred by bounded-retry backoff`),
+        haltLoop: false,
+      },
+    };
+  }
+
+  try {
+    deps.strictBaseRetry.increment(candidate.number, rejectedHead, args.repoDir);
+  } catch (error) {
+    console.warn(`tend: failed to record strict-base retry attempt for PR #${candidate.number}: ${errorMessage(error)}`);
+  }
+
+  let refreshedHead: string;
+  try {
+    refreshedHead = rebaseAndPush(args.worktreePath, candidate.headBranch, args.integrationBranch, deps.shellRunner).headSha;
+  } catch (error) {
+    return {
+      blockDetail: `${args.mergeErrorOutput}\n\n${classifierLine}\n`
+        + `strict-base refresh failed (fail-closed): ${truncateOutput(outputFromError(error))}`,
+    };
+  }
+
+  await recordLaneProgressSafe(deps, candidate.number, 'stale-base-refresh', args.repoDir);
+  await restoreReadyAfterStrictBaseRetry(candidate, deps);
+  console.warn(
+    `tend: strict-base staleness on PR #${candidate.number}: refreshed ${rejectedHead} → ${refreshedHead}, `
+    + 'CI restarted, PR returned to wm:ready for retry on a later pass',
+  );
+
+  return {
+    result: {
+      status: 'retried',
+      prNumber: candidate.number,
+      phase: 'stale-base-refresh',
+      failureExcerpt: truncateOutput(`${classifierLine}\nrefreshed ${rejectedHead} → ${refreshedHead}; CI restarted`),
+      haltLoop: false,
+    },
+  };
+}
+
+async function restoreReadyAfterStrictBaseRetry(candidate: TendCandidate, deps: MergeExecutionDeps): Promise<void> {
+  try {
+    await retryTransient(() => deps.restoreReady(candidate.number), {
+      label: 'restore ready label after strict-base retry',
+      sleep: deps.retrySleep,
+    });
+  } catch (error) {
+    console.warn(
+      `tend: failed to restore wm:ready on PR #${candidate.number} after strict-base refresh; `
+      + `wm:merging may be leaked until the stale-lock timeout reclaims it: ${errorMessage(error)}`,
+    );
+  }
+}
+
+async function recordLaneProgressSafe(
+  deps: MergeExecutionDeps,
+  prNumber: number,
+  event: LaneProgressEvent,
+  repoDir: string,
+): Promise<void> {
+  try {
+    await deps.recordLaneProgress(prNumber, event, repoDir);
+  } catch (error) {
+    console.warn(`tend: failed to record lane progress '${event}' for PR #${prNumber}: ${errorMessage(error)}`);
+  }
+}
+
 function readPrMergeDiagnostics(
   prNumber: number,
   repoDir: string,
@@ -1354,7 +1719,7 @@ function readPrMergeDiagnostics(
 ): PrMergeDiagnostics {
   try {
     const output = shellRunner(
-      `gh pr view ${prNumber} --json mergeStateStatus,statusCheckRollup,headRefOid,baseRefOid`,
+      `gh pr view ${prNumber} --json mergeStateStatus,mergeable,statusCheckRollup,headRefOid,baseRefOid`,
       { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
     );
     const parsed = JSON.parse(String(output)) as unknown;
@@ -1363,12 +1728,14 @@ function readPrMergeDiagnostics(
     }
     const value = parsed as {
       mergeStateStatus?: unknown;
+      mergeable?: unknown;
       statusCheckRollup?: unknown;
       headRefOid?: unknown;
       baseRefOid?: unknown;
     };
     return {
       mergeStateStatus: typeof value.mergeStateStatus === 'string' ? value.mergeStateStatus : undefined,
+      mergeable: typeof value.mergeable === 'string' ? value.mergeable : undefined,
       statusCheckRollup: value.statusCheckRollup,
       headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : undefined,
       baseRefOid: typeof value.baseRefOid === 'string' ? value.baseRefOid : undefined,
@@ -1483,6 +1850,10 @@ function mergeExecutionDeps(deps: Partial<MergeExecutionDeps> | undefined, marke
     currentTimeMs: () => Date.now(),
     setMergeRetryWindow: (prNumber, untilIso, repoDir) => {
       writeMergeRetryMarker(prNumber, untilIso, repoDir);
+    },
+    strictBaseRetry: defaultStrictBaseRetryOps,
+    recordLaneProgress: async (prNumber, event, repoDir) => {
+      await recordLaneProgress(prNumber, repoDir, event);
     },
     ...deps,
   };
@@ -1788,6 +2159,7 @@ async function getInitialBlockReason(
     blockedLabelClearer: BlockedLabelClearer;
     prStateMarkerReader: PrStateMarkerReader;
     prStateMarkerWriter: PrStateMarkerWriter;
+    blockedPrLiveStateProber: BlockedPrLiveStateProber;
   },
 ): Promise<string | null> {
   const labels = labelSet(pr);
@@ -1840,6 +2212,7 @@ async function resolveBlockedLabelReason(
     blockedLabelClearer: BlockedLabelClearer;
     prStateMarkerReader: PrStateMarkerReader;
     prStateMarkerWriter: PrStateMarkerWriter;
+    blockedPrLiveStateProber: BlockedPrLiveStateProber;
   },
 ): Promise<string | null> {
   const readyResult = readReadyResultSnapshot(options.repoDir, pr, metadata);
@@ -1872,10 +2245,41 @@ async function resolveBlockedLabelReason(
 
   const evidence = extractCrossPrGuardEvidence(readyResult);
   if (!evidence.provenance) {
+    let liveState: BlockedPrLiveState;
+    try {
+      liveState = await options.blockedPrLiveStateProber(pr.number, options.repoDir);
+    } catch {
+      liveState = { available: false };
+    }
+
     if (markerNeedsReconciliation) {
+      // REQ-F3: the marker no longer validates (head changed, marker absent,
+      // or condition contradicted). Only a positively confirmed gate at the
+      // current head may re-establish the block; otherwise the stale label is
+      // cleared in this same selection cycle (REQ-F4).
+      const confirmedGate = confirmedLiveBlockingGate(liveState);
+      if (confirmedGate) {
+        const markerWriteError = refreshPrStateMarker(pr, labels, currentHeadSha, options);
+        if (markerWriteError) {
+          return markerWriteError;
+        }
+        return `blocked-label:${confirmedGate}`;
+      }
       return clearGuardBlockedLabel(pr, labels, currentHeadSha, options, 'blocked-label:clear-failed');
     }
-    return 'blocked-label';
+
+    // The marker validates at the current head, so the block was written
+    // against exactly this state. Still re-derive before honouring it: a
+    // MERGEABLE/CLEAN PR with green required checks contradicts every
+    // GitHub-visible gate. A wavemill-internal gate (e.g. a failed in-lane
+    // ready re-check) may legitimately remain, so the block stays fail-closed
+    // — but the contradiction is surfaced instead of silently held (REQ-F5).
+    if (isLiveStateCleanGreen(liveState)) {
+      emitBlockedLabelContradictionFinding(options.repoDir, pr, currentHeadSha, liveState);
+      return 'blocked-label:contradicted-by-live-state';
+    }
+    const gate = describeLiveBlockedGate(liveState);
+    return gate ? `blocked-label:${gate}` : 'blocked-label';
   }
 
   if (
@@ -1982,6 +2386,10 @@ function emitPrStateMarkerFinding(
   if (!finding) {
     return;
   }
+  appendObserverFinding(repoDir, finding);
+}
+
+function appendObserverFinding(repoDir: string, finding: object): void {
   try {
     const findingsPath = join(repoDir, '.wavemill', 'observer-findings.jsonl');
     mkdirSync(join(repoDir, '.wavemill'), { recursive: true });
@@ -1989,6 +2397,196 @@ function emitPrStateMarkerFinding(
   } catch {
     // Observer telemetry is best-effort and must not change the merge decision.
   }
+}
+
+async function defaultBlockedPrLiveStateProber(prNumber: number, repoDir: string): Promise<BlockedPrLiveState> {
+  try {
+    const output = String(execShellCommand(
+      `gh pr view ${prNumber} --json mergeable,mergeStateStatus,statusCheckRollup`,
+      { encoding: 'utf-8', cwd: repoDir, timeout: GH_COMMAND_TIMEOUT_MS },
+    ));
+    const parsed = JSON.parse(output) as unknown;
+    if (!isRecord(parsed)) {
+      return { available: false };
+    }
+    return {
+      available: true,
+      mergeable: typeof parsed.mergeable === 'string' ? parsed.mergeable : undefined,
+      mergeStateStatus: typeof parsed.mergeStateStatus === 'string' ? parsed.mergeStateStatus : undefined,
+      failingChecks: failingRollupCheckNames(parsed.statusCheckRollup),
+      pendingChecks: pendingRollupCheckNames(parsed.statusCheckRollup),
+    };
+  } catch {
+    return { available: false };
+  }
+}
+
+function pendingRollupCheckNames(rollup: unknown): string[] {
+  return extractStatusCheckRollupEntries(rollup)
+    .filter((entry) => {
+      const conclusion = (stringField(entry, 'conclusion') ?? '').toLowerCase();
+      const state = (stringField(entry, 'state') ?? '').toLowerCase();
+      if (FAILING_CHECK_CONCLUSIONS.has(conclusion) || FAILING_CHECK_CONCLUSIONS.has(state)) {
+        return false;
+      }
+      if (PASSING_CHECK_CONCLUSIONS.has(conclusion) || PASSING_CHECK_CONCLUSIONS.has(state)) {
+        return false;
+      }
+      return true;
+    })
+    .map((entry) => stringField(entry, 'name') ?? stringField(entry, 'context') ?? 'check');
+}
+
+export function isLiveStateCleanGreen(live: BlockedPrLiveState): boolean {
+  return live.available
+    && (live.mergeable ?? '').toUpperCase() === 'MERGEABLE'
+    && (live.mergeStateStatus ?? '').toUpperCase() === 'CLEAN'
+    && (live.failingChecks?.length ?? 0) === 0
+    && (live.pendingChecks?.length ?? 0) === 0;
+}
+
+/**
+ * A gate that positively confirms the PR cannot merge right now. Only these
+ * gates may re-establish a block whose marker no longer validates; anything
+ * weaker (pending checks, behind base, unreadable state) is not confirmation.
+ */
+function confirmedLiveBlockingGate(live: BlockedPrLiveState): string | null {
+  if (!live.available) {
+    return null;
+  }
+  if ((live.failingChecks?.length ?? 0) > 0) {
+    return `checks-failing:${truncateReason((live.failingChecks ?? []).join(','), 80)}`;
+  }
+  const mergeable = (live.mergeable ?? '').toUpperCase();
+  const status = (live.mergeStateStatus ?? '').toUpperCase();
+  if (mergeable === 'CONFLICTING' || status === 'DIRTY') {
+    return 'merge-conflict';
+  }
+  return null;
+}
+
+/** Best-effort human-readable gate name for a block that stays parked. */
+function describeLiveBlockedGate(live: BlockedPrLiveState): string | null {
+  const confirmed = confirmedLiveBlockingGate(live);
+  if (confirmed) {
+    return confirmed;
+  }
+  if (!live.available) {
+    return null;
+  }
+  if ((live.pendingChecks?.length ?? 0) > 0) {
+    return 'checks-pending';
+  }
+  if ((live.mergeStateStatus ?? '').toUpperCase() === 'BEHIND') {
+    return 'behind-base';
+  }
+  return null;
+}
+
+/**
+ * Append a merge-lane finding at most once per (pr, head, reason). The dedup
+ * sentinel lives in the PR's merge-lane state dir so a new head or a changed
+ * reason re-emits, while steady-state polling stays quiet.
+ */
+function emitMergeLaneFindingOnce(
+  repoDir: string,
+  prNumber: number,
+  kind: string,
+  headSha: string,
+  reason: string,
+  finding: object,
+): void {
+  const sentinelPath = join(mergeLaneStateDir(prNumber, repoDir), `finding-${kind}.json`);
+  try {
+    if (existsSync(sentinelPath)) {
+      const previous = JSON.parse(readFileSync(sentinelPath, 'utf-8')) as { head?: string; reason?: string };
+      if (previous.head === headSha && previous.reason === reason) {
+        return;
+      }
+    }
+  } catch {
+    // Unreadable sentinel: fall through and re-emit.
+  }
+  appendObserverFinding(repoDir, finding);
+  try {
+    mkdirSync(mergeLaneStateDir(prNumber, repoDir), { recursive: true });
+    writeFileSync(sentinelPath, `${JSON.stringify({ head: headSha, reason })}\n`, 'utf-8');
+  } catch {
+    // Best-effort dedup only.
+  }
+}
+
+function emitBlockedLabelContradictionFinding(
+  repoDir: string,
+  pr: GhPrListEntry,
+  currentHeadSha: string,
+  live: BlockedPrLiveState,
+): void {
+  emitMergeLaneFindingOnce(repoDir, pr.number, 'blocked-label-contradiction', currentHeadSha, 'clean-green', {
+    subsystem: 'merge-lane',
+    title: `wm:blocked on PR #${pr.number} contradicted by live state`,
+    body: `PR #${pr.number} carries wm:blocked with a marker valid at head ${currentHeadSha}, but GitHub reports `
+      + 'MERGEABLE/CLEAN with green required checks. If no wavemill-internal gate applies, canonicalize with '
+      + `\`npx tsx tools/set-pr-ready-label.ts ${pr.number}\`.`,
+    severity: 'warning',
+    context: {
+      markerPath: `merge-lane/${pr.number}/blocked-label-contradiction`,
+      markerKind: 'merge-lane-blocked-contradiction',
+      prNumber: pr.number,
+      currentHead: currentHeadSha,
+      labels: [...labelSet(pr)].join(','),
+      mergeable: live.mergeable ?? '',
+      mergeStateStatus: live.mergeStateStatus ?? '',
+    },
+  });
+}
+
+/**
+ * Surface a mill/tend disagreement (REQ-F5): the mill's merge queue calls the
+ * PR a merge candidate while tend's selection blocks it. Named gate, labels,
+ * and both subsystems' evidence go into the finding so an operator (or the
+ * observer) can arbitrate instead of the stale view silently winning.
+ */
+function emitMillTendDisagreementFinding(
+  repoDir: string,
+  pr: GhPrListEntry,
+  metadata: PrMetadata | null,
+  blockedCandidate: BlockedCandidate,
+): void {
+  let snapshot: ReadyResultSnapshot | null;
+  try {
+    snapshot = readReadyResultSnapshot(repoDir, pr, metadata);
+  } catch {
+    return;
+  }
+  const artifacts = snapshot?.artifacts;
+  if (!artifacts || artifacts.queueState !== 'merge-candidate') {
+    return;
+  }
+
+  const currentHeadSha = pr.headRefOid ?? '';
+  const millCiSummary = typeof artifacts.lastCiSummary === 'string' ? artifacts.lastCiSummary : '';
+  const millCiHead = typeof artifacts.lastCiHeadSha === 'string' ? artifacts.lastCiHeadSha : '';
+  emitMergeLaneFindingOnce(repoDir, pr.number, 'mill-tend-disagreement', currentHeadSha, blockedCandidate.reason, {
+    subsystem: 'merge-lane',
+    title: `Mill and tend disagree on PR #${pr.number} merge candidacy`,
+    body: `The mill merge queue holds PR #${pr.number} as a merge candidate`
+      + `${millCiSummary ? ` (live CI ${millCiSummary}${millCiHead ? ` @${millCiHead.slice(0, 7)}` : ''})` : ''}, `
+      + `but tend blocks it with gate '${blockedCandidate.reason}'. One of the two views is stale; `
+      + 'this disagreement must be reconciled, not silently resolved in favour of the block.',
+    severity: 'warning',
+    context: {
+      markerPath: `merge-lane/${pr.number}/mill-tend-disagreement`,
+      markerKind: 'merge-lane-disagreement',
+      prNumber: pr.number,
+      currentHead: currentHeadSha,
+      labels: (blockedCandidate.labels ?? [...labelSet(pr)]).join(','),
+      tendBlockReason: blockedCandidate.reason,
+      millQueueState: 'merge-candidate',
+      millLastCiSummary: millCiSummary,
+      millLastCiHeadSha: millCiHead,
+    },
+  });
 }
 
 function readReadyResultSnapshot(
@@ -2257,6 +2855,7 @@ function toBlockedCandidate(pr: GhPrListEntry, reason: string): BlockedCandidate
     title: pr.title,
     headBranch: pr.headRefName,
     reason,
+    labels: [...labelSet(pr)],
   };
 }
 
