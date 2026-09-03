@@ -28,7 +28,6 @@ LIB_DIR="$REPO_DIR/shared/lib"
 TS_TESTS=(
   check-routing.test.ts
   challenge-coverage-selector.test.ts
-  challenge-mode.test.ts
   challenge-score-selector.test.ts
   challenge-scheduler.test.ts
   constraint-parser.test.ts

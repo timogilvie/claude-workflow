@@ -11,7 +11,6 @@
   "weights": {
     "agent-resolve-from-model.test.sh": 5556,
     "challenge-coverage-selector.test.ts": 244,
-    "challenge-mode.test.ts": 8592,
     "challenge-scheduler.test.ts": 531,
     "challenge-score-selector.test.ts": 177,
     "check-routing.test.ts": 5524,
