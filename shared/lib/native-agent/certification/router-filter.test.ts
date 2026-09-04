@@ -538,14 +538,16 @@ await test('qwen-3-coder patch artifact remains eligible for coding and review',
   }
 });
 
-await test('launch-priority roleEligibility rejects coding-only Qwen aliases for planner role', () => {
+await test('launch-priority roleEligibility rejects coding-only aliases for planner role', () => {
+  // mistral-medium-3 carries the remaining coding-only launch-priority row
+  // (qwen-2.5-coder-32b was retired by HOK-2947).
   const { repoDir, cleanup } = makeRepo();
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'mistralai', 'mistral-medium-3-5', 'v1', { phase: 'workflow' });
     const registry: ModelRegistry = {
       models: {
-        'qwen-2.5-coder-32b': {
-          vendor: 'qwen',
+        'mistral-medium-3': {
+          vendor: 'mistral',
           class: 'strong_generalist',
           strengths: [],
           weaknesses: [],
@@ -572,7 +574,7 @@ await test('launch-priority roleEligibility rejects coding-only Qwen aliases for
       ladders: {},
     };
 
-    const result = filterNativeModels(['qwen-2.5-coder-32b'], 'planner', registry, repoDir);
+    const result = filterNativeModels(['mistral-medium-3'], 'planner', registry, repoDir);
     assert.deepEqual(result.eligible, []);
     assert.equal(result.rejected.length, 1);
     assert.equal(result.rejected[0]?.reason, 'role-ineligible');

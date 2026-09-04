@@ -107,9 +107,11 @@ describe('validateNativeOpenRouterConfig', () => {
   it('reports global projection misses before launch', () => {
     const repoDir = makeRepo(baseConfig());
     try {
+      // mistral-medium-3 is coding-only, so it misses the planning projection
+      // (qwen-2.5-coder-32b was retired by HOK-2947).
       const result = validateNativeOpenRouterConfig({
         repoDir,
-        model: 'qwen-2.5-coder-32b',
+        model: 'mistral-medium-3',
         phase: 'planning',
       });
 
