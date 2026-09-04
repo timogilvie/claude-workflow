@@ -70,7 +70,13 @@ function makeEligibleRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
     modelVersion: 'gpt-5.4',
     score: 0.9,
     scoreBand: 'Minor Feedback',
-    timeSeconds: 42,
+    timeSeconds: 4_242,
+    phaseDurationsSeconds: {
+      planning: 4_000,
+      coding: 42,
+      review: 200,
+      total: 4_242,
+    },
     timestamp: '2026-06-01T12:00:00.000Z',
     interventionRequired: false,
     interventionCount: 1,
@@ -223,6 +229,50 @@ describe('hokusai-submission-trigger', () => {
     assert.equal(entry.row.success_under_budget, false);
     assert.equal(entry.row.inputs?.coder_attempted_model, undefined);
     assert.equal(entry.row.inputs?.coder_model_alias, undefined);
+  });
+
+  it('enqueues coding execution time as wall_clock_seconds, not queue-inflated elapsed time', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+
+    // Regression for HOK-2895: a task that sat queued for ~19h submitted
+    // 81,308s as the coder model's latency when it only ran for 845.707s.
+    await triggerHokusaiSubmission(makeEligibleRecord({
+      timeSeconds: 81_308.214,
+      phaseDurationsSeconds: {
+        planning: 69_968.308,
+        coding: 845.707,
+        review: 10_494.199,
+        total: 81_308.214,
+      },
+    }), {
+      repoDir,
+      configDir,
+      redactionSalt: 'd'.repeat(64),
+    });
+
+    const pendingPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl');
+    const [line] = readFileSync(pendingPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(line) as { row: { wall_clock_seconds?: number } };
+
+    assert.equal(entry.row.wall_clock_seconds, 845.707);
+  });
+
+  it('omits wall_clock_seconds instead of falling back to elapsed time when no coding duration exists', async () => {
+    const { repoDir, configDir } = makeRepo(true);
+
+    await triggerHokusaiSubmission(makeEligibleRecord({
+      phaseDurationsSeconds: undefined,
+    }), {
+      repoDir,
+      configDir,
+      redactionSalt: 'e'.repeat(64),
+    });
+
+    const pendingPath = join(repoDir, '.wavemill', 'hokusai', 'queue', 'pending.jsonl');
+    const [line] = readFileSync(pendingPath, 'utf-8').trim().split('\n');
+    const entry = JSON.parse(line) as { row: Record<string, unknown> };
+
+    assert.equal('wall_clock_seconds' in entry.row, false);
   });
 
   it('submits compatible rows when verification telemetry is present on the eval record', async () => {
