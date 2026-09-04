@@ -263,7 +263,6 @@ describe('model-registry', () => {
       'claude-sonnet-4-5-20250929',
       'claude-haiku-4-5-20251001',
       'deepseek-chat',
-      'deepseek-coder-v2',
       'deepseek-r1',
       'deepseek-reasoner',
       'deepseek-v3',
@@ -271,11 +270,11 @@ describe('model-registry', () => {
       'deepseek-v4-pro',
       'deepseek-v4-pro[1m]',
       'devstral-medium',
-      'devstral-small',
-      'gemini-2.0-flash',
       'gemini-2.5-flash',
       'gemini-2.5-pro',
+      'gemini-3.8-flash',
       'glm-5.2',
+      'glm-5.3',
       'gpt-4.1',
       'gpt-5',
       'gpt-5-mini',
@@ -288,15 +287,12 @@ describe('model-registry', () => {
       'kimi-k2',
       'kimi-k2.7-code',
       'kimi-k2-thinking',
-      'llama-3.3-70b',
+      'kimi-k3',
       'llama-4-maverick',
-      'llama-4-scout',
       'mistral-large-2',
       'mistral-medium-3',
       'ox-alpha',
       'glm-5.3-flash',
-      'qwen-2.5-coder-32b',
-      'qwen-2.5-72b',
       'qwen-3-235b',
       'qwen-3-coder',
       'grok-code-fast',
@@ -510,9 +506,9 @@ describe('model-registry', () => {
       );
     });
 
-    it('retains qwen-2.5-72b as blocked and keeps qwen-3-235b eligible', () => {
-      assert.equal(explainModelSupportExclusion('qwen-2.5-72b', 'coding'), 'blocked-lifecycle');
-      assert.equal(listSupportedModelsForStage('coding').includes('qwen-2.5-72b'), false);
+    it('drops retired qwen-2.5-72b and keeps qwen-3-235b eligible', () => {
+      assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-72b'], undefined);
+      assert.equal(explainModelSupportExclusion('qwen-2.5-72b', 'coding'), 'unknown-model');
       assert.equal(listSupportedModelsForStage('planning').includes('qwen-3-235b'), true);
       assert.equal(listSupportedModelsForStage('coding').includes('qwen-3-235b'), true);
       assert.equal(listSupportedModelsForStage('review').includes('qwen-3-235b'), true);
@@ -804,17 +800,20 @@ describe('model-registry', () => {
     assert.equal(pro.vendor, 'deepseek');
     assert.equal(pro.class, 'strong_generalist');
     assert.equal(pro.defaultLadderEligible, false);
-    assert.equal(pro.contextWindowTokens, 1_000_000);
+    assert.equal(pro.contextWindowTokens, 1_048_576);
     assert.equal(pro.toolSupport, 'basic');
     assert.deepEqual(pro.multimodal, { text: true, image: false });
     assert.equal(pro.reasoningTier, 'advanced');
-    assert.equal(pro.costPerMillionInputTokensUsd, 0.435);
+    assert.equal(pro.costPerMillionInputTokensUsd, 1.12);
     assert.equal(pro.agent, 'claude');
-    assert.equal(pro.pricing?.inputCostPerMTok, 0.435);
-    assert.equal(pro.pricing?.outputCostPerMTok, 0.87);
+    assert.equal(pro.pricing?.inputCostPerMTok, 1.12);
+    assert.equal(pro.pricing?.outputCostPerMTok, 3.36);
+    // HOK-2947: OpenRouter fallback transport attached to the direct aliases.
+    assert.equal(pro.supportedModel?.providerNativeId, 'deepseek/deepseek-v4-pro-0813');
+    assert.equal(flash.supportedModel?.providerNativeId, 'deepseek/deepseek-v4-flash-0731');
     assert.equal(flash.class, 'fast_economy');
     assert.equal(flash.latencyTier, 'fast');
-    assert.equal(flash.pricing?.inputCostPerMTok, 0.14);
+    assert.equal(flash.pricing?.inputCostPerMTok, 0.07);
     assert.equal(oneMillion.contextWindowTokens, 1_000_000);
   });
 
@@ -895,7 +894,6 @@ describe('model-registry', () => {
   it('recognizes configured DeepSeek IDs and validates bracket syntax', () => {
     assert.deepEqual(configuredDeepSeekModelIds(DEFAULT_MODEL_REGISTRY), [
       'deepseek-chat',
-      'deepseek-coder-v2',
       'deepseek-r1',
       'deepseek-reasoner',
       'deepseek-v3',
@@ -2507,14 +2505,17 @@ describe('canonical supported-model helpers', () => {
   });
 
   it('retains retired native-openrouter aliases for attribution but excludes them from stages', () => {
-    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
+    for (const alias of ['grok-code-fast']) {
       const capabilities = DEFAULT_MODEL_REGISTRY.models[alias];
       assert.ok(capabilities, `${alias} should remain in the registry`);
       assert.equal(capabilities.supportedModel?.lifecycle, 'blocked', `${alias} should be lifecycle-blocked`);
       assert.equal(explainModelSupportExclusion(alias, 'coding'), 'blocked-lifecycle');
       assert.equal(listSupportedModelsForStage('coding').includes(alias), false);
     }
-    assert.equal(DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].toolSupport, 'none');
+    // HOK-2947 removed the long-blocked/stale aliases outright.
+    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'qwen-2.5-coder-32b', 'qwen-2.5-72b', 'llama-3.3-70b', 'llama-4-scout', 'devstral-small']) {
+      assert.equal(DEFAULT_MODEL_REGISTRY.models[alias], undefined, `${alias} should be removed from the registry`);
+    }
   });
 
   it('keeps deprecated historical Ox Alpha resolvable but out of automatic stage lists', () => {
@@ -2580,10 +2581,12 @@ describe('canonical supported-model helpers', () => {
     }));
     assert.deepEqual(rawIdentity, identity);
     assert.equal(model.vendor, 'z-ai');
-    // No transferred priors: routing eligibility opens data collection with
-    // zero quality scores until canonical local evidence accumulates.
-    assert.deepEqual(model.qualityScores, makeScores(0));
-    assert.equal(model.defaultLadderEligible, false);
+    // HOK-2947: evidence-anchored scores seeded from the glm-5.2 baseline so
+    // the router can actually select the alias.
+    assert.deepEqual(model.qualityScores, {
+      routing: 58, planning: 82, coding: 83, review: 80, classify: 56,
+    });
+    assert.equal(model.defaultLadderEligible, true);
     assert.equal(model.contextWindowTokens, 1_310_720);
     assert.equal(model.pricing?.inputCostPerMTok, 0.075);
     assert.equal(model.pricing?.outputCostPerMTok, 0.25);
@@ -2669,11 +2672,12 @@ describe('canonical supported-model helpers', () => {
       'kimi-k2-thinking': 262_144,
       'glm-5.2': 1_048_576,
       'llama-4-maverick': 1_048_576,
-      'llama-4-scout': 1_310_720,
       'qwen-3-coder': 262_144,
-      'qwen-2.5-coder-32b': 32_768,
       'gemini-2.5-pro': 1_048_576,
       'gemini-2.5-flash': 1_048_576,
+      'gemini-3.8-flash': 1_048_576,
+      'glm-5.3': 1_310_720,
+      'kimi-k3': 1_048_576,
     };
 
     for (const [alias, limit] of Object.entries(knownProviderLimits)) {
@@ -2729,54 +2733,19 @@ describe('canonical supported-model helpers', () => {
     assert.notEqual(planningReason, 'context-window-insufficient', 'kimi-k2 should be eligible for planning');
   });
 
-  it('mistral-large-2 is excluded from coding due to insufficient context window', () => {
+  it('mistral-large-2 clears the coding floor after the 2512 repoint', () => {
+    // HOK-2947 repointed mistral-large-2 to mistralai/mistral-large-2512
+    // (262,144 tokens), which clears the 144,384 coding floor.
     const reason = explainModelSupportExclusion('mistral-large-2', 'coding');
-    assert.equal(reason, 'context-window-insufficient', 'mistral-large-2 should be excluded from coding due to context window');
+    assert.equal(reason, undefined, 'mistral-large-2 should be codeable after the repoint');
   });
 
-  it('llama-3.3-70b is excluded from coding due to insufficient context window', () => {
-    const reason = explainModelSupportExclusion('llama-3.3-70b', 'coding');
-    assert.equal(reason, 'context-window-insufficient', 'llama-3.3-70b should be excluded from coding due to context window');
-  });
-
-  // deepseek-coder-v2 and qwen-2.5-coder-32b are lifecycle-blocked by prior
-  // work (HOK-2773); blocked-lifecycle is checked before the context-window
-  // predicate. Their windows would also fail the coding floor if they were
-  // ever unblocked, which the listSupportedModelsForStage assertion below
-  // still covers. The point here is that lifecycle-blocked selection remains
-  // the primary reason for these two.
-  it('deepseek-coder-v2 stays excluded from coding (lifecycle-blocked; context window would also fail)', () => {
-    const reason = explainModelSupportExclusion('deepseek-coder-v2', 'coding');
-    assert.equal(reason, 'blocked-lifecycle');
-    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['deepseek-coder-v2'].contextWindowTokens;
-    assert.ok(
-      declaredWindow < 144_384,
-      `deepseek-coder-v2 declares ${declaredWindow} which is already below the coding floor`,
-    );
-  });
-
-  it('qwen-2.5-coder-32b stays excluded from coding (lifecycle-blocked; context window would also fail)', () => {
-    const reason = explainModelSupportExclusion('qwen-2.5-coder-32b', 'coding');
-    assert.equal(reason, 'blocked-lifecycle');
-    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['qwen-2.5-coder-32b'].contextWindowTokens;
-    assert.ok(
-      declaredWindow < 144_384,
-      `qwen-2.5-coder-32b declares ${declaredWindow} which is already below the coding floor`,
-    );
-  });
-
-  // HOK-2783's registry admission criteria set this model's lifecycle to
-  // `blocked`, and explainModelSupportExclusion() checks lifecycle before the
-  // context floor, so blocked-lifecycle is the reported reason. Assert the
-  // window separately so the floor's coverage is still documented.
-  it('qwen-2.5-72b is blocked by lifecycle and also sits below the coding floor', () => {
-    const reason = explainModelSupportExclusion('qwen-2.5-72b', 'coding');
-    assert.equal(reason, 'blocked-lifecycle');
-    const declaredWindow = DEFAULT_MODEL_REGISTRY.models['qwen-2.5-72b'].contextWindowTokens;
-    assert.ok(
-      declaredWindow < 144_384,
-      `qwen-2.5-72b declares ${declaredWindow} which is already below the coding floor`,
-    );
+  // The long-blocked/stale aliases were removed outright by HOK-2947;
+  // unknown-model is the exclusion reason for any lingering references.
+  it('removed retired aliases resolve to unknown-model', () => {
+    for (const alias of ['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'qwen-2.5-72b', 'llama-3.3-70b']) {
+      assert.equal(explainModelSupportExclusion(alias, 'coding'), 'unknown-model');
+    }
   });
 
   it('models with sufficient context windows are not excluded', () => {
@@ -2787,13 +2756,8 @@ describe('canonical supported-model helpers', () => {
   it('listSupportedModelsForStage excludes context-window-insufficient models', () => {
     const codingModels = listSupportedModelsForStage('coding');
     assert.ok(!codingModels.includes('kimi-k2'), 'kimi-k2 should not be in coding models');
-    assert.ok(!codingModels.includes('mistral-large-2'), 'mistral-large-2 should not be in coding models');
-    assert.ok(!codingModels.includes('llama-3.3-70b'), 'llama-3.3-70b should not be in coding models');
-    assert.ok(!codingModels.includes('deepseek-coder-v2'), 'deepseek-coder-v2 should not be in coding models');
-    assert.ok(!codingModels.includes('qwen-2.5-coder-32b'), 'qwen-2.5-coder-32b should not be in coding models');
-    assert.ok(!codingModels.includes('qwen-2.5-72b'), 'qwen-2.5-72b should not be in coding models');
 
-    // But they should still be eligible for planning
+    // But kimi-k2 should still be eligible for planning
     const planningModels = listSupportedModelsForStage('planning');
     assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be in planning models');
     assert.ok(planningModels.includes('mistral-large-2'), 'mistral-large-2 should be in planning models');

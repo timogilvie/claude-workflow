@@ -23,7 +23,6 @@ const OPENROUTER_URL_PATTERN = /https:\/\/openrouter\.ai\/\S+/g;
 export const WATCHLIST_SMOKE_MODELS = [
   'qwen-3-235b',
   'kimi-k2-thinking',
-  'llama-4-scout',
   'mistral-medium-3',
   'devstral-medium',
 ] as const;
