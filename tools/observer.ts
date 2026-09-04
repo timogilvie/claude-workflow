@@ -1899,34 +1899,46 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
       {
         escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
         maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+        resolutionAfterCycles: incidentConfig.detection?.resolutionAfterCycles ?? 5,
       },
     );
 
+    // The resolution sweep only runs after a fully successful detection cycle:
+    // a detector or persistence failure must not resolve incidents by absence.
+    let cycleComplete = true;
     const candidates: IncidentRecord[] = [];
-    for (const task of repo.tasks) {
-      if (!task.issue || terminalStatus(task.status)) continue;
-      const taskPath = resolveTaskArtifactDir(repo.repoDir, task);
-      if (!taskPath) continue;
-      const detected = detectIncidentsForTask(
-        taskPath,
-        task.issue,
+    try {
+      for (const task of repo.tasks) {
+        if (!task.issue || terminalStatus(task.status)) continue;
+        const taskPath = resolveTaskArtifactDir(repo.repoDir, task);
+        if (!taskPath) continue;
+        const detected = detectIncidentsForTask(
+          taskPath,
+          task.issue,
+          { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
+          options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
+        );
+        candidates.push(...detected);
+      }
+
+      candidates.push(...detectIncidentsForRepo(
+        repo.repoDir,
         { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
         options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
-      );
-      candidates.push(...detected);
+      ));
+    } catch (error) {
+      cycleComplete = false;
+      addConfigDegradedFindingIfMissing(snapshot.findings, repo, error, 'incident detection');
     }
 
-    candidates.push(...detectIncidentsForRepo(
-      repo.repoDir,
-      { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
-      options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
-    ));
-
+    const freshFingerprints: string[] = [];
     for (const incident of dedupeIncidentCandidates(candidates, store)) {
       try {
-        const stored = await store.upsert(incident);
+        const { record: stored, freshEvent } = await store.upsertDetailed(incident);
+        if (freshEvent) freshFingerprints.push(stored.fingerprint);
         incidents.push(stored);
       } catch (error) {
+        cycleComplete = false;
         snapshot.findings.push({
           id: `incident-store-error-${repo.session}-${hashText(repo.repoDir)}`,
           severity: 'high',
@@ -1938,6 +1950,24 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
           title: 'Observer could not persist Wavemill incident state',
           evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
           recommendation: 'Inspect .wavemill/incidents permissions and malformed state files; incident detection is read-only but persistence is required for deduplication.',
+        });
+      }
+    }
+
+    if (cycleComplete) {
+      try {
+        await store.runResolutionSweep(freshFingerprints);
+      } catch (error) {
+        snapshot.findings.push({
+          id: `incident-sweep-error-${repo.session}-${hashText(repo.repoDir)}`,
+          severity: 'medium',
+          category: 'operational',
+          confidence: 'high',
+          session: repo.session,
+          repoDir: repo.repoDir,
+          title: 'Observer could not run the incident resolution sweep',
+          evidence: [`error=${error instanceof Error ? error.message : String(error)}`],
+          recommendation: 'Inspect .wavemill/incidents permissions and malformed state files; stale incidents will not auto-resolve until the sweep succeeds.',
         });
       }
     }
@@ -2123,6 +2153,7 @@ function incidentStoreForRepo(repo: RepoSnapshot, options: ObserverOptions): Inc
     {
       escalationThreshold: options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
       maxEvidencePerRecord: incidentConfig.detection?.maxEvidencePerRecord ?? 50,
+      resolutionAfterCycles: incidentConfig.detection?.resolutionAfterCycles ?? 5,
     },
   );
 }

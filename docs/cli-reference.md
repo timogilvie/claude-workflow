@@ -135,6 +135,35 @@ rejected in that mode.
 
 The observer itself is conservative: it detects and reports stuck states, warnings, crashes, and visual pane/display issues. A supervising Codex session should decide whether to apply a narrow operational nudge, file a Linear issue, or make a Wavemill PR targeting `auto/integration`.
 
+Incident lifecycle: the observer's incident store counts **distinct source
+events** (a re-polled terminal job or unchanged marker never inflates
+`occurrenceCount`), stamps `firstObservedAt` on creation, and constrains
+`rootCauseClass` to a bounded taxonomy. After each fully successful detection
+cycle, incidents not re-observed for `incident.detection.resolutionAfterCycles`
+consecutive cycles (default 5, configurable in `.wavemill-config.json`)
+auto-transition to `resolved`. A new distinct event for a resolved or archived
+fingerprint reopens the record with recurrence metadata, so an archived
+incident that recurs is distinguishable from one that never did.
+
+### `npx tsx tools/incidents.ts`
+
+Operator surface for the incident store — no more hand-editing
+`.wavemill/incidents/index.json`.
+
+```bash
+npx tsx tools/incidents.ts list --repo-dir <repo>          # observed/active
+npx tsx tools/incidents.ts list --all --json               # every lifecycle
+npx tsx tools/incidents.ts resolve <fingerprint> --reason "fixed by HOK-1234"
+npx tsx tools/incidents.ts archive <fingerprint> --repo-dir <repo>
+```
+
+Flags:
+
+- `--repo-dir <path>`: repository that owns the incident store (default: cwd)
+- `--reason <text>`: audit reason recorded with resolve/archive
+- `--all`: include resolved/archived records in `list`
+- `--json`: structured output
+
 ### `wavemill promote`
 
 Direct entry point for promotion mode.

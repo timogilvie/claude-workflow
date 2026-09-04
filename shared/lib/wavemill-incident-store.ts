@@ -2,9 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  canonicalizeRootCauseClass,
   type IncidentEvidence,
   type IncidentLifecycle,
   type IncidentRecord,
+  type IncidentResolutionAction,
   WAVEMILL_INCIDENT_SCHEMA_VERSION,
 } from './wavemill-incident-model.ts';
 import { mutateJsonState, StateParseError } from './state-mutex.ts';
@@ -12,8 +14,20 @@ import { mutateJsonState, StateParseError } from './state-mutex.ts';
 export interface IncidentStoreOptions {
   escalationThreshold?: number;
   maxEvidencePerRecord?: number;
+  /** Consecutive successful observer cycles without a fresh event before auto-resolve. */
+  resolutionAfterCycles?: number;
   now?: () => Date;
 }
+
+export interface IncidentUpsertResult {
+  record: IncidentRecord;
+  /** True when this upsert counted a new distinct source event (not a re-poll). */
+  freshEvent: boolean;
+}
+
+// Event keys are retained independently of the capped evidence list so an old
+// terminal job cannot begin counting again after evidence rotation.
+const MAX_SEEN_EVENT_KEYS = 200;
 
 export interface IncidentEvidenceLogEntry {
   observedAt: string;
@@ -43,6 +57,7 @@ export class IncidentStore {
   private readonly incidentsDir: string;
   private readonly escalationThreshold: number;
   private readonly maxEvidencePerRecord: number;
+  private readonly resolutionAfterCycles: number;
   private readonly now: () => Date;
 
   constructor(
@@ -52,6 +67,7 @@ export class IncidentStore {
     this.incidentsDir = incidentsDir;
     this.escalationThreshold = options.escalationThreshold ?? 3;
     this.maxEvidencePerRecord = options.maxEvidencePerRecord ?? 50;
+    this.resolutionAfterCycles = options.resolutionAfterCycles ?? 5;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -61,53 +77,112 @@ export class IncidentStore {
       .sort();
     const input = [
       incident.category,
-      incident.rootCauseClass,
+      canonicalizeRootCauseClass(incident.rootCauseClass),
       incident.taskId ?? '',
       JSON.stringify(evidenceKeys),
     ].join('::');
     return createHash('sha256').update(input).digest('hex');
   }
 
+  /**
+   * Stable identity of the underlying source event. Repeated polling of an
+   * unchanged event (same evidence sources/keys/timestamps) yields the same
+   * key, so it is counted once regardless of observer cadence.
+   */
+  computeEventKey(incident: Pick<IncidentRecord, 'category' | 'rootCauseClass' | 'taskId' | 'evidence'>): string {
+    const evidenceIdentity = incident.evidence
+      .map((evidence) => `${evidence.type}:${evidence.source}:${evidence.key ?? ''}:${evidence.timestamp}`)
+      .sort();
+    const input = [
+      incident.category,
+      canonicalizeRootCauseClass(incident.rootCauseClass),
+      incident.taskId ?? '',
+      JSON.stringify(evidenceIdentity),
+    ].join('::');
+    return createHash('sha256').update(input).digest('hex');
+  }
+
   async upsert(incident: IncidentRecord): Promise<IncidentRecord> {
+    return (await this.upsertDetailed(incident)).record;
+  }
+
+  async upsertDetailed(incident: IncidentRecord): Promise<IncidentUpsertResult> {
     mkdirSync(this.incidentsDir, { recursive: true });
-    const fingerprint = this.computeFingerprint(incident);
+    const canonicalIncident: IncidentRecord = {
+      ...incident,
+      rootCauseClass: canonicalizeRootCauseClass(incident.rootCauseClass),
+    };
+    const fingerprint = this.computeFingerprint(canonicalIncident);
+    const eventKey = this.computeEventKey(canonicalIncident);
     const indexPath = join(this.incidentsDir, 'index.json');
     const observedAt = this.now().toISOString();
     let stored: IncidentRecord | undefined;
+    let freshEvent = true;
 
     const updatedIndex = await this.mutateIndex(indexPath, (index) => {
       const legacyEntries = Object.entries(index)
-        .filter(([key, record]) => key !== fingerprint && this.sameCanonicalIncident(record, incident));
+        .filter(([key, record]) => key !== fingerprint && this.sameCanonicalIncident(record, canonicalIncident));
       for (const [key] of legacyEntries) delete index[key];
 
       const existing = this.mergeStoredRecords([
         index[fingerprint],
         ...legacyEntries.map(([, record]) => record),
       ].filter((record): record is IncidentRecord => Boolean(record)));
-      const redactedEvidence = incident.evidence.slice(-this.maxEvidencePerRecord);
+      const redactedEvidence = canonicalIncident.evidence.slice(-this.maxEvidencePerRecord);
       if (existing) {
+        const seenEventKeys = Array.isArray(existing.metadata?.seenEventKeys) ? existing.metadata.seenEventKeys : [];
+        freshEvent = !seenEventKeys.includes(eventKey);
+        const firstObservedAt = this.backfillFirstObservedAt(existing, observedAt);
+        if (!freshEvent) {
+          // Re-poll of an already-counted event: no count/liveness change,
+          // but persist canonicalization and first-observed backfill.
+          stored = {
+            ...existing,
+            schemaVersion: WAVEMILL_INCIDENT_SCHEMA_VERSION,
+            fingerprint,
+            firstObservedAt,
+            rootCauseClass: canonicalizeRootCauseClass(existing.rootCauseClass),
+          };
+          index[fingerprint] = stored;
+          return index;
+        }
+
         const occurrenceCount = (existing.occurrenceCount || 0) + 1;
-        const lifecycle = this.nextLifecycle(existing.lifecycle, occurrenceCount);
+        const reopened = existing.lifecycle === 'resolved' || existing.lifecycle === 'archived';
+        const baseLifecycle = reopened ? 'observed' : existing.lifecycle;
+        const lifecycle = this.nextLifecycle(baseLifecycle, occurrenceCount);
+        const previousRecurrence = existing.metadata?.recurrence;
         const metadata = {
           ...(existing.metadata ?? {}),
           thresholdTriggered: occurrenceCount >= this.escalationThreshold,
+          seenEventKeys: [...seenEventKeys, eventKey].slice(-MAX_SEEN_EVENT_KEYS),
+          lastEventAt: observedAt,
+          missedCycles: 0,
           ...(lifecycle === 'active' && existing.lifecycle !== 'active' ? { escalatedAt: observedAt } : {}),
+          ...(reopened ? {
+            recurrence: {
+              count: (previousRecurrence?.count ?? 0) + 1,
+              lastRecurredAt: observedAt,
+              reopenedFrom: existing.lifecycle,
+            },
+          } : {}),
         };
         stored = {
           ...existing,
           schemaVersion: WAVEMILL_INCIDENT_SCHEMA_VERSION,
           fingerprint,
-          taskId: incident.taskId ?? null,
-          session: incident.session ?? existing.session ?? null,
-          category: incident.category,
-          rootCauseClass: incident.rootCauseClass,
-          severity: this.maxSeverity(existing.severity, incident.severity),
-          confidence: this.maxConfidence(existing.confidence, incident.confidence),
+          taskId: canonicalIncident.taskId ?? null,
+          session: canonicalIncident.session ?? existing.session ?? null,
+          category: canonicalIncident.category,
+          rootCauseClass: canonicalIncident.rootCauseClass,
+          severity: this.maxSeverity(existing.severity, canonicalIncident.severity),
+          confidence: this.maxConfidence(existing.confidence, canonicalIncident.confidence),
           lifecycle,
+          firstObservedAt,
           lastObservedAt: observedAt,
           occurrenceCount,
-          summary: incident.summary,
-          operatorAction: incident.operatorAction,
+          summary: canonicalIncident.summary,
+          operatorAction: canonicalIncident.operatorAction,
           evidence: [...existing.evidence, ...redactedEvidence].slice(-this.maxEvidencePerRecord),
           metadata,
         };
@@ -116,18 +191,22 @@ export class IncidentStore {
       }
 
       stored = {
-        ...incident,
+        ...canonicalIncident,
         schemaVersion: WAVEMILL_INCIDENT_SCHEMA_VERSION,
-        id: incident.id || randomUUID(),
+        id: canonicalIncident.id || randomUUID(),
         fingerprint,
         createdAt: observedAt,
+        firstObservedAt: observedAt,
         lastObservedAt: observedAt,
         occurrenceCount: 1,
-        lifecycle: incident.lifecycle ?? 'observed',
+        lifecycle: canonicalIncident.lifecycle ?? 'observed',
         evidence: redactedEvidence,
         metadata: {
-          ...(incident.metadata ?? {}),
+          ...(canonicalIncident.metadata ?? {}),
           thresholdTriggered: 1 >= this.escalationThreshold,
+          seenEventKeys: [eventKey],
+          lastEventAt: observedAt,
+          missedCycles: 0,
         },
       };
       index[fingerprint] = stored;
@@ -135,8 +214,106 @@ export class IncidentStore {
     });
 
     const record = stored ?? updatedIndex[fingerprint];
-    this.appendEvidence(fingerprint, incident.evidence, observedAt);
-    return record;
+    if (freshEvent) {
+      this.appendEvidence(fingerprint, canonicalIncident.evidence, observedAt);
+    }
+    return { record, freshEvent };
+  }
+
+  /**
+   * Explicit operator resolution/archival — the CLI path that replaces
+   * hand-editing the index. Returns the updated record, or null when the
+   * fingerprint is unknown.
+   */
+  async resolve(fingerprint: string, options: { reason?: string } = {}): Promise<IncidentRecord | null> {
+    return this.applyLifecycleAction(fingerprint, 'resolved', 'operator_resolved', options.reason);
+  }
+
+  async archive(fingerprint: string, options: { reason?: string } = {}): Promise<IncidentRecord | null> {
+    return this.applyLifecycleAction(fingerprint, 'archived', 'operator_archived', options.reason);
+  }
+
+  /**
+   * Run after a fully successful observer cycle for this repository. Records
+   * with a fresh distinct event this cycle keep missedCycles=0 (set by upsert);
+   * every other observed/active record accrues a missed cycle and transitions
+   * to resolved at the configured threshold. Must NOT be called when detection
+   * for the repository failed or was disabled — absence of data is not absence
+   * of the incident.
+   */
+  async runResolutionSweep(freshFingerprints: Iterable<string>): Promise<IncidentRecord[]> {
+    const fresh = new Set(freshFingerprints);
+    const indexPath = join(this.incidentsDir, 'index.json');
+    if (!existsSync(indexPath)) return [];
+    const sweptAt = this.now().toISOString();
+    const resolved: IncidentRecord[] = [];
+    await this.mutateIndex(indexPath, (index) => {
+      for (const [fingerprint, record] of Object.entries(index)) {
+        if (record.lifecycle !== 'observed' && record.lifecycle !== 'active') continue;
+        if (fresh.has(fingerprint)) {
+          index[fingerprint] = { ...record, metadata: { ...(record.metadata ?? {}), missedCycles: 0 } };
+          continue;
+        }
+        const missedCycles = (typeof record.metadata?.missedCycles === 'number' ? record.metadata.missedCycles : 0) + 1;
+        if (missedCycles >= this.resolutionAfterCycles) {
+          const updated: IncidentRecord = {
+            ...record,
+            lifecycle: 'resolved',
+            metadata: {
+              ...(record.metadata ?? {}),
+              missedCycles,
+              resolution: {
+                action: 'auto_resolved' as IncidentResolutionAction,
+                at: sweptAt,
+                reason: `not re-observed for ${missedCycles} consecutive observer cycles`,
+              },
+            },
+          };
+          index[fingerprint] = updated;
+          resolved.push(updated);
+        } else {
+          index[fingerprint] = { ...record, metadata: { ...(record.metadata ?? {}), missedCycles } };
+        }
+      }
+      return index;
+    });
+    return resolved;
+  }
+
+  private async applyLifecycleAction(
+    fingerprint: string,
+    lifecycle: 'resolved' | 'archived',
+    action: IncidentResolutionAction,
+    reason?: string,
+  ): Promise<IncidentRecord | null> {
+    const indexPath = join(this.incidentsDir, 'index.json');
+    if (!existsSync(indexPath)) return null;
+    const at = this.now().toISOString();
+    let updated: IncidentRecord | null = null;
+    await this.mutateIndex(indexPath, (index) => {
+      const existing = index[fingerprint];
+      if (!existing) return index;
+      updated = {
+        ...existing,
+        lifecycle,
+        metadata: {
+          ...(existing.metadata ?? {}),
+          resolution: { action, at, ...(reason ? { reason } : {}) },
+        },
+      };
+      index[fingerprint] = updated;
+      return index;
+    });
+    return updated;
+  }
+
+  private backfillFirstObservedAt(existing: IncidentRecord, fallback: string): string {
+    if (typeof existing.firstObservedAt === 'string' && existing.firstObservedAt) return existing.firstObservedAt;
+    const earliestEvidence = existing.evidence
+      .map((item) => item.timestamp)
+      .filter((timestamp) => typeof timestamp === 'string' && Number.isFinite(Date.parse(timestamp)))
+      .sort()[0];
+    return earlierIso(existing.createdAt, earliestEvidence) || fallback;
   }
 
   async getIncidents(): Promise<IncidentRecord[]> {
@@ -144,6 +321,13 @@ export class IncidentStore {
     const index = this.readIndex(indexPath);
     return Object.values(index)
       .filter((incident) => incident.lifecycle === 'observed' || incident.lifecycle === 'active')
+      .sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
+  }
+
+  /** All records regardless of lifecycle, newest last-observed first. */
+  async getAllIncidents(): Promise<IncidentRecord[]> {
+    const index = this.readIndex(join(this.incidentsDir, 'index.json'));
+    return Object.values(index)
       .sort((a, b) => Date.parse(b.lastObservedAt) - Date.parse(a.lastObservedAt));
   }
 
@@ -246,7 +430,8 @@ export class IncidentStore {
       lines.push(`[${incident.lifecycle}/${incident.severity}/${incident.category}] ${incident.summary}`);
       lines.push(`  task: ${incident.taskId ?? '(repo)'}`);
       lines.push(`  rootCause: ${incident.rootCauseClass}`);
-      lines.push(`  occurrences: ${incident.occurrenceCount}`);
+      lines.push(`  firstObserved: ${incident.firstObservedAt || incident.createdAt || 'unknown'}`);
+      lines.push(`  occurrences: ${incident.occurrenceCount} distinct event(s)`);
       lines.push(`  action: ${incident.operatorAction}`);
     }
     if (incidents.length > 20) {
@@ -318,8 +503,10 @@ export class IncidentStore {
     stored: Pick<IncidentRecord, 'category' | 'rootCauseClass' | 'evidence'>,
     candidate: Pick<IncidentRecord, 'category' | 'rootCauseClass' | 'evidence'>,
   ): boolean {
+    // Legacy records carry raw slugified error text as their class; two parse
+    // errors differing only in token offset must consolidate to one record.
     return stored.category === candidate.category
-      && stored.rootCauseClass === candidate.rootCauseClass
+      && canonicalizeRootCauseClass(stored.rootCauseClass) === canonicalizeRootCauseClass(candidate.rootCauseClass)
       && this.evidenceIdentity(stored.evidence) === this.evidenceIdentity(candidate.evidence);
   }
 
@@ -340,6 +527,7 @@ export class IncidentStore {
       confidence: this.maxConfidence(merged.confidence, record.confidence),
       lifecycle: this.maxLifecycle(merged.lifecycle, record.lifecycle),
       createdAt: earlierIso(merged.createdAt, record.createdAt),
+      firstObservedAt: earlierIso(merged.firstObservedAt, record.firstObservedAt),
       lastObservedAt: laterIso(merged.lastObservedAt, record.lastObservedAt),
       occurrenceCount: (merged.occurrenceCount || 0) + (record.occurrenceCount || 0),
       evidence: this.dedupeEvidence([...merged.evidence, ...record.evidence]).slice(-this.maxEvidencePerRecord),
@@ -362,6 +550,10 @@ export class IncidentStore {
       ...(Array.isArray(a.syncErrors) ? a.syncErrors : []),
       ...(Array.isArray(b.syncErrors) ? b.syncErrors : []),
     ].slice(-5);
+    const seenEventKeys = [...new Set([
+      ...(Array.isArray(a.seenEventKeys) ? a.seenEventKeys : []),
+      ...(Array.isArray(b.seenEventKeys) ? b.seenEventKeys : []),
+    ])].slice(-MAX_SEEN_EVENT_KEYS);
     return {
       ...a,
       ...b,
@@ -374,6 +566,8 @@ export class IncidentStore {
       syncCooldownUntil: laterIso(a.syncCooldownUntil, b.syncCooldownUntil),
       updateCount: Number(a.updateCount ?? 0) + Number(b.updateCount ?? 0),
       syncErrors,
+      seenEventKeys,
+      lastEventAt: laterIso(a.lastEventAt, b.lastEventAt),
       thresholdTriggered: a.thresholdTriggered === true || b.thresholdTriggered === true,
       ...(distinctLinks.length > 1 ? { linearSyncConflict: { linkedLinearIds: distinctLinks } } : {}),
     };
