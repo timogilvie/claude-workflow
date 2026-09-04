@@ -60,7 +60,7 @@ Ensure you're in the **main project repository** (not a worktree) before startin
 ### 1A. Fetch Backlog
 Run the Linear backlog tool for each configured project:
 ```bash
-npx tsx ~/.claude/tools/get-backlog.ts "PROJECT_NAME"
+npx tsx tools/get-backlog.ts "PROJECT_NAME"
 ```
 
 ### 1B. Batch Selection

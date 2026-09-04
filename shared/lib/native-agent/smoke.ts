@@ -501,7 +501,10 @@ export async function runNativeAgentLive(
   });
 
   // Load the native phase prompt template and register it.
-  const { content: systemPromptContent, promptRef } = loadNativePhasePrompt(repoDir);
+  const { content: systemPromptContent, promptRef } = loadNativePhasePrompt(repoDir, {
+    tools: phaseMeta,
+    phase,
+  });
 
   // Register runtime provenance resources for manifest traceability.
   registerAndRecordNativeProvenance({
