@@ -4045,11 +4045,11 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}" phase="${20:-}" window_id="${21:-}"
-  if [[ "$challenge" == "true" && -z "$challenge_role" && "$challenge_pair" == "$issue" ]]; then
+  if [[ "$challenge" == "true" && -z "$challenge_role" && -n "$challenge_pair" && "$challenge_pair" == "$issue" ]]; then
     challenge_role="primary"
   fi
   if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    echo "Error: challengeRole cannot be empty for challenge task $issue (challengePairId '$challenge_pair' does not identify a primary role)" >&2
     return 1
   fi
 
