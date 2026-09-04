@@ -237,6 +237,16 @@ EOF
 {"stage":"review","status":"completed","agent":"codex","model":"gpt-5.5","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":1,"blockerCount":1,"warningCount":0,"terminalReason":"review_complete"}}
 EOF
         ;;
+      dismissed_blockers_pass)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"claude-opus-4-7","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":2,"blockerCount":1,"warningCount":0,"dismissedBlockers":[{"location":"scope-guard","category":"plan_compliance","description":"Diff includes files from already-merged PRs","justification":"False positive: stale diff base; PR diff touches only in-scope files","evidence":"git log auto/integration..HEAD -- <in-scope paths>"}],"terminalReason":"review_complete"}}
+EOF
+        ;;
+      dismissed_blockers_invalid)
+        cat > "$STATE_DIR/.review-result.json" <<EOF
+{"stage":"review","status":"completed","agent":"codex","model":"claude-opus-4-7","artifacts":{"type":"review","prNumber":304,"exitCode":1,"verdict":"not_ready","iterations":2,"blockerCount":1,"warningCount":0,"dismissedBlockers":[{"location":"scope-guard","description":"Diff includes files from already-merged PRs","justification":"   "}],"terminalReason":"review_complete"}}
+EOF
+        ;;
     esac
 
     WRITE_STAGE_CALLS=""
@@ -445,7 +455,7 @@ EOF
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pending\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pending\",\"message\":\"2 CI check(s) still running\",\"details\":{\"pendingChecks\":[{\"name\":\"Shell and Unit Tests\",\"state\":\"QUEUED\"},{\"name\":\"Check Lifecycle Paths\",\"state\":\"QUEUED\"}],\"totalChecks\":2}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"CI checks still in progress - will retry\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"UNSTABLE\",\"attempts\":1}}"
           return 2
           ;;
-        pass_after_remediation|pass_clears_recheck)
+        pass_after_remediation|pass_clears_recheck|dismissed_blockers_pass)
           printf "%s\n" "{\"prNumber\":304,\"branch\":\"task/fix-failing-ci-tests\",\"verdict\":\"pass\",\"checks\":[{\"name\":\"ci-status\",\"status\":\"pass\",\"message\":\"All CI checks passing\",\"details\":{\"totalChecks\":3}}],\"timestamp\":\"2026-04-16T14:12:00.431Z\",\"summary\":\"All checks passed\",\"mergeConflict\":{\"status\":\"CLEAN\",\"message\":\"No merge conflicts detected\",\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"attempts\":1}}"
           return 0
           ;;
@@ -1149,6 +1159,24 @@ check_contains "plain not_ready does not launch review" "$output" "review_launch
 check_not_contains "plain not_ready does not increment infra retry" "$output" "infra_retry_count=1"
 check_contains "plain not_ready writes readiness attention" "$output" "Review verdict does not pass readiness gate"
 check_contains "plain not_ready marks failed verdict" "$output" "verdictState=failed"
+
+# HOK-2932: a completed not_ready artifact whose only blocker is auditably
+# dismissed (non-blank justification) passes the ready gate — the ready phase
+# launches, completes, and applies wm:ready instead of parking the arm.
+output="$(run_launch_case dismissed_blockers_pass)"
+check_contains "dismissed blockers pass returns success" "$output" "rc=0"
+check_contains "dismissed blockers pass writes completed stage" "$output" "|ready|completed|"
+check_contains "dismissed blockers pass canonicalizes ready labels" "$output" "ready_label_calls=1"
+check_not_contains "dismissed blockers pass emits no readiness refusal" "$output" "Review verdict does not pass readiness gate"
+check_not_contains "dismissed blockers pass does not relaunch review" "$output" "review_launch_calls=1"
+
+# HOK-2932 fail-closed: a dismissal with a blank justification is rejected and
+# the artifact still refuses readiness like any other unresolved blocker.
+output="$(run_launch_case dismissed_blockers_invalid)"
+check_contains "invalid dismissal refuses ready" "$output" "rc=1"
+check_contains "invalid dismissal does not launch review" "$output" "review_launch_calls=0"
+check_contains "invalid dismissal writes readiness attention" "$output" "Review verdict does not pass readiness gate"
+check_contains "invalid dismissal marks failed verdict" "$output" "verdictState=failed"
 
 output="$(run_launch_case ready_label_failure)"
 check_contains "ready label failure returns failure" "$output" "rc=1"

@@ -30,6 +30,25 @@ If you have no findings, return:
 }
 ```
 
+
+## Dismissed findings (audited false positives)
+
+A finding may additionally carry a **dismissal** when you identified a potential blocker, then investigated it and proved it invalid. Add these optional fields to the finding object:
+
+```json
+{
+  "dismissed": true,
+  "dismissalJustification": "why the finding is invalid (REQUIRED, non-empty, or the dismissal is rejected)",
+  "dismissalEvidence": "the verification you ran, e.g. a git/test command and its observed result (strongly encouraged)"
+}
+```
+
+Rules:
+- Keep the dismissed finding in the output — never silently drop a disproved finding. Dismissals are audited.
+- A dismissal without a non-blank `dismissalJustification` is rejected and the finding remains blocking.
+- Only *undismissed* blockers count toward the verdict: use `"not_ready"` when at least one undismissed blocker remains; if every blocker is dismissed (or none exist), use `"ready"`.
+- Dismiss only findings you actually disproved with specific reasoning or verification — never to lower the count.
+
 ---
 
 # Performance Review Instructions - Performance-Focused Analysis

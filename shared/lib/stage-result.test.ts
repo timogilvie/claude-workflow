@@ -21,8 +21,11 @@ import {
   extractReviewOutcome,
   getResultFilePath,
   isInfrastructureReviewFailure,
+  isValidBlockerDismissal,
   isValidStage,
   isValidStatus,
+  reviewEffectiveBlockerCount,
+  reviewOutcomePassesReadyGate,
   reviewResultPassed,
 } from './stage-result.ts';
 import type {
@@ -554,6 +557,7 @@ describe('review outcome helpers', () => {
       iterations: 1,
       blockerCount: 0,
       warningCount: 1,
+      dismissedBlockers: undefined,
       reviewToolError: undefined,
       failureCategory: undefined,
       diagnostics: undefined,
@@ -573,6 +577,87 @@ describe('review outcome helpers', () => {
     for (const testCase of cases) {
       assert.equal(reviewResultPassed(testCase), false);
     }
+  });
+
+  it('passes a completed not_ready artifact whose every blocker is validly dismissed (HOK-2932)', () => {
+    const result = makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        prNumber: 1282,
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 2,
+        blockerCount: 1,
+        warningCount: 0,
+        dismissedBlockers: [
+          {
+            location: 'scope-guard',
+            category: 'plan_compliance',
+            description: 'Diff includes files from three already-merged PRs',
+            justification: 'False positive: auto/integration is behind main; the PR diff is five in-scope files.',
+            evidence: 'git log auto/integration..HEAD -- shared/lib/model-promotion.ts tools/promote-provisional-model.ts',
+          },
+        ],
+      },
+    });
+
+    assert.equal(reviewResultPassed(result), true);
+    const outcome = extractReviewOutcome(result);
+    assert.equal(outcome?.blockerCount, 1);
+    assert.equal(outcome?.dismissedBlockers?.length, 1);
+    assert.equal(reviewEffectiveBlockerCount(outcome), 0);
+  });
+
+  it('keeps raw blockerCount while gating on the effective count', () => {
+    const outcome = extractReviewOutcome(makeResult({
+      stage: 'review',
+      status: 'completed',
+      artifacts: {
+        type: 'review',
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 1,
+        blockerCount: 2,
+        dismissedBlockers: [{ justification: 'disproved with a repro attempt' }],
+      },
+    }));
+    assert.equal(outcome?.blockerCount, 2);
+    assert.equal(reviewEffectiveBlockerCount(outcome), 1);
+    assert.equal(reviewOutcomePassesReadyGate(outcome), false);
+  });
+
+  it('fails closed on invalid or mismatched dismissals', () => {
+    const base = {
+      stage: 'review' as const,
+      status: 'completed' as const,
+    };
+    const cases: StageResult[] = [
+      // Dismissal without justification is rejected.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 1, dismissedBlockers: [{ description: 'x' }] } }),
+      // Blank justification is rejected.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 1, dismissedBlockers: [{ justification: '   ' }] } }),
+      // One valid dismissal, one undismissed blocker remaining.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 2, dismissedBlockers: [{ justification: 'valid' }] } }),
+      // More dismissals than raw blockers is a count mismatch.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 1, dismissedBlockers: [{ justification: 'a' }, { justification: 'b' }] } }),
+      // Non-object entries never count.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 1, verdict: 'not_ready', iterations: 1, blockerCount: 1, dismissedBlockers: ['all fine'] } as never }),
+      // Error verdicts never pass through dismissals.
+      makeResult({ ...base, artifacts: { type: 'review', exitCode: 2, verdict: 'error', iterations: 1, blockerCount: 1, dismissedBlockers: [{ justification: 'valid' }] } }),
+    ];
+
+    for (const testCase of cases) {
+      assert.equal(reviewResultPassed(testCase), false);
+    }
+  });
+
+  it('validates dismissal justifications', () => {
+    assert.equal(isValidBlockerDismissal({ justification: 'diff verified clean' }), true);
+    assert.equal(isValidBlockerDismissal({ justification: '  ' }), false);
+    assert.equal(isValidBlockerDismissal({}), false);
+    assert.equal(isValidBlockerDismissal(undefined), false);
   });
 
   it('extracts nested native review artifacts during transition', () => {
@@ -597,6 +682,7 @@ describe('review outcome helpers', () => {
       iterations: 2,
       blockerCount: 0,
       warningCount: 3,
+      dismissedBlockers: undefined,
       reviewToolError: undefined,
       failureCategory: undefined,
       diagnostics: undefined,

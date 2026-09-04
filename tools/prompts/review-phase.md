@@ -38,6 +38,7 @@ The implementation is complete. Your job is to review and create a PR.
 2. **For each iteration where issues are found**:
    - Read the review JSON output carefully
    - Fix all blockers (severity: blocker) and straightforward warnings
+   - **Dismissing a disproved blocker**: if you investigate a blocker and prove it is a false positive (e.g. a scope finding caused by a stale/diverged diff base while the actual PR diff is clean), do NOT fix non-existent problems, do NOT lie about the count, and do NOT park the task. Instead record the blocker as *dismissed* in step 4's `dismissedBlockers` artifact field. A dismissal REQUIRES a non-empty `justification` explaining why the finding is invalid, and SHOULD include `evidence` citing the exact verification you ran (e.g. `git log {{BASE_BRANCH}}..HEAD -- <paths>` and its output). A dismissal without justification is rejected by the ready gate and the blocker still counts.
    - Make targeted fixes only — do not refactor unrelated code
    - Run the review scope guard immediately before committing:
      `npx tsx {{TOOLS_DIR}}/check-review-scope.ts --repo-dir .`
@@ -77,18 +78,20 @@ The implementation is complete. Your job is to review and create a PR.
      task: {{ISSUE}}
      -->
    Do NOT use --fill. Write the PR body as a HEREDOC if needed for formatting.
-   After creating the PR, add the `wm:ready` label only if the final self-review run exited 0 and there are no unresolved blockers:
+   After creating the PR, add the `wm:ready` label only if there are no *undismissed* blockers — either the final self-review run exited 0 with zero blockers, or every remaining blocker is a disproved false positive you are recording as dismissed with a justification (step 4):
    `gh pr edit "<PR_URL>" --add-label "wm:ready"`
    If the `wm:ready` label does not exist in this repository, note it in the PR body and proceed.
    Do NOT add `wm:ready` if:
-   - The self-review found unresolved blockers (exit code 1)
+   - The self-review found unresolved blockers (exit code 1) that you have not dismissed with a documented justification
    - The final self-review run errored (exit code 2) or did not produce a trustworthy verdict
    - The workflow is in survival/constrained mode and confidence is low
+   When you add `wm:ready` on the strength of dismissals, list each dismissed blocker with its justification and evidence in the PR body's "## Self-review" section so an operator can audit the decision.
 
 4. **Record final review evidence** in `{{FEATURE_DIR}}/.review-result.json` after PR creation.
    Use `tools/stage-result-cli.ts` to update the review stage with explicit final self-review outcome fields. `status: "completed"` only means the review phase produced the PR artifact; it does not mean the review passed.
    - If the final run exited 0 with verdict `ready` and zero blockers, record `exitCode: 0`, `verdict: "ready"`, `iterations: <count>`, `blockerCount: 0`, and `warningCount`.
-   - If the final run exited 1, record `exitCode: 1`, `verdict: "not_ready"`, `iterations`, `blockerCount`, and `warningCount`.
+   - If the final run exited 1, record `exitCode: 1`, `verdict: "not_ready"`, `iterations`, `blockerCount`, and `warningCount`. Report the verdict and counts truthfully — never report zero blockers to force readiness.
+   - If you disproved blockers (step 2), additionally record `dismissedBlockers`: an array with one entry per dismissed blocker, each `{location, category, description, justification, evidence}`. `justification` is REQUIRED and must be non-empty; `evidence` should cite the verification command you ran. Keep `blockerCount` as the raw count — the orchestrator's ready gate derives the effective (undismissed) count from these entries and passes when every raw blocker is validly dismissed.
    - If the final run exited 2, record `exitCode: 2`, `verdict: "error"`, `iterations`, `blockerCount: 0`, `warningCount: 0`, `reviewToolError`, and `diagnostics`.
    - If the final review JSON contains a `failureCategory`, you MUST record it verbatim in the artifacts (and `reviewToolError` when present). The orchestrator uses `failureCategory` to decide whether a failed review is retryable infrastructure (e.g. `review-scope-unverifiable`) rather than a genuine defect — dropping it stalls the task permanently.
    Example:
@@ -100,13 +103,22 @@ The implementation is complete. Your job is to review and create a PR.
      --argjson iterations "$REVIEW_ITERATIONS" \
      --argjson blockers "$FINAL_BLOCKER_COUNT" \
      --argjson warnings "$FINAL_WARNING_COUNT" \
+     --argjson dismissed "${DISMISSED_BLOCKERS_JSON:-[]}" \
      --arg failureCategory "${FINAL_FAILURE_CATEGORY:-}" \
      '{type:"review",prNumber:$pr,exitCode:$exitCode,verdict:$verdict,iterations:$iterations,blockerCount:$blockers,warningCount:$warnings}
+      + (if ($dismissed | length) > 0 then {dismissedBlockers:$dismissed} else {} end)
       + (if $failureCategory != "" then {failureCategory:$failureCategory} else {} end)')
    npx tsx {{TOOLS_DIR}}/stage-result-cli.ts update "{{FEATURE_DIR}}" review \
      --status completed \
      --notes "PR #$PR_NUMBER created" \
      --artifacts "$REVIEW_ARTIFACTS"
+   ```
+   With a dismissal, `DISMISSED_BLOCKERS_JSON` looks like:
+   ```json
+   [{"location":"scope-guard","category":"plan_compliance",
+     "description":"Diff includes files outside task scope",
+     "justification":"False positive: the diff base was stale/diverged; the PR's actual diff touches only in-scope files.",
+     "evidence":"git log {{BASE_BRANCH}}..HEAD -- <in-scope paths> showed only this task's commit; GitHub PR diff lists only in-scope files."}]
    ```
 
 ### Authorship Attribution

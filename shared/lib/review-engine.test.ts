@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { reviewEngineTestUtils } from './review-engine.ts';
+import { isBlockingFinding, isDismissedFinding, reviewEngineTestUtils } from './review-engine.ts';
 import type { ReviewContext } from './review-context-gatherer.ts';
 
 describe('review-engine scoped mode', () => {
@@ -212,3 +212,40 @@ function makeReviewContext(): ReviewContext {
     },
   };
 }
+
+describe('review-engine dismissal parsing (HOK-2932)', () => {
+  it('keeps a justified dismissal and rejects an unjustified one', () => {
+    const response = JSON.stringify({
+      verdict: 'ready',
+      codeReviewFindings: [
+        {
+          severity: 'blocker',
+          location: 'scope-guard',
+          category: 'plan_compliance',
+          description: 'Diff includes out-of-scope files.',
+          dismissed: true,
+          dismissalJustification: 'False positive: stale diff base; PR diff is in scope.',
+          dismissalEvidence: 'git log auto/integration..HEAD',
+        },
+        {
+          severity: 'blocker',
+          location: 'src/app.ts:10',
+          category: 'logic',
+          description: 'Off-by-one in loop bound.',
+          dismissed: true,
+          dismissalJustification: '   ',
+        },
+      ],
+    });
+
+    const result = reviewEngineTestUtils.parseNativeReviewResponse(response, makeReviewContext());
+
+    const [justified, unjustified] = result.codeReviewFindings;
+    assert.equal(isDismissedFinding(justified), true);
+    assert.equal(isBlockingFinding(justified), false);
+    // A blank justification rejects the dismissal: the finding stays blocking.
+    assert.equal(unjustified.dismissed, undefined);
+    assert.equal(isDismissedFinding(unjustified), false);
+    assert.equal(isBlockingFinding(unjustified), true);
+  });
+});

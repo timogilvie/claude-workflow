@@ -508,6 +508,144 @@ describe('runReviewFlow', () => {
     assert.equal(state.calls.addLabel, 1);
   });
 
+  it('keeps wm:ready when every blocker is validly dismissed and records the audit trail (HOK-2932)', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+    const fixAttempts: string[] = [];
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2932',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/dismissal-path',
+      headSha: 'abc123',
+      title: 'Dismissal path',
+      body: 'Adds the dismissal path.',
+      labels: ['wm:ready', 'wavemill'],
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      fixFindings: makeFixExecutor(async ({ finding }) => {
+        fixAttempts.push(finding.id);
+        return { ok: true, outcome: 'skipped', findingId: finding.id, message: 'noop' };
+      }),
+      reviewChangesImpl: async () => makeReview({
+        verdict: 'ready',
+        codeReviewFindings: [
+          {
+            severity: 'blocker',
+            location: 'scope-guard',
+            category: 'plan_compliance',
+            description: 'Diff includes files from already-merged PRs.',
+            dismissed: true,
+            dismissalJustification: 'False positive: stale diff base; PR diff touches only in-scope files.',
+            dismissalEvidence: 'git log auto/integration..HEAD -- <in-scope paths>',
+          },
+        ],
+        uiFindings: [],
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    // wm:ready survives the label filter: raw blocker count is 1 but every
+    // blocker is validly dismissed.
+    assert.deepEqual([...state.labelsByTarget.values()][0]?.labels, ['wm:ready', 'wavemill']);
+    assert.equal(result.review.blockingCount, 1);
+    assert.equal(result.review.dismissedBlockers.length, 1);
+    // A dismissed finding is a disproved false positive — nothing to fix.
+    assert.deepEqual(fixAttempts, []);
+
+    const stageResultPath = path.join(featureDir, '.review-result.json');
+    assert.ok(existsSync(stageResultPath));
+    const stageResult = JSON.parse(readFileSync(stageResultPath, 'utf8'));
+    assert.equal(stageResult.artifacts.blockerCount, 1);
+    assert.equal(stageResult.artifacts.dismissedBlockers.length, 1);
+    assert.equal(
+      stageResult.artifacts.dismissedBlockers[0].justification,
+      'False positive: stale diff base; PR diff touches only in-scope files.',
+    );
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  it('filters wm:ready when a dismissal lacks justification', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state: FixtureState = {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      issueId: 'HOK-2932',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/dismissal-path',
+      headSha: 'abc123',
+      title: 'Dismissal path',
+      body: 'Adds the dismissal path.',
+      labels: ['wm:ready', 'wavemill'],
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      reviewChangesImpl: async () => makeReview({
+        verdict: 'ready',
+        codeReviewFindings: [
+          {
+            severity: 'blocker',
+            location: 'scope-guard',
+            category: 'plan_compliance',
+            description: 'Diff includes files from already-merged PRs.',
+            dismissed: true,
+            dismissalJustification: '   ',
+          },
+        ],
+        uiFindings: [],
+      }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual([...state.labelsByTarget.values()][0]?.labels, ['wavemill']);
+    assert.equal(result.review.dismissedBlockers.length, 0);
+  });
+
   it('records exit code 2 and error verdict when review tool fails', async () => {
     const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
     tempDirs.push(featureDir);

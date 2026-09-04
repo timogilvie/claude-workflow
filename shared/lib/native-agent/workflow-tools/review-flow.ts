@@ -1,7 +1,12 @@
 import { createHash } from 'node:crypto';
 
-import type { ReviewFinding, ReviewResult } from '../../review-engine.ts';
-import type { ReviewOutcomeVerdict, StageStatus } from '../../stage-result.ts';
+import { isDismissedFinding, type ReviewFinding, type ReviewResult } from '../../review-engine.ts';
+import {
+  reviewOutcomePassesReadyGate,
+  type DismissedReviewBlocker,
+  type ReviewOutcomeVerdict,
+  type StageStatus,
+} from '../../stage-result.ts';
 import {
   executeReviewChanges,
   executeWriteStageResult,
@@ -95,8 +100,11 @@ export interface ReviewFlowReviewSummary {
   iterations?: number;
   findings: string;
   findingCount: number;
+  /** Raw blocker count (kept for audit); readiness uses the effective count. */
   blockingCount: number;
   warningCount: number;
+  /** Blockers the reviewer disproved, each with a justification (HOK-2932). */
+  dismissedBlockers: DismissedReviewBlocker[];
   reviewToolError?: string;
   failureCategory?: string;
   needsStrongerReviewer: boolean;
@@ -166,9 +174,27 @@ function normalizeFinding(source: 'code' | 'ui', finding: ReviewFinding): Normal
 }
 
 function extractFindings(review: ReviewResult): NormalizedReviewFinding[] {
-  const code = review.codeReviewFindings.map((finding) => normalizeFinding('code', finding));
-  const ui = (review.uiFindings ?? []).map((finding) => normalizeFinding('ui', finding));
+  // Dismissed findings are disproved false positives — there is nothing to fix,
+  // so they are excluded from the fix pipeline but kept in the audit trail.
+  const code = review.codeReviewFindings
+    .filter((finding) => !isDismissedFinding(finding))
+    .map((finding) => normalizeFinding('code', finding));
+  const ui = (review.uiFindings ?? [])
+    .filter((finding) => !isDismissedFinding(finding))
+    .map((finding) => normalizeFinding('ui', finding));
   return [...code, ...ui];
+}
+
+function extractDismissedBlockers(review: ReviewResult): DismissedReviewBlocker[] {
+  return [...review.codeReviewFindings, ...(review.uiFindings ?? [])]
+    .filter((finding) => finding.severity === 'blocker' && isDismissedFinding(finding))
+    .map((finding) => ({
+      location: finding.location,
+      category: finding.category,
+      description: finding.description,
+      justification: finding.dismissalJustification,
+      ...(finding.dismissalEvidence ? { evidence: finding.dismissalEvidence } : {}),
+    }));
 }
 
 function parseStructuredReview(findings: string): ReviewResult {
@@ -195,6 +221,9 @@ function buildLinearCommentBody(issueId: string, review: ReviewFlowReviewSummary
     ``,
     `- Findings: ${review.findingCount}`,
     `- Blocking findings: ${review.blockingCount}`,
+    ...(review.dismissedBlockers.length > 0
+      ? [`- Dismissed blockers (disproved, with justification): ${review.dismissedBlockers.length}`]
+      : []),
     `- Needs stronger reviewer: ${review.needsStrongerReviewer ? 'yes' : 'no'}`,
     `- Fixes applied: ${fixes.applied}`,
     `- Fixes denied: ${fixes.denied}`,
@@ -215,6 +244,9 @@ function buildPrBody(baseBody: string, review: ReviewFlowReviewSummary, fixes: R
     '',
     `- Findings: ${review.findingCount}`,
     `- Blocking findings: ${review.blockingCount}`,
+    ...(review.dismissedBlockers.length > 0
+      ? [`- Dismissed blockers (disproved, with justification): ${review.dismissedBlockers.length}`]
+      : []),
     `- Needs stronger reviewer: ${review.needsStrongerReviewer ? 'yes' : 'no'}`,
     `- Fixes applied: ${fixes.applied}`,
     `- Fixes denied: ${fixes.denied}`,
@@ -238,6 +270,7 @@ function buildStageArtifacts(input: {
 }): Record<string, unknown> {
   const pullRequestSummary = summarizeMutation(input.pullRequest);
   const prNumber = input.pullRequest?.ok ? input.pullRequest.idempotency.ref?.number : undefined;
+  const dismissedBlockers = input.review.dismissedBlockers;
   return {
     type: 'review',
     ...(typeof prNumber === 'number' ? { prNumber } : {}),
@@ -246,6 +279,7 @@ function buildStageArtifacts(input: {
     iterations: input.review.iterations,
     blockerCount: input.review.blockingCount,
     warningCount: input.review.warningCount,
+    ...(dismissedBlockers.length > 0 ? { dismissedBlockers } : {}),
     ...(input.review.reviewToolError ? { reviewToolError: input.review.reviewToolError } : {}),
     ...(input.review.failureCategory ? { failureCategory: input.review.failureCategory } : {}),
     review: {
@@ -257,6 +291,7 @@ function buildStageArtifacts(input: {
       blockingCount: input.review.blockingCount,
       blockerCount: input.review.blockingCount,
       warningCount: input.review.warningCount,
+      ...(dismissedBlockers.length > 0 ? { dismissedBlockers } : {}),
       reviewToolError: input.review.reviewToolError,
       failureCategory: input.review.failureCategory,
       needsStrongerReviewer: input.review.needsStrongerReviewer,
@@ -421,6 +456,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     findingCount: reviewCall.ok ? reviewCall.findingCount ?? 0 : 0,
     blockingCount: reviewCall.ok ? reviewCall.blockingCount ?? 0 : 0,
     warningCount: reviewCall.ok ? reviewCall.warningCount ?? Math.max(0, (reviewCall.findingCount ?? 0) - (reviewCall.blockingCount ?? 0)) : 0,
+    dismissedBlockers: [],
     reviewToolError: reviewCall.ok ? undefined : reviewCall.message,
     failureCategory: reviewCall.failureCategory,
     needsStrongerReviewer: false,
@@ -486,6 +522,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     verdict: parsedReview.verdict,
     exitCode: reviewCall.exitCode ?? 0,
     iterations: reviewCall.iterations ?? 1,
+    dismissedBlockers: extractDismissedBlockers(parsedReview),
     needsStrongerReviewer: parsedReview.needsStrongerReviewer === true,
   };
 
@@ -672,10 +709,16 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     };
   }
 
-  const reviewPassedReadyGate = review.exitCode === 0
-    && review.verdict === 'ready'
-    && (review.iterations ?? 0) >= 1
-    && review.blockingCount === 0;
+  // Effective readiness (HOK-2932): the same rule as the monitor's ready gate.
+  // A raw blocker no longer withholds wm:ready when every blocker was
+  // auditably dismissed with a justification.
+  const reviewPassedReadyGate = reviewOutcomePassesReadyGate({
+    exitCode: review.exitCode,
+    verdict: review.verdict,
+    iterations: review.iterations,
+    blockerCount: review.blockingCount,
+    dismissedBlockers: review.dismissedBlockers,
+  });
   const dedupedLabels = [...new Set((options.labels ?? []).map((label) => label.trim()).filter(Boolean))]
     .filter((label) => label !== 'wm:ready' || reviewPassedReadyGate);
   for (const label of dedupedLabels) {
