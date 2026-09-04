@@ -61,6 +61,7 @@ import {
   getQuotaConfig,
   getRuntimeResourceSelectionConfig,
   getEffectiveModelExclusions,
+  getIncidentConfig,
   getPrePrVerificationConfig,
   getObserverLinearConfig,
   getChallengeEvalHardFailureRetryMaxAttempts,
@@ -3914,6 +3915,26 @@ test('pre-PR verification: backward compatible with legacy configs', () => {
     assert.deepEqual(config.ready?.checks, ['ci-status']);
     assert.ok(config.verification?.enabled);
     assert.deepEqual(getPrePrVerificationConfig(tmp), {});
+  } finally {
+    cleanUp(tmp);
+  }
+});
+
+test('incident config defaults include resolutionAfterCycles and honor overrides', () => {
+  const tmp = makeTempRepo();
+  try {
+    clearConfigCache();
+    const defaults = getIncidentConfig(tmp);
+    assert.equal(defaults.enabled, true);
+    assert.equal(defaults.detection?.resolutionAfterCycles, 5);
+
+    clearConfigCache();
+    writeConfig(tmp, JSON.stringify({
+      incident: { detection: { resolutionAfterCycles: 12 } },
+    }));
+    const overridden = getIncidentConfig(tmp);
+    assert.equal(overridden.detection?.resolutionAfterCycles, 12);
+    assert.equal(overridden.detection?.dependencyThreshold, 3);
   } finally {
     cleanUp(tmp);
   }

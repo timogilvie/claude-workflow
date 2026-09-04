@@ -10,6 +10,7 @@ import {
   PlanningFailureDetector,
   WorkflowStateDetector,
 } from './wavemill-incident-detector.ts';
+import { canonicalizeRootCauseClass, INCIDENT_ROOT_CAUSE_CLASSES } from './wavemill-incident-model.ts';
 
 const now = new Date('2026-08-03T12:00:00.000Z');
 
@@ -95,6 +96,95 @@ test('job detector attributes comparison failures from job subject instead of ac
     assert.equal(activeTaskIncidents.length, 0);
     assert.equal(repoIncidents.length, 1);
     assert.equal(repoIncidents[0].taskId, 'HOK-2607');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('root cause canonicalization is bounded and merges same-class parse errors', () => {
+  const offsetA = canonicalizeRootCauseClass('error_failed_to_parse_backlog_json_from_stdin_unexpected_token_h_this_is_loa_is_');
+  const offsetB = canonicalizeRootCauseClass('error_failed_to_parse_backlog_json_from_stdin_unexpected_token_i_in_tools_is_not');
+  assert.equal(offsetA, 'local_parse_failure');
+  assert.equal(offsetA, offsetB);
+
+  // Typed native completion-protocol reasons (HOK-2933) route local, not remote.
+  assert.equal(canonicalizeRootCauseClass('native-completion-protocol'), 'native_completion_protocol_failure');
+  assert.equal(canonicalizeRootCauseClass('native_coding_completed_without_coding_complete_or_coding_blocked_completion_jso'), 'native_completion_protocol_failure');
+  assert.equal(canonicalizeRootCauseClass('blocked_completion_auto_advance_refused_because_a_live_blocking_command_is_still'), 'harness_liveness_deadlock');
+  assert.equal(canonicalizeRootCauseClass('github ssh probe failed'), 'remote_ssh_failure');
+  assert.equal(canonicalizeRootCauseClass('some brand new failure text'), 'unclassified_local_failure');
+
+  const classes = new Set<string>(INCIDENT_ROOT_CAUSE_CLASSES);
+  for (const raw of ['turn_limit', 'orphaned_completion_marker', 'gibberish %% error', 'timed out talking upstream']) {
+    assert.ok(classes.has(canonicalizeRootCauseClass(raw)));
+  }
+});
+
+test('queue detector routes local parse failures to configuration, not external dependency', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'incident-deps-local-'));
+  try {
+    mkdirSync(join(repo, '.wavemill'), { recursive: true });
+    writeFileSync(join(repo, '.wavemill', 'queue-health.json'), JSON.stringify({
+      status: 'degraded',
+      degradationReason: 'dependency_planning_failed',
+      failureCount: 3,
+      diagnostics: { structuredReason: 'error failed to parse backlog JSON from stdin unexpected token h' },
+      lastAttemptAt: now.toISOString(),
+    }));
+
+    const incidents = new DependencyHealthDetector({ thresholdConsecutiveFailures: 3 }).detectRepo(repo, { repoDir: repo, now });
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].category, 'configuration_operator_condition');
+    assert.equal(incidents[0].rootCauseClass, 'local_parse_failure');
+    assert.doesNotMatch(incidents[0].summary, /remote/i);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('queue detector falls back to bounded queue_planner_degraded class for unknown diagnostics', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'incident-deps-unknown-'));
+  try {
+    mkdirSync(join(repo, '.wavemill'), { recursive: true });
+    writeFileSync(join(repo, '.wavemill', 'queue-health.json'), JSON.stringify({
+      status: 'degraded',
+      degradationReason: 'dependency_planning_failed',
+      failureCount: 1,
+      diagnostics: { structuredReason: 'some novel failure text nobody classified' },
+      lastAttemptAt: now.toISOString(),
+    }));
+
+    const incidents = new DependencyHealthDetector({ thresholdConsecutiveFailures: 3 }).detectRepo(repo, { repoDir: repo, now });
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].rootCauseClass, 'queue_planner_degraded');
+    assert.equal(incidents[0].category, 'configuration_operator_condition');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('job detector keeps a stable terminal event timestamp for un-reaped failures', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'incident-jobs-stable-'));
+  try {
+    mkdirSync(join(repo, '.wavemill'), { recursive: true });
+    writeFileSync(join(repo, '.wavemill', 'workflow-state.json'), JSON.stringify({
+      jobs: [{
+        id: 'eval-HOK-2893-primary-1265',
+        kind: 'eval',
+        status: 'failed',
+        issueId: 'HOK-2893',
+        finishedAt: '2026-08-27T23:58:01.000Z',
+        reason: 'exit 1',
+      }],
+    }));
+
+    const first = new JobFailureDetector().detect(repo, null, { repoDir: repo, now });
+    const later = new JobFailureDetector().detect(repo, null, { repoDir: repo, now: new Date(now.getTime() + 120_000) });
+    assert.equal(first.length, 1);
+    // Evidence identity is the terminal event time, so repeated polls of the
+    // same dead job describe the same source event.
+    assert.equal(first[0].evidence[0].timestamp, '2026-08-27T23:58:01.000Z');
+    assert.equal(later[0].evidence[0].timestamp, first[0].evidence[0].timestamp);
   } finally {
     rmSync(repo, { recursive: true, force: true });
   }
