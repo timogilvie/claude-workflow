@@ -44,6 +44,151 @@ export const PHASE_ORDER = ['read-only', 'patch', 'workflow'] as const;
 export type CertificationPhase = (typeof PHASE_ORDER)[number];
 
 /**
+ * Freshness window for the live coding canary.
+ *
+ * Deliberately much shorter than {@link CERTIFICATION_TTL_DAYS}: the canary
+ * proves live structured mutation-tool behavior against the current provider
+ * deployment, which drifts faster than deterministic harness conformance.
+ */
+export const LIVE_CODING_CANARY_TTL_DAYS = 14 as const;
+
+/** Canary scenario identifier persisted in artifacts. */
+export const LIVE_CODING_CANARY_SCENARIO_ID = 'live.coding.mutation-canary.v1' as const;
+
+export type LiveCodingCanaryStatus = 'pass' | 'fail' | 'inconclusive' | 'skipped';
+
+/**
+ * Stable canary failure/inconclusive reasons.
+ *
+ * - `protocol_failure`            — zero structured mutation tool calls (e.g. textual
+ *                                   `[apply_patch ...]` prose instead of a tool call)
+ * - `missing_completion_artifact` — mutation happened but no valid `.coding-complete`
+ * - `wrong_mutation`              — sentinel file does not contain the exact expected bytes
+ * - `extra_repository_change`     — out-of-scope file created/modified in the canary repo
+ * - `provider_transient_error`    — 429/5xx/timeout; inconclusive, safe to retry
+ * - `provider_config_error`       — auth/model configuration problem; inconclusive
+ * - `budget_exceeded`             — a wall-clock/turn/tool-call/token/cost limit fired
+ * - `not_live`                    — result produced through a non-live path (dry-run/injection)
+ * - `identity_mismatch`           — canary evidence does not match the certification subject
+ * - `internal_error`              — canary harness itself failed; inconclusive
+ */
+export type LiveCodingCanaryFailureReason =
+  | 'protocol_failure'
+  | 'missing_completion_artifact'
+  | 'wrong_mutation'
+  | 'extra_repository_change'
+  | 'provider_transient_error'
+  | 'provider_config_error'
+  | 'budget_exceeded'
+  | 'not_live'
+  | 'identity_mismatch'
+  | 'internal_error';
+
+export type LiveCodingCanaryLimitKind = 'wall_clock' | 'turns' | 'tool_calls' | 'tokens' | 'cost';
+
+/** Hard budgets configured for the live canary run. */
+export interface LiveCodingCanaryLimits {
+  maxWallClockMs: number;
+  maxTurns: number;
+  maxToolCalls: number;
+  maxTotalTokens: number;
+  /** Omitted when model pricing is unavailable (token/wall-clock bounds still apply). */
+  maxCostUsd?: number;
+}
+
+/** Observed usage totals for the live canary run. */
+export interface LiveCodingCanaryUsage {
+  turns: number;
+  toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  wallClockMs: number;
+  /** Omitted when cost accounting was unavailable — never recorded as zero in that case. */
+  costUsd?: number;
+}
+
+/**
+ * Compact, content-minimized evidence for the canary verdict.
+ *
+ * Contains hashes, counts, and repo-relative paths only — never raw prompts,
+ * transcripts, file contents, or provider credentials.
+ */
+export interface LiveCodingCanaryEvidence {
+  /** Count of successful structured mutation tool invocations (tool events, not prose). */
+  structuredMutationToolCalls: number;
+  /** Distinct mutation tool names observed as structured tool events. */
+  mutationToolNames: string[];
+  /** SHA-256 of the exact expected sentinel content. */
+  expectedSentinelHash: string;
+  /** SHA-256 of the sentinel content found after the run, when readable. */
+  actualSentinelHash?: string;
+  /** Repo-relative paths changed in the canary repository. */
+  changedPaths: string[];
+  /** Whether a completion artifact was present and parsed by the completion normalizer. */
+  completionArtifactPresent: boolean;
+  /** SHA-256 of the canonical completion artifact content, when present. */
+  completionArtifactHash?: string;
+}
+
+/** Non-authoritative record of a transient attempt that did not replace prior evidence. */
+export interface LiveCodingCanaryAttemptNote {
+  ranAt: string;
+  status: Extract<LiveCodingCanaryStatus, 'inconclusive'>;
+  reason: LiveCodingCanaryFailureReason;
+  detail?: string;
+}
+
+/**
+ * Result of one live coding canary evaluation for a provider/model/suite identity.
+ *
+ * Embedded in {@link NativeCertificationArtifact} as `liveCanary`. The coding
+ * eligibility gate requires `status === 'pass'`, `isLive === true`, freshness,
+ * and a full identity match — anything else fails closed.
+ */
+export interface LiveCodingCanaryResult {
+  scenarioId: string;
+  status: LiveCodingCanaryStatus;
+  /**
+   * True only when the canary invoked the real provider adapter over the
+   * production tool path. Injected loop runners, scripted providers, and
+   * dry-runs must record `false`; a non-live result can never grant coding
+   * eligibility regardless of status.
+   */
+  isLive: boolean;
+  /** The launch phase this canary certifies. Always 'coding' for this scenario. */
+  phase: 'coding';
+  /** Canonical storage provider segment (matches the owning artifact). */
+  provider: string;
+  /** Canonical storage model segment (matches the owning artifact). */
+  model: string;
+  /** Resolved provider-native wire model ID at canary time. */
+  providerNativeId: string;
+  /** Registry identity fingerprint at canary time. */
+  identityFingerprint: string;
+  /** Catalog hash corroborating the provider-native identity at canary time. */
+  catalogHash: string;
+  /** Certification suite version this canary belongs to. */
+  suiteVersion: string;
+  /** ISO 8601 datetime the canary run completed. */
+  ranAt: string;
+  /** Optional explicit expiry; takes precedence over the derived canary TTL. */
+  expiresAt?: string;
+  limits: LiveCodingCanaryLimits;
+  usage?: LiveCodingCanaryUsage;
+  /** Present for `fail`/`inconclusive`/`skipped` results. */
+  reason?: LiveCodingCanaryFailureReason;
+  /** Which budget fired, when `reason` is `budget_exceeded`. */
+  limitExceeded?: LiveCodingCanaryLimitKind;
+  /** Short redacted diagnostic. Never raw provider output or local absolute paths. */
+  detail?: string;
+  evidence?: LiveCodingCanaryEvidence;
+  /** Total canary attempts made by the run that produced this result. */
+  attempts?: number;
+  /** Most recent transient attempt that was not allowed to overwrite this result. */
+  lastInconclusiveAttempt?: LiveCodingCanaryAttemptNote;
+}
+
+/**
  * Result of a single scenario execution within a certification run.
  */
 export interface ScenarioResult {
@@ -137,6 +282,12 @@ export interface NativeCertificationArtifact {
   totalRetryCount?: number;
   /** Live provider evidence required for provisional OpenRouter publication */
   liveSmokeEvidence?: LiveSmokeEvidence;
+  /**
+   * Live coding canary evidence. Optional for backward compatibility: older
+   * artifacts parse without it, but coding eligibility fails closed until a
+   * fresh, live, identity-matching pass is present.
+   */
+  liveCanary?: LiveCodingCanaryResult;
 }
 
 export type AnyNativeCertificationArtifact =
@@ -191,4 +342,113 @@ export function allScenariosPassed(artifact: AnyNativeCertificationArtifact): bo
     return false;
   }
   return artifact.scenarios.every(s => s.passed);
+}
+
+// ---------------------------------------------------------------------------
+// Live coding canary eligibility helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Return true while the canary is fresh relative to `now`.
+ *
+ * Boundary contract: valid strictly before expiry; invalid at or after expiry.
+ * `expiresAt` takes precedence over the derived `ranAt + LIVE_CODING_CANARY_TTL_DAYS`.
+ */
+export function isLiveCodingCanaryFresh(canary: LiveCodingCanaryResult, now: Date): boolean {
+  if (canary.expiresAt) {
+    return now.getTime() < Date.parse(canary.expiresAt);
+  }
+  const ranAtMs = Date.parse(canary.ranAt);
+  if (!Number.isFinite(ranAtMs)) {
+    return false;
+  }
+  return now.getTime() < ranAtMs + LIVE_CODING_CANARY_TTL_DAYS * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Return true when the canary's recorded identity matches the expected
+ * certification subject, suite version, and the coding launch phase.
+ *
+ * A pass recorded for a different provider, canonical model, resolved
+ * upstream model, identity fingerprint, catalog hash, suite version, or
+ * phase never transfers.
+ */
+export function liveCodingCanaryMatchesSubject(
+  canary: LiveCodingCanaryResult,
+  expectedSubject: CertificationSubject,
+  suiteVersion: string,
+): boolean {
+  return canary.phase === 'coding'
+    && canary.suiteVersion === suiteVersion
+    && canary.provider === expectedSubject.providerId
+    && canary.model === expectedSubject.providerModelId
+    && canary.providerNativeId === expectedSubject.providerNativeId
+    && canary.identityFingerprint === expectedSubject.identityFingerprint
+    && canary.catalogHash === expectedSubject.catalogHash;
+}
+
+export type LiveCodingCanaryIneligibilityReason =
+  | 'missing'
+  | 'failed'
+  | 'inconclusive'
+  | 'not-live'
+  | 'stale'
+  | 'identity-mismatch';
+
+export type LiveCodingCanaryEligibility =
+  | { eligible: true; canary: LiveCodingCanaryResult }
+  | { eligible: false; reason: LiveCodingCanaryIneligibilityReason; canary?: LiveCodingCanaryResult };
+
+/**
+ * Evaluate whether an artifact's live canary evidence grants coding eligibility.
+ *
+ * Fail-closed ordering (first failure wins):
+ * 1. Missing/legacy artifact or absent/skipped canary → `missing`
+ * 2. Identity/suite/phase mismatch → `identity-mismatch`
+ * 3. Non-live evidence → `not-live`
+ * 4. Definitive failure → `failed`; transient → `inconclusive`
+ * 5. Expired at or after the freshness boundary → `stale`
+ *
+ * When `expectedSubject` is omitted (legacy callers), the canary must still
+ * match the owning artifact's storage identity and suite version.
+ */
+export function evaluateLiveCodingCanaryEligibility(
+  artifact: AnyNativeCertificationArtifact,
+  suiteVersion: string,
+  now: Date,
+  expectedSubject?: CertificationSubject,
+): LiveCodingCanaryEligibility {
+  if (!isRevisionAwareArtifact(artifact)) {
+    return { eligible: false, reason: 'missing' };
+  }
+  const canary = artifact.liveCanary;
+  if (!canary || canary.status === 'skipped') {
+    return { eligible: false, reason: 'missing', ...(canary ? { canary } : {}) };
+  }
+
+  const subject = expectedSubject ?? artifact.subject;
+  if (
+    !liveCodingCanaryMatchesSubject(canary, subject, suiteVersion)
+    || canary.provider !== artifact.provider
+    || canary.model !== artifact.model
+  ) {
+    return { eligible: false, reason: 'identity-mismatch', canary };
+  }
+
+  if (canary.isLive !== true) {
+    return { eligible: false, reason: 'not-live', canary };
+  }
+
+  if (canary.status === 'fail') {
+    return { eligible: false, reason: 'failed', canary };
+  }
+  if (canary.status === 'inconclusive') {
+    return { eligible: false, reason: 'inconclusive', canary };
+  }
+
+  if (!isLiveCodingCanaryFresh(canary, now)) {
+    return { eligible: false, reason: 'stale', canary };
+  }
+
+  return { eligible: true, canary };
 }

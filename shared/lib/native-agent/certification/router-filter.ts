@@ -59,6 +59,12 @@ export const ROUTER_ROLE_LAUNCH_PHASE: Record<RouterRole, RoleEligibility> = {
  * - `identity-reidentified` — artifact subject does not match current registry identity
  * - `role-ineligible`   — launch-priority metadata excludes this router role
  * - `phase-not-allowed` — nativeAgent.allowedPhases excludes this launch phase
+ * - `missing-live-canary`        — coder role requires a live coding canary; none recorded
+ * - `stale-live-canary`          — recorded canary pass is past its freshness boundary
+ * - `failed-live-canary`         — canary definitively failed (protocol/mutation/artifact)
+ * - `inconclusive-live-canary`   — canary ended in a transient provider error
+ * - `non-live-canary`            — canary evidence was not produced by a live provider run
+ * - `live-canary-identity-mismatch` — canary identity does not match the current subject
  */
 export type RouterCertificationRejectionReason =
   | 'no-native-capability'
@@ -70,7 +76,13 @@ export type RouterCertificationRejectionReason =
   | 'insufficient-phase'
   | 'identity-reidentified'
   | 'role-ineligible'
-  | 'phase-not-allowed';
+  | 'phase-not-allowed'
+  | 'missing-live-canary'
+  | 'stale-live-canary'
+  | 'failed-live-canary'
+  | 'inconclusive-live-canary'
+  | 'non-live-canary'
+  | 'live-canary-identity-mismatch';
 
 /**
  * Diagnostic record for a native model rejected during router pool filtering.
@@ -132,6 +144,18 @@ function mapGateReason(reason: NativeGateRejectReason): RouterCertificationRejec
       return 'stale';
     case 'insufficient_phase':
       return 'insufficient-phase';
+    case 'missing_live_canary':
+      return 'missing-live-canary';
+    case 'stale_live_canary':
+      return 'stale-live-canary';
+    case 'failed_live_canary':
+      return 'failed-live-canary';
+    case 'inconclusive_live_canary':
+      return 'inconclusive-live-canary';
+    case 'non_live_canary':
+      return 'non-live-canary';
+    case 'live_canary_identity_mismatch':
+      return 'live-canary-identity-mismatch';
   }
 }
 
@@ -282,6 +306,11 @@ export function filterNativeModels(
       modelId,
       mode: 'task',
       requiredPhase,
+      launchPhase: requestedLaunchPhase === 'coding'
+        ? 'coding'
+        : requestedLaunchPhase === 'review'
+          ? 'review'
+          : 'planning',
       registry,
       repoDir,
       apiKeyPresent: options?.apiKeyPresent ?? true,

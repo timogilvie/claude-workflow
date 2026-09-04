@@ -447,6 +447,12 @@ function parseArtifact(input: unknown): AnyNativeCertificationArtifact | undefin
     const liveSmokeEvidence = parseLiveSmokeEvidence(c.liveSmokeEvidence);
     if (c.liveSmokeEvidence !== undefined && !liveSmokeEvidence) return undefined;
     if (liveSmokeEvidence) artifact.liveSmokeEvidence = liveSmokeEvidence;
+
+    // Backward compatible: `liveCanary` is optional, but a present-yet-invalid
+    // canary makes the whole artifact malformed so downstream fails closed.
+    const liveCanary = parseLiveCanary(c.liveCanary);
+    if (c.liveCanary !== undefined && !liveCanary) return undefined;
+    if (liveCanary) artifact.liveCanary = liveCanary;
   }
 
   return artifact;
@@ -498,6 +504,185 @@ function parseLiveSmokeEvidence(raw: unknown): NativeCertificationArtifact['live
     ...(typeof e.providerReturnedModel === 'string' ? { providerReturnedModel: e.providerReturnedModel } : {}),
     catalogHash: e.catalogHash,
     succeededAt: e.succeededAt,
+  };
+}
+
+const LIVE_CANARY_STATUSES = ['pass', 'fail', 'inconclusive', 'skipped'] as const;
+const LIVE_CANARY_REASONS = [
+  'protocol_failure',
+  'missing_completion_artifact',
+  'wrong_mutation',
+  'extra_repository_change',
+  'provider_transient_error',
+  'provider_config_error',
+  'budget_exceeded',
+  'not_live',
+  'identity_mismatch',
+  'internal_error',
+] as const;
+const LIVE_CANARY_LIMIT_KINDS = ['wall_clock', 'turns', 'tool_calls', 'tokens', 'cost'] as const;
+
+function parseLiveCanary(raw: unknown): NativeCertificationArtifact['liveCanary'] | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const c = raw as Record<string, unknown>;
+
+  if (
+    typeof c.scenarioId !== 'string'
+    || !(LIVE_CANARY_STATUSES as readonly string[]).includes(c.status as string)
+    || typeof c.isLive !== 'boolean'
+    || c.phase !== 'coding'
+    || typeof c.provider !== 'string'
+    || typeof c.model !== 'string'
+    || typeof c.providerNativeId !== 'string'
+    || typeof c.identityFingerprint !== 'string'
+    || typeof c.catalogHash !== 'string'
+    || typeof c.suiteVersion !== 'string'
+    || typeof c.ranAt !== 'string'
+  ) {
+    return undefined;
+  }
+
+  const limits = parseLiveCanaryLimits(c.limits);
+  if (!limits) return undefined;
+
+  if (c.expiresAt !== undefined && typeof c.expiresAt !== 'string') return undefined;
+  if (c.reason !== undefined && !(LIVE_CANARY_REASONS as readonly string[]).includes(c.reason as string)) return undefined;
+  if (c.limitExceeded !== undefined && !(LIVE_CANARY_LIMIT_KINDS as readonly string[]).includes(c.limitExceeded as string)) return undefined;
+  if (c.detail !== undefined && typeof c.detail !== 'string') return undefined;
+  if (c.attempts !== undefined && (typeof c.attempts !== 'number' || !Number.isInteger(c.attempts) || c.attempts < 1)) return undefined;
+
+  const usage = parseLiveCanaryUsage(c.usage);
+  if (c.usage !== undefined && !usage) return undefined;
+
+  const evidence = parseLiveCanaryEvidence(c.evidence);
+  if (c.evidence !== undefined && !evidence) return undefined;
+
+  const lastInconclusiveAttempt = parseLiveCanaryAttemptNote(c.lastInconclusiveAttempt);
+  if (c.lastInconclusiveAttempt !== undefined && !lastInconclusiveAttempt) return undefined;
+
+  return {
+    scenarioId: c.scenarioId,
+    status: c.status as (typeof LIVE_CANARY_STATUSES)[number],
+    isLive: c.isLive,
+    phase: 'coding',
+    provider: c.provider,
+    model: c.model,
+    providerNativeId: c.providerNativeId,
+    identityFingerprint: c.identityFingerprint,
+    catalogHash: c.catalogHash,
+    suiteVersion: c.suiteVersion,
+    ranAt: c.ranAt,
+    ...(typeof c.expiresAt === 'string' ? { expiresAt: c.expiresAt } : {}),
+    limits,
+    ...(usage ? { usage } : {}),
+    ...(c.reason !== undefined ? { reason: c.reason as (typeof LIVE_CANARY_REASONS)[number] } : {}),
+    ...(c.limitExceeded !== undefined ? { limitExceeded: c.limitExceeded as (typeof LIVE_CANARY_LIMIT_KINDS)[number] } : {}),
+    ...(typeof c.detail === 'string' ? { detail: c.detail } : {}),
+    ...(evidence ? { evidence } : {}),
+    ...(typeof c.attempts === 'number' ? { attempts: c.attempts } : {}),
+    ...(lastInconclusiveAttempt ? { lastInconclusiveAttempt } : {}),
+  };
+}
+
+function parseLiveCanaryLimits(
+  raw: unknown,
+): NonNullable<NativeCertificationArtifact['liveCanary']>['limits'] | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const l = raw as Record<string, unknown>;
+  if (
+    typeof l.maxWallClockMs !== 'number'
+    || typeof l.maxTurns !== 'number'
+    || typeof l.maxToolCalls !== 'number'
+    || typeof l.maxTotalTokens !== 'number'
+  ) {
+    return undefined;
+  }
+  if (l.maxCostUsd !== undefined && typeof l.maxCostUsd !== 'number') return undefined;
+  return {
+    maxWallClockMs: l.maxWallClockMs,
+    maxTurns: l.maxTurns,
+    maxToolCalls: l.maxToolCalls,
+    maxTotalTokens: l.maxTotalTokens,
+    ...(typeof l.maxCostUsd === 'number' ? { maxCostUsd: l.maxCostUsd } : {}),
+  };
+}
+
+function parseLiveCanaryUsage(
+  raw: unknown,
+): NonNullable<NativeCertificationArtifact['liveCanary']>['usage'] | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const u = raw as Record<string, unknown>;
+  if (
+    typeof u.turns !== 'number'
+    || typeof u.toolCalls !== 'number'
+    || typeof u.inputTokens !== 'number'
+    || typeof u.outputTokens !== 'number'
+    || typeof u.wallClockMs !== 'number'
+  ) {
+    return undefined;
+  }
+  if (u.costUsd !== undefined && typeof u.costUsd !== 'number') return undefined;
+  return {
+    turns: u.turns,
+    toolCalls: u.toolCalls,
+    inputTokens: u.inputTokens,
+    outputTokens: u.outputTokens,
+    wallClockMs: u.wallClockMs,
+    ...(typeof u.costUsd === 'number' ? { costUsd: u.costUsd } : {}),
+  };
+}
+
+function parseLiveCanaryEvidence(
+  raw: unknown,
+): NonNullable<NativeCertificationArtifact['liveCanary']>['evidence'] | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const e = raw as Record<string, unknown>;
+  if (
+    typeof e.structuredMutationToolCalls !== 'number'
+    || !Array.isArray(e.mutationToolNames)
+    || !e.mutationToolNames.every((name) => typeof name === 'string')
+    || typeof e.expectedSentinelHash !== 'string'
+    || !Array.isArray(e.changedPaths)
+    || !e.changedPaths.every((path) => typeof path === 'string')
+    || typeof e.completionArtifactPresent !== 'boolean'
+  ) {
+    return undefined;
+  }
+  if (e.actualSentinelHash !== undefined && typeof e.actualSentinelHash !== 'string') return undefined;
+  if (e.completionArtifactHash !== undefined && typeof e.completionArtifactHash !== 'string') return undefined;
+  return {
+    structuredMutationToolCalls: e.structuredMutationToolCalls,
+    mutationToolNames: e.mutationToolNames as string[],
+    expectedSentinelHash: e.expectedSentinelHash,
+    ...(typeof e.actualSentinelHash === 'string' ? { actualSentinelHash: e.actualSentinelHash } : {}),
+    changedPaths: e.changedPaths as string[],
+    completionArtifactPresent: e.completionArtifactPresent,
+    ...(typeof e.completionArtifactHash === 'string' ? { completionArtifactHash: e.completionArtifactHash } : {}),
+  };
+}
+
+function parseLiveCanaryAttemptNote(
+  raw: unknown,
+): NonNullable<NativeCertificationArtifact['liveCanary']>['lastInconclusiveAttempt'] | undefined {
+  if (raw === undefined) return undefined;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const a = raw as Record<string, unknown>;
+  if (
+    typeof a.ranAt !== 'string'
+    || a.status !== 'inconclusive'
+    || !(LIVE_CANARY_REASONS as readonly string[]).includes(a.reason as string)
+  ) {
+    return undefined;
+  }
+  if (a.detail !== undefined && typeof a.detail !== 'string') return undefined;
+  return {
+    ranAt: a.ranAt,
+    status: 'inconclusive',
+    reason: a.reason as (typeof LIVE_CANARY_REASONS)[number],
+    ...(typeof a.detail === 'string' ? { detail: a.detail } : {}),
   };
 }
 

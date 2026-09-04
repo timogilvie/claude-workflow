@@ -99,6 +99,60 @@ Native coding rollout uses three separate fail-closed gates:
 
 The smoke artifact proves the local patch-coding runtime is enabled safely. The provider/model artifact proves a specific native provider/model pair passed the certification suite for the requested phase. For coder routing, the artifact phase must satisfy `patch`; for planner routing, it must satisfy `workflow`.
 
+## Live Coding Canary (HOK-2943)
+
+Deterministic certification is **necessary but not sufficient** for coding eligibility. A coding launch (any gate evaluation with `launchPhase: 'coding'`, or fail-closed inference from `requiredPhase: 'patch'`) additionally requires a fresh, live, identity-matching **live coding canary pass** embedded in the artifact as the optional `liveCanary` field.
+
+The canary is a bounded live provider run in a disposable git repository that must:
+
+1. Execute at least one **structured** `apply_patch` tool call through the production mutation tool path — assistant text containing `[apply_patch ...]` syntax produces no tool event and fails as `protocol_failure`.
+2. Mutate the sentinel file to exact expected bytes (`wrong_mutation` otherwise).
+3. Make no out-of-scope repository changes (`extra_repository_change` otherwise).
+4. Write a `.coding-complete` completion artifact that passes the production completion normalizer (`missing_completion_artifact` otherwise).
+
+### `liveCanary` Artifact Field
+
+Compact, content-minimized evidence only — hashes, counts, repo-relative paths, and redacted short diagnostics. Never raw prompts, transcripts, credentials, or file contents. Key fields:
+
+| Field | Meaning |
+|---|---|
+| `status` | `pass` \| `fail` \| `inconclusive` \| `skipped` |
+| `isLive` | True only for a real provider run through the production runner. Injected/mocked/dry-run results record `false` and can never satisfy the gate |
+| `provider`/`model`/`providerNativeId`/`identityFingerprint`/`catalogHash`/`suiteVersion`/`phase` | Full identity binding; any mismatch with the evaluating subject rejects the canary |
+| `ranAt`/`expiresAt` | Freshness anchors. Default TTL is `LIVE_CODING_CANARY_TTL_DAYS` (14 days); the canary is valid strictly before expiry and invalid at or after it |
+| `limits`/`usage` | Configured wall-clock/turn/tool-call/token/cost budgets and observed totals. `costUsd` is omitted (never recorded as zero) when pricing is unavailable |
+| `reason`/`limitExceeded` | Stable failure reason and, for `budget_exceeded`, which limit fired |
+| `evidence` | Structured mutation tool-call counts/names, expected/actual sentinel hashes, changed paths, completion artifact presence/hash |
+| `lastInconclusiveAttempt` | Non-authoritative record of the most recent transient attempt that was not allowed to overwrite a valid pass |
+
+Schema parsing is backward compatible: artifacts without `liveCanary` still parse (and keep granting non-coding phases), but coding eligibility fails closed with `missing_live_canary`. A present-but-invalid `liveCanary` makes the whole artifact malformed.
+
+### Coding-Only Gate Reasons
+
+| Gate reason | Meaning |
+|---|---|
+| `missing_live_canary` | No canary recorded, or the canary was `skipped` |
+| `stale_live_canary` | The recorded pass is at/past its freshness boundary |
+| `failed_live_canary` | The canary definitively failed (protocol, mutation, scope, artifact, or non-wall-clock budget) |
+| `inconclusive_live_canary` | The last authoritative attempt was a transient provider error |
+| `non_live_canary` | The recorded evidence was not produced by a live provider run |
+| `live_canary_identity_mismatch` | Provider, canonical model, resolved upstream model, fingerprint, catalog hash, suite version, or phase does not match |
+
+### Transient Failures, Retry, and Revocation
+
+- 429/5xx/timeouts classify as `inconclusive` (`provider_transient_error`, or `budget_exceeded`/`wall_clock`) and remain ineligible. The runner retries transient attempts in a fresh disposable repository (bounded, default 2 attempts).
+- An inconclusive attempt **never overwrites** a previous fresh identity-matching pass — the pass is preserved and the attempt is recorded as `lastInconclusiveAttempt`.
+- A definitive failure (`protocol_failure`, `wrong_mutation`, `extra_repository_change`, `missing_completion_artifact`, non-wall-clock `budget_exceeded`) **revokes** the previous pass for that identity.
+- Deterministic-only re-certification carries a still-valid previous pass forward so routine renewal does not silently revoke coding eligibility; stale/non-live/failed/mismatched previous evidence is dropped.
+
+### Write-Side Guards
+
+`validateCertificationForWrite` rejects canaries whose identity diverges from the owning artifact/subject, whose timestamps are implausible or inverted, or whose `detail`/`evidence` fields contain secret-shaped values, local absolute paths, or traversal segments.
+
+### Re-Enable Procedure for Protocol-Failing Models
+
+Models held on an explicit disabled list for live protocol failure (e.g. Scout, PR #1307) are **not** automatically re-enabled by a canary pass. Re-enable requires: (1) a fresh passing live canary for the current suite/identity, then (2) an explicit reviewed code change removing the model from the disabled list. The canary blocks re-enablement; it never performs it.
+
 ---
 
 ## TTL Policy

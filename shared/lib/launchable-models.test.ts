@@ -8,6 +8,7 @@ import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES, type LaunchabilityStage
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import { resolveCertificationSubject } from './native-agent/certification/identity.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/storage.ts';
@@ -119,6 +120,10 @@ function writeCertification(modelId: string, certificationRoot?: string): void {
     certifiedAt: '2026-07-15T00:00:00.000Z',
     expiresAt: '2026-09-13T00:00:00.000Z',
     scenarios: [{ scenarioId: 'native-openrouter-workflow-launch', passed: true }],
+    // HOK-2943: coder launchability additionally requires live canary evidence.
+    liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, {
+      ranAt: '2026-07-29T00:00:00.000Z',
+    }),
   };
   writeFileSync(path, JSON.stringify(artifact, null, 2), 'utf-8');
 }

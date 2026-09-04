@@ -29,6 +29,7 @@ import { projectChallengeIntentForPersistence } from './challenge-execution-cont
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationSubject } from './native-agent/certification/schema.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import {
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
@@ -335,6 +336,9 @@ function writeNativeChallengeRepo(options: {
       suiteVersion,
       certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
       scenarios: [{ scenarioId: 'challenge.native.pass', passed: true }],
+      ...(options.phase !== 'read-only'
+        ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: RUNTIME_FRESH_CERTIFIED_AT }) }
+        : {}),
     }),
   );
   if (options.enablePatchCoding) {
@@ -2004,6 +2008,12 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // Coding-capable phases carry an eligible live canary by default so the
+    // HOK-2943 coder gate exercises the downstream rejection under test;
+    // canary-negative cases override liveCanary explicitly.
+    ...((overrides.phase ?? 'patch') !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: CERT_DATE_FRESH }) }
+      : {}),
     ...overrides,
   };
   writeFileSync(path, JSON.stringify(artifact));

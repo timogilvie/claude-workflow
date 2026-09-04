@@ -20,7 +20,9 @@ import {
 import {
   CERTIFICATION_SCHEMA_VERSION,
   CERTIFICATION_TTL_DAYS,
+  phaseSatisfies,
 } from './schema.ts';
+import { buildLiveCodingCanaryFixture } from './canary-fixtures.ts';
 import { resolveCertificationSubject } from './identity.ts';
 import { buildGlobalCertificationPath } from './loader.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
@@ -138,6 +140,11 @@ function writeCertArtifact(
     // 1 day ago — fresh
     certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // Coding-capable phases carry an eligible live canary by default; negative
+    // canary cases override liveCanary explicitly (including with undefined).
+    ...(phaseSatisfies(phase, 'patch')
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion) }
+      : {}),
     ...overrides,
   };
   writeFileSync(path, JSON.stringify(artifact));
@@ -793,6 +800,78 @@ await test('read-only cert rejects for coder role (requires patch)', () => {
     assert.equal(result.rejected[0].reason, 'insufficient-phase');
     assert.equal(result.rejected[0].certifiedPhase, 'read-only');
     assert.equal(result.rejected[0].requestedPhase, 'patch');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('patch cert without live canary rejects coder with reason=missing-live-canary', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    writeCertArtifact(repoDir, 'openai', 'native-nc', 'v1', { phase: 'patch', liveCanary: undefined });
+    const registry = makeRegistry('native-nc', 'patch', 'v1');
+    const result = filterNativeModels(['native-nc'], 'coder', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected[0].reason, 'missing-live-canary');
+    // The same artifact still admits the reviewer role (no canary requirement).
+    const reviewer = filterNativeModels(['native-nc'], 'reviewer', registry, repoDir);
+    assert.deepEqual(reviewer.eligible, ['native-nc']);
+  } finally {
+    cleanup();
+  }
+});
+
+await test('failed live canary rejects coder with reason=failed-live-canary', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry = makeRegistry('native-fc', 'patch', 'v1');
+    const subject = resolveCertificationSubject({ provider: 'openai', model: 'native-fc', registry });
+    writeCertArtifact(repoDir, 'openai', 'native-fc', 'v1', {
+      phase: 'patch',
+      liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', {
+        status: 'fail',
+        reason: 'protocol_failure',
+      }),
+    });
+    const result = filterNativeModels(['native-fc'], 'coder', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected[0].reason, 'failed-live-canary');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('non-live canary pass rejects coder with reason=non-live-canary', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry = makeRegistry('native-nl', 'patch', 'v1');
+    const subject = resolveCertificationSubject({ provider: 'openai', model: 'native-nl', registry });
+    writeCertArtifact(repoDir, 'openai', 'native-nl', 'v1', {
+      phase: 'patch',
+      liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', { isLive: false }),
+    });
+    const result = filterNativeModels(['native-nl'], 'coder', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected[0].reason, 'non-live-canary');
+  } finally {
+    cleanup();
+  }
+});
+
+await test('expired live canary rejects coder with reason=stale-live-canary', () => {
+  const { repoDir, cleanup } = makeRepo();
+  try {
+    const registry = makeRegistry('native-sc', 'patch', 'v1');
+    const subject = resolveCertificationSubject({ provider: 'openai', model: 'native-sc', registry });
+    writeCertArtifact(repoDir, 'openai', 'native-sc', 'v1', {
+      phase: 'patch',
+      liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', {
+        ranAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+      }),
+    });
+    const result = filterNativeModels(['native-sc'], 'coder', registry, repoDir);
+    assert.deepEqual(result.eligible, []);
+    assert.equal(result.rejected[0].reason, 'stale-live-canary');
   } finally {
     cleanup();
   }

@@ -338,6 +338,76 @@ export function validateCertificationForWrite(
       throw new Error(`${label}: knownLimitations must not contain secrets or local paths`);
     }
   }
+
+  if (record.liveCanary) {
+    validateLiveCanaryForWrite(record, label);
+  }
+}
+
+/**
+ * Write-side invariants for embedded live canary evidence.
+ *
+ * The canary must belong to the artifact it rides in (same storage identity
+ * and suite), carry plausible timestamps, and contain no secrets, local
+ * absolute paths, or traversal segments in any free-text or path field.
+ */
+function validateLiveCanaryForWrite(record: NativeCertificationArtifact, label: string): void {
+  const canary = record.liveCanary!;
+
+  if (canary.provider !== record.provider || canary.model !== record.model) {
+    throw new Error(
+      `${label}: liveCanary identity ${canary.provider}/${canary.model} must match artifact identity ${record.provider}/${record.model}`,
+    );
+  }
+  if (canary.suiteVersion !== record.suiteVersion) {
+    throw new Error(`${label}: liveCanary.suiteVersion must match artifact suiteVersion ${record.suiteVersion}`);
+  }
+  if (
+    canary.providerNativeId !== record.subject.providerNativeId
+    || canary.identityFingerprint !== record.subject.identityFingerprint
+    || canary.catalogHash !== record.subject.catalogHash
+  ) {
+    throw new Error(`${label}: liveCanary resolved identity must match the artifact subject`);
+  }
+
+  const ranAtMs = Date.parse(canary.ranAt);
+  if (!Number.isFinite(ranAtMs)) {
+    throw new Error(`${label}: liveCanary.ranAt must be a valid ISO timestamp`);
+  }
+  if (ranAtMs < MIN_CERTIFIED_AT || ranAtMs > Date.now() + MAX_FUTURE_SKEW_MS) {
+    throw new Error(`${label}: liveCanary.ranAt is outside the accepted publication window`);
+  }
+  if (canary.expiresAt) {
+    const expiresAtMs = Date.parse(canary.expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= ranAtMs) {
+      throw new Error(`${label}: liveCanary.expiresAt must be after liveCanary.ranAt`);
+    }
+  }
+
+  const textFields: Array<[string, string | undefined]> = [
+    ['liveCanary.detail', canary.detail],
+    ['liveCanary.lastInconclusiveAttempt.detail', canary.lastInconclusiveAttempt?.detail],
+  ];
+  for (const [name, value] of textFields) {
+    if (value !== undefined && SECRET_OR_PATH_PATTERN.test(value)) {
+      throw new Error(`${label}: ${name} must not contain secrets or local paths`);
+    }
+  }
+
+  const pathLists: Array<[string, readonly string[] | undefined]> = [
+    ['liveCanary.evidence.changedPaths', canary.evidence?.changedPaths],
+    ['liveCanary.evidence.mutationToolNames', canary.evidence?.mutationToolNames],
+  ];
+  for (const [name, values] of pathLists) {
+    for (const value of values ?? []) {
+      if (SECRET_OR_PATH_PATTERN.test(value)) {
+        throw new Error(`${label}: ${name} must not contain secrets or local paths`);
+      }
+      if (value.startsWith('/') || /^[a-z]:[\\/]/i.test(value) || value.split(/[\\/]/).includes('..')) {
+        throw new Error(`${label}: ${name} must contain repo-relative paths only`);
+      }
+    }
+  }
 }
 
 /**

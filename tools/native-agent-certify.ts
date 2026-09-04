@@ -17,11 +17,21 @@ import { runTool } from '../shared/lib/tool-runner.ts';
 import {
   PHASE_ORDER,
   CERTIFICATION_SCHEMA_VERSION,
+  evaluateLiveCodingCanaryEligibility,
+  phaseSatisfies,
   type CertificationSubject,
   type CertificationPhase,
+  type LiveCodingCanaryFailureReason,
+  type LiveCodingCanaryLimitKind,
+  type LiveCodingCanaryLimits,
+  type LiveCodingCanaryResult,
+  type LiveCodingCanaryStatus,
   type LiveSmokeEvidence,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/schema.ts';
+import { runLiveCodingCanary } from '../shared/lib/native-agent/certification/live-coding-canary.ts';
+import { loadGlobalCertification } from '../shared/lib/native-agent/certification/loader.ts';
+import { isRevisionAwareArtifact } from '../shared/lib/native-agent/certification/schema.ts';
 import {
   getDefaultScenarios,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
@@ -45,12 +55,37 @@ export interface CertifyOptions {
   phase: CertificationPhase;
   repoDir: string;
   dryRun?: boolean;
+  /**
+   * Opt into the credentialed live coding canary. Never runs during dry-run.
+   * Without it, patch/workflow certification still publishes deterministic
+   * evidence, but coding eligibility stays false until a canary pass exists.
+   */
+  liveCodingCanary?: boolean;
+  /** Budget overrides for the live coding canary run. */
+  canaryLimits?: Partial<LiveCodingCanaryLimits>;
   registry?: ModelRegistry;
   runScenariosFn?: typeof runScenarios;
   runOpenRouterSmokeFn?: typeof runOpenRouterSmoke;
+  /** Test seam for the live canary. Production certification uses the real runner. */
+  runLiveCanaryFn?: typeof runLiveCodingCanary;
+  /** Test seam for reading the previously published artifact (canary carry-forward). */
+  loadPreviousArtifactFn?: (provider: string, model: string, suiteVersion: string) => NativeCertificationArtifact | undefined;
   writeCertificationFn?: typeof writeGlobalCertification | ((repoDir: string, record: NativeCertificationArtifact) => string);
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
+}
+
+/** Compact, redacted canary summary for command output — never raw prompt/output text. */
+export interface CertifyLiveCanarySummary {
+  status: LiveCodingCanaryStatus;
+  isLive: boolean;
+  ranAt: string;
+  reason?: LiveCodingCanaryFailureReason;
+  limitExceeded?: LiveCodingCanaryLimitKind;
+  detail?: string;
+  attempts?: number;
+  /** True when this summary reflects preserved earlier evidence rather than this run. */
+  carriedForward?: boolean;
 }
 
 export interface CertifyResult {
@@ -65,6 +100,10 @@ export interface CertifyResult {
   artifactScope?: 'global';
   subject?: CertificationSubject;
   liveSmokeEvidence?: LiveSmokeEvidence;
+  /** Canary state persisted with the artifact (or summary of why it is absent). */
+  liveCanary?: CertifyLiveCanarySummary;
+  /** True only when the published artifact grants coding eligibility right now. */
+  codingEligible: boolean;
   scenarios: Array<{ scenarioId: string; status: string; detail?: string }>;
   knownLimitations: string[];
 }
@@ -74,9 +113,13 @@ export interface CertifyAllOptions {
   phase: CertificationPhase;
   repoDir: string;
   dryRun?: boolean;
+  liveCodingCanary?: boolean;
+  canaryLimits?: Partial<LiveCodingCanaryLimits>;
   registry?: ModelRegistry;
   runScenariosFn?: typeof runScenarios;
   runOpenRouterSmokeFn?: typeof runOpenRouterSmoke;
+  runLiveCanaryFn?: typeof runLiveCodingCanary;
+  loadPreviousArtifactFn?: CertifyOptions['loadPreviousArtifactFn'];
   writeCertificationFn?: typeof writeGlobalCertification | ((repoDir: string, record: NativeCertificationArtifact) => string);
   now?: () => Date;
   env?: NodeJS.ProcessEnv;
@@ -178,6 +221,13 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
 
   let artifactPath: string | undefined;
   let liveSmokeEvidence: LiveSmokeEvidence | undefined;
+  let liveCanary: LiveCodingCanaryResult | undefined;
+  let canarySummary: CertifyLiveCanarySummary | undefined;
+  let codingEligible = false;
+
+  // The live coding canary applies whenever the certified phase can satisfy
+  // coding (`patch` or `workflow`). It never runs during dry-run.
+  const canaryApplicable = phaseSatisfies(opts.phase, 'patch');
 
   if (liveCertifiable && !dryRun) {
     if (opts.provider === 'openrouter' && modelEntry?.identity?.status === 'provisional') {
@@ -190,6 +240,62 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
         runOpenRouterSmokeFn,
       });
     }
+
+    if (canaryApplicable) {
+      const previousCanary = loadPreviousEligibleCanary({
+        loadPreviousArtifactFn: opts.loadPreviousArtifactFn,
+        provider: resolvedSubject.storageIdentity.provider,
+        model: resolvedSubject.storageIdentity.model,
+        suiteVersion,
+        subject: resolvedSubject.subject,
+        now,
+      });
+
+      if (opts.liveCodingCanary) {
+        const runLiveCanaryFn = opts.runLiveCanaryFn ?? runLiveCodingCanary;
+        const run = await runLiveCanaryFn({
+          provider: opts.provider,
+          registryModelId,
+          subject: resolvedSubject.subject,
+          suiteVersion,
+          registry,
+          repoDir: opts.repoDir,
+          env,
+          now,
+          ...(opts.canaryLimits ? { limits: opts.canaryLimits } : {}),
+        });
+        if (run.status === 'inconclusive' && previousCanary) {
+          // A transient attempt never overwrites a fresh identity-matching
+          // pass; it is recorded as non-authoritative attempt evidence.
+          liveCanary = {
+            ...previousCanary,
+            lastInconclusiveAttempt: {
+              ranAt: run.ranAt,
+              status: 'inconclusive',
+              reason: run.reason ?? 'provider_transient_error',
+              ...(run.detail ? { detail: run.detail } : {}),
+            },
+          };
+          canarySummary = summarizeCanary(liveCanary, true);
+        } else if (run.status === 'skipped' && previousCanary) {
+          // A canary that could not start (e.g. missing credentials) carries
+          // no evidence either way; the existing valid pass stays authoritative.
+          liveCanary = previousCanary;
+          canarySummary = summarizeCanary(previousCanary, true);
+        } else {
+          // Pass and definitive failure are both authoritative: a definitive
+          // failure revokes any previously recorded pass for this identity.
+          liveCanary = run;
+          canarySummary = summarizeCanary(run, false);
+        }
+      } else if (previousCanary) {
+        // Deterministic-only re-certification preserves existing valid canary
+        // evidence so routine renewals do not silently revoke coding eligibility.
+        liveCanary = previousCanary;
+        canarySummary = summarizeCanary(previousCanary, true);
+      }
+    }
+
     const artifact: NativeCertificationArtifact = {
       schemaVersion: CERTIFICATION_SCHEMA_VERSION,
       subject: resolvedSubject.subject,
@@ -203,10 +309,14 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
         .map(toArtifactScenario),
       ...(knownLimitations.length > 0 ? { knownLimitations } : {}),
       ...(liveSmokeEvidence ? { liveSmokeEvidence } : {}),
+      ...(liveCanary ? { liveCanary } : {}),
     };
     artifactPath = writeCertificationFn.length >= 2
       ? (writeCertificationFn as (repoDir: string, record: NativeCertificationArtifact) => string)(opts.repoDir, artifact)
       : (writeCertificationFn as typeof writeGlobalCertification)(artifact);
+
+    codingEligible = canaryApplicable
+      && evaluateLiveCodingCanaryEligibility(artifact, suiteVersion, now(), resolvedSubject.subject).eligible;
   }
 
   return {
@@ -221,6 +331,8 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     ...(artifactPath ? { artifactScope: 'global' as const } : {}),
     subject: resolvedSubject.subject,
     ...(liveSmokeEvidence ? { liveSmokeEvidence } : {}),
+    ...(canarySummary ? { liveCanary: canarySummary } : {}),
+    codingEligible,
     scenarios: report.results.map(r => ({
       scenarioId: r.scenarioId,
       status: r.status,
@@ -228,6 +340,55 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
     })),
     knownLimitations,
   };
+}
+
+function summarizeCanary(canary: LiveCodingCanaryResult, carriedForward: boolean): CertifyLiveCanarySummary {
+  return {
+    status: canary.status,
+    isLive: canary.isLive,
+    ranAt: canary.ranAt,
+    ...(canary.reason ? { reason: canary.reason } : {}),
+    ...(canary.limitExceeded ? { limitExceeded: canary.limitExceeded } : {}),
+    ...(canary.detail ? { detail: canary.detail } : {}),
+    ...(canary.attempts !== undefined ? { attempts: canary.attempts } : {}),
+    ...(carriedForward ? { carriedForward: true } : {}),
+  };
+}
+
+/**
+ * Load the previously published artifact's canary when — and only when — it
+ * still grants coding eligibility for the current subject and suite (fresh,
+ * live, identity-matching pass). Anything else returns undefined so stale or
+ * mismatched evidence is dropped rather than carried forward.
+ */
+function loadPreviousEligibleCanary(input: {
+  loadPreviousArtifactFn: CertifyOptions['loadPreviousArtifactFn'];
+  provider: string;
+  model: string;
+  suiteVersion: string;
+  subject: CertificationSubject;
+  now: () => Date;
+}): LiveCodingCanaryResult | undefined {
+  const load = input.loadPreviousArtifactFn ?? defaultLoadPreviousArtifact;
+  let previous: NativeCertificationArtifact | undefined;
+  try {
+    previous = load(input.provider, input.model, input.suiteVersion);
+  } catch {
+    return undefined;
+  }
+  if (!previous) return undefined;
+  const eligibility = evaluateLiveCodingCanaryEligibility(previous, input.suiteVersion, input.now(), input.subject);
+  return eligibility.eligible ? eligibility.canary : undefined;
+}
+
+function defaultLoadPreviousArtifact(
+  provider: string,
+  model: string,
+  suiteVersion: string,
+): NativeCertificationArtifact | undefined {
+  const loaded = loadGlobalCertification(provider, model, suiteVersion);
+  if (!loaded.ok) return undefined;
+  return isRevisionAwareArtifact(loaded.artifact) ? loaded.artifact : undefined;
 }
 
 export async function certifyAllNativeAgents(opts: CertifyAllOptions): Promise<CertifyAllResult> {
@@ -264,9 +425,13 @@ export async function certifySelectedNativeAgents(opts: CertifySelectedOptions):
         phase: opts.phase,
         repoDir: opts.repoDir,
         dryRun: opts.dryRun,
+        liveCodingCanary: opts.liveCodingCanary,
+        canaryLimits: opts.canaryLimits,
         registry,
         runScenariosFn: opts.runScenariosFn,
         runOpenRouterSmokeFn: opts.runOpenRouterSmokeFn,
+        runLiveCanaryFn: opts.runLiveCanaryFn,
+        loadPreviousArtifactFn: opts.loadPreviousArtifactFn,
         writeCertificationFn: opts.writeCertificationFn,
         now: opts.now,
         env: opts.env,
@@ -435,6 +600,26 @@ return runTool({
       type: 'boolean',
       description: 'Run scenarios without persisting a certification artifact.',
     },
+    'live-coding-canary': {
+      type: 'boolean',
+      description: 'Run the provider-backed live coding canary (credentialed; required for coding eligibility). Never runs with --dry-run.',
+    },
+    'canary-max-cost-usd': {
+      type: 'string',
+      description: 'Override the live canary maximum estimated cost in USD (default 0.5).',
+    },
+    'canary-timeout-ms': {
+      type: 'string',
+      description: 'Override the live canary wall-clock limit in milliseconds (default 240000).',
+    },
+    'canary-max-tokens': {
+      type: 'string',
+      description: 'Override the live canary total token budget (default 60000).',
+    },
+    'canary-max-tool-calls': {
+      type: 'string',
+      description: 'Override the live canary tool-call budget (default 10).',
+    },
     all: {
       type: 'boolean',
       description: 'Certify every native-capable registry model. --provider filters the batch when set.',
@@ -453,6 +638,7 @@ return runTool({
     'npx tsx tools/native-agent-certify.ts --provider openai --model gpt-4o --phase read-only',
     'npx tsx tools/native-agent-certify.ts --provider openrouter --model openai/gpt-4o --phase read-only --json',
     'npx tsx tools/native-agent-certify.ts --all --phase workflow',
+    'npx tsx tools/native-agent-certify.ts --provider openrouter --model qwen-3-coder --phase workflow --live-coding-canary',
   ],
   async run({ args }) {
     const repoDir = (args.repo as string | undefined) || process.cwd();
@@ -461,6 +647,16 @@ return runTool({
     const rawPhase = (args.phase as string | undefined) ?? 'workflow';
     const dryRun = args['dry-run'] === true;
     const all = args.all === true;
+    const liveCodingCanary = args['live-coding-canary'] === true;
+    const canaryLimits = parseCanaryLimitFlags(args);
+    if (!canaryLimits.ok) {
+      console.error(`Error: ${canaryLimits.message}`);
+      process.exit(2);
+    }
+    if (liveCodingCanary && dryRun) {
+      console.error('Error: --live-coding-canary cannot be combined with --dry-run (the canary is a live provider run).');
+      process.exit(2);
+    }
 
     // Validate required flags
     if (!all && !rawProvider) {
@@ -492,7 +688,14 @@ return runTool({
     const provider = rawProvider as NativeProviderName | undefined;
 
     if (all) {
-      const result = await certifyAllNativeAgents({ provider, phase, repoDir, dryRun });
+      const result = await certifyAllNativeAgents({
+        provider,
+        phase,
+        repoDir,
+        dryRun,
+        liveCodingCanary,
+        ...(canaryLimits.limits ? { canaryLimits: canaryLimits.limits } : {}),
+      });
       if (args.json === true) {
         console.log(JSON.stringify(result, null, 2));
       } else {
@@ -506,7 +709,15 @@ return runTool({
 
     let result: CertifyResult;
     try {
-      result = await certifyNativeAgent({ provider: provider!, model: rawModel!, phase, repoDir, dryRun });
+      result = await certifyNativeAgent({
+        provider: provider!,
+        model: rawModel!,
+        phase,
+        repoDir,
+        dryRun,
+        liveCodingCanary,
+        ...(canaryLimits.limits ? { canaryLimits: canaryLimits.limits } : {}),
+      });
     } catch (err: unknown) {
       const exitCode = (err as { exitCode?: number }).exitCode;
       const msg = err instanceof Error ? err.message : String(err);
@@ -546,13 +757,74 @@ return runTool({
       } else {
         console.log('FAILED. Certification not written.');
       }
+      console.log(renderCanaryStatusLine(result, phase));
     }
 
     if (!result.harnessPassed) {
       process.exit(1);
     }
+    if (liveCodingCanary && !result.dryRun && !result.codingEligible) {
+      process.exit(1);
+    }
   },
 }, argv);
+}
+
+/**
+ * One explicit line stating deterministic vs live-canary state and whether
+ * coding eligibility is granted — operators should never have to infer it.
+ */
+export function renderCanaryStatusLine(result: CertifyResult, phase: CertificationPhase): string {
+  if (!phaseSatisfies(phase, 'patch')) {
+    return `Live coding canary: not applicable for phase ${phase} (coding eligibility requires a patch/workflow certification plus a live canary pass).`;
+  }
+  if (result.dryRun) {
+    return 'Live coding canary: not run (dry-run). Coding eligibility: NOT granted.';
+  }
+  const canary = result.liveCanary;
+  if (!canary) {
+    return 'Live coding canary: missing (run with --live-coding-canary). Coding eligibility: NOT granted.';
+  }
+  const provenance = canary.carriedForward ? 'carried forward from previous artifact' : 'from this run';
+  const detail = [
+    `status=${canary.status}`,
+    `live=${canary.isLive}`,
+    canary.reason ? `reason=${canary.reason}` : '',
+    canary.limitExceeded ? `limit=${canary.limitExceeded}` : '',
+    `ranAt=${canary.ranAt}`,
+  ].filter(Boolean).join(' ');
+  return `Live coding canary (${provenance}): ${detail}. Coding eligibility: ${result.codingEligible ? 'granted' : 'NOT granted'}.`;
+}
+
+function parseCanaryLimitFlags(args: Record<string, unknown>):
+  | { ok: true; limits?: { maxCostUsd?: number; maxWallClockMs?: number; maxTotalTokens?: number; maxToolCalls?: number } }
+  | { ok: false; message: string } {
+  const parse = (flag: string, integer: boolean): number | undefined | null => {
+    const raw = args[flag];
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value <= 0 || (integer && !Number.isInteger(value))) {
+      return null;
+    }
+    return value;
+  };
+
+  const maxCostUsd = parse('canary-max-cost-usd', false);
+  if (maxCostUsd === null) return { ok: false, message: '--canary-max-cost-usd must be a positive number' };
+  const maxWallClockMs = parse('canary-timeout-ms', true);
+  if (maxWallClockMs === null) return { ok: false, message: '--canary-timeout-ms must be a positive integer' };
+  const maxTotalTokens = parse('canary-max-tokens', true);
+  if (maxTotalTokens === null) return { ok: false, message: '--canary-max-tokens must be a positive integer' };
+  const maxToolCalls = parse('canary-max-tool-calls', true);
+  if (maxToolCalls === null) return { ok: false, message: '--canary-max-tool-calls must be a positive integer' };
+
+  const limits = {
+    ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
+    ...(maxWallClockMs !== undefined ? { maxWallClockMs } : {}),
+    ...(maxTotalTokens !== undefined ? { maxTotalTokens } : {}),
+    ...(maxToolCalls !== undefined ? { maxToolCalls } : {}),
+  };
+  return { ok: true, ...(Object.keys(limits).length > 0 ? { limits } : {}) };
 }
 
 function renderCertifyAllSummary(result: CertifyAllResult): void {

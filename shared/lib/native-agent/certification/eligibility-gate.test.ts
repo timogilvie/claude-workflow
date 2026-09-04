@@ -10,9 +10,11 @@ import {
   CERTIFICATION_SCHEMA_VERSION,
   evaluateNativeProviderGate,
   type CertificationPhase,
+  type CertificationSubject,
   type NativeCertificationArtifact,
   type NativeGateInput,
 } from './index.ts';
+import { buildLiveCodingCanaryFixture } from './canary-fixtures.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 
 const FIXED_NOW = new Date('2026-07-12T12:00:00.000Z');
@@ -96,6 +98,28 @@ function taskInput(
   };
 }
 
+function makeSubject(provider: 'openai' | 'openrouter', modelId: string): CertificationSubject {
+  const openRouterIdentity = provider === 'openrouter'
+    ? (resolveOpenRouterModelIdentity(modelId)?.openrouterId ?? modelId).split('/')
+    : null;
+  const providerNativeId = openRouterIdentity ? `${openRouterIdentity[0]!}/${openRouterIdentity[1]!}` : modelId;
+  return {
+    registryKey: modelId,
+    nativeProvider: provider,
+    providerId: openRouterIdentity ? openRouterIdentity[0]! : provider,
+    providerModelId: openRouterIdentity ? openRouterIdentity[1]! : modelId,
+    providerNativeId,
+    identityRevision: 1,
+    identityFingerprint: computeIdentityFingerprint({
+      alias: modelId,
+      providerNativeId,
+      provider,
+      revision: 1,
+    }),
+    catalogHash: provider === 'openrouter' ? hashLaunchPriorityFixture() : 'registry',
+  };
+}
+
 function writeArtifact(
   repoDir: string,
   provider: 'openai' | 'openrouter',
@@ -107,29 +131,12 @@ function writeArtifact(
   void repoDir;
   const path = buildGlobalCertificationPath(provider, modelId, suiteVersion, { root: certificationRoot });
   mkdirSync(dirname(path), { recursive: true });
-  const openRouterIdentity = provider === 'openrouter'
-    ? (resolveOpenRouterModelIdentity(modelId)?.openrouterId ?? modelId).split('/')
-    : null;
-  const providerNativeId = openRouterIdentity ? `${openRouterIdentity[0]!}/${openRouterIdentity[1]!}` : modelId;
+  const subject = makeSubject(provider, modelId);
   const artifact: NativeCertificationArtifact = {
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
-    subject: {
-      registryKey: modelId,
-      nativeProvider: provider,
-      providerId: openRouterIdentity ? openRouterIdentity[0]! : provider,
-      providerModelId: openRouterIdentity ? openRouterIdentity[1]! : modelId,
-      providerNativeId,
-      identityRevision: 1,
-      identityFingerprint: computeIdentityFingerprint({
-        alias: modelId,
-        providerNativeId,
-        provider,
-        revision: 1,
-      }),
-      catalogHash: provider === 'openrouter' ? hashLaunchPriorityFixture() : 'registry',
-    },
-    provider: openRouterIdentity ? openRouterIdentity[0]! : provider,
-    model: openRouterIdentity ? openRouterIdentity[1]! : modelId,
+    subject,
+    provider: subject.providerId,
+    model: subject.providerModelId,
     phase: 'workflow',
     suiteVersion,
     certifiedAt: new Date(FIXED_NOW.getTime() - 24 * 60 * 60 * 1000).toISOString(),
@@ -413,6 +420,163 @@ describe('evaluateNativeProviderGate', () => {
       assert.equal(decision.certified, true);
     } finally {
       cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOK-2943: live coding canary enforcement
+// ---------------------------------------------------------------------------
+
+describe('evaluateNativeProviderGate live coding canary', () => {
+  const CANARY_RAN_AT = new Date(FIXED_NOW.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+  function freshCanary(overrides: Parameters<typeof buildLiveCodingCanaryFixture>[2] = {}) {
+    return buildLiveCodingCanaryFixture(makeSubject('openai', 'gpt-4o'), 'v1', {
+      ranAt: CANARY_RAN_AT,
+      ...overrides,
+    });
+  }
+
+  function codingInput(registry: ModelRegistry, repoDir: string, overrides: Partial<NativeGateInput> = {}): NativeGateInput {
+    return taskInput(registry, 'gpt-4o', repoDir, { requiredPhase: 'patch', ...overrides });
+  }
+
+  it('grants coding eligibility for a fresh, live, identity-matching canary pass', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', { liveCanary: freshCanary() });
+
+      const decision = evaluateNativeProviderGate(codingInput(registry, repoDir));
+      assert.equal(decision.ok, true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects coding without a canary even when deterministic scenarios pass', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1');
+
+      const decision = evaluateNativeProviderGate(codingInput(registry, repoDir));
+      assert.equal(decision.ok, false);
+      assert.equal(decision.reason, 'missing_live_canary');
+
+      // The same artifact still grants non-coding phases.
+      const planner = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir, { requiredPhase: 'workflow' }));
+      assert.equal(planner.ok, true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('honors an explicit coding launchPhase over phase inference', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1');
+
+      const explicitCoding = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir, {
+        requiredPhase: 'workflow',
+        launchPhase: 'coding',
+      }));
+      assert.equal(explicitCoding.ok, false);
+      assert.equal(explicitCoding.reason, 'missing_live_canary');
+
+      const explicitPlanning = evaluateNativeProviderGate(taskInput(registry, 'gpt-4o', repoDir, {
+        requiredPhase: 'patch',
+        launchPhase: 'planning',
+      }));
+      assert.equal(explicitPlanning.ok, true, 'explicit non-coding launch phase skips the canary requirement');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects skipped, failed, and inconclusive canaries with distinct reasons', () => {
+    const cases = [
+      { overrides: { status: 'skipped' as const, reason: 'provider_config_error' as const }, expected: 'missing_live_canary' },
+      { overrides: { status: 'fail' as const, reason: 'protocol_failure' as const }, expected: 'failed_live_canary' },
+      { overrides: { status: 'inconclusive' as const, reason: 'provider_transient_error' as const }, expected: 'inconclusive_live_canary' },
+    ];
+    for (const testCase of cases) {
+      const { repoDir, cleanup } = makeRepo();
+      try {
+        const registry = makeRegistry('gpt-4o', 'openai');
+        writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', { liveCanary: freshCanary(testCase.overrides) });
+
+        const decision = evaluateNativeProviderGate(codingInput(registry, repoDir));
+        assert.equal(decision.ok, false);
+        assert.equal(decision.reason, testCase.expected);
+        if (testCase.expected !== 'missing_live_canary') {
+          assert.equal(decision.liveCanaryStatus, testCase.overrides.status);
+        }
+      } finally {
+        cleanup();
+      }
+    }
+  });
+
+  it('rejects a non-live canary pass (dry-run/injected evidence can never satisfy the gate)', () => {
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', { liveCanary: freshCanary({ isLive: false }) });
+
+      const decision = evaluateNativeProviderGate(codingInput(registry, repoDir));
+      assert.equal(decision.ok, false);
+      assert.equal(decision.reason, 'non_live_canary');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('enforces the freshness boundary: valid strictly before expiry, invalid at expiry', () => {
+    const expiresAt = FIXED_NOW.toISOString();
+    const { repoDir, cleanup } = makeRepo();
+    try {
+      const registry = makeRegistry('gpt-4o', 'openai');
+      writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', { liveCanary: freshCanary({ expiresAt }) });
+
+      const justBefore = evaluateNativeProviderGate(codingInput(registry, repoDir, {
+        now: new Date(FIXED_NOW.getTime() - 1),
+      }));
+      assert.equal(justBefore.ok, true, 'canary is valid immediately before expiry');
+
+      const atExpiry = evaluateNativeProviderGate(codingInput(registry, repoDir, { now: FIXED_NOW }));
+      assert.equal(atExpiry.ok, false, 'canary is invalid at expiry');
+      assert.equal(atExpiry.reason, 'stale_live_canary');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects canary identity mismatches across provider, model, resolved id, suite, and fingerprint', () => {
+    const mismatches: Array<Record<string, unknown>> = [
+      { provider: 'other-provider' },
+      { model: 'other-model' },
+      { providerNativeId: 'other/native-id' },
+      { suiteVersion: 'v0' },
+      { identityFingerprint: 'tampered-fingerprint' },
+      { catalogHash: 'tampered-catalog' },
+    ];
+    for (const mismatch of mismatches) {
+      const { repoDir, cleanup } = makeRepo();
+      try {
+        const registry = makeRegistry('gpt-4o', 'openai');
+        writeArtifact(repoDir, 'openai', 'gpt-4o', 'v1', {
+          liveCanary: { ...freshCanary(), ...mismatch },
+        });
+
+        const decision = evaluateNativeProviderGate(codingInput(registry, repoDir));
+        assert.equal(decision.ok, false, `mismatch ${JSON.stringify(mismatch)} must reject`);
+        assert.equal(decision.reason, 'live_canary_identity_mismatch');
+      } finally {
+        cleanup();
+      }
     }
   });
 });
