@@ -102,11 +102,11 @@ echo "=== Bootstrap Challenge Primary Role (HOK-2926) ==="
 
 # The in-launch (bootstrap) pairing path forms the pair inside launch_task,
 # before the primary has any state entry, so the challenge_role seeded from
-# state is empty. The block must stamp "primary" itself: the canonical
-# save_task_state fails closed on an empty role for a challenge entry, and a
-# rejected primary write leaves the arm slug-less and invisible. The pre-launch
-# batch path (TASK_CHALLENGE_ROLE_BY_ISSUE) was never affected and is not what
-# this section covers.
+# state is empty. The block must stamp "primary" itself, and the canonical
+# save_task_state also derives the same primary role as a defense-in-depth
+# backstop when challengePairId == issue. The pre-launch batch path
+# (TASK_CHALLENGE_ROLE_BY_ISSUE) was never affected and is not what this
+# section covers.
 BOOTSTRAP_PAIR_BLOCK="$(awk '
   /challenge_enabled_for_launch="true"/ { capture=1 }
   capture { print }
@@ -171,9 +171,10 @@ if [[ -n "$BOOTSTRAP_ROLE_ASSIGNMENTS" ]]; then
     fail "bootstrap primary replay did not produce a complete primary entry"
   fi
 
-  # Control: the same replay without the role stamp reproduces the HOK-2926
-  # failure mode (rejected write, then a slug-less stub from the follow-up
-  # mutation). This pins the mechanism the fix guards against.
+  # Control: the same replay without the role stamp validates HOK-2931's
+  # defense-in-depth path. The canonical writer derives the primary role from
+  # challengePairId == issue, so the follow-up mutation does not create the
+  # HOK-2926 slug-less stub.
   printf '%s\n' '{"tasks":{}}' > "$BOOTSTRAP_STATE_FILE"
   (
     set +e
@@ -188,13 +189,14 @@ if [[ -n "$BOOTSTRAP_ROLE_ASSIGNMENTS" ]]; then
     echo "$?" > "$BOOTSTRAP_STATE_TMP/save.rc"
     state_mutate "$STATE_FILE" '.tasks[$issue].challengerLaunched = true' --arg issue "$issue" >/dev/null 2>&1 || true
   )
-  if [[ "$(cat "$BOOTSTRAP_STATE_TMP/save.rc")" != "0" ]] \
-    && [[ "$(jq -r '.tasks["HOK-2926"].slug // ""' "$BOOTSTRAP_STATE_FILE")" == "" ]] \
+  if [[ "$(cat "$BOOTSTRAP_STATE_TMP/save.rc")" == "0" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].slug // ""' "$BOOTSTRAP_STATE_FILE")" == "bootstrap-primary" ]] \
+    && [[ "$(jq -r '.tasks["HOK-2926"].challengeRole // ""' "$BOOTSTRAP_STATE_FILE")" == "primary" ]] \
     && [[ "$(jq -r '.tasks["HOK-2926"].challengerLaunched' "$BOOTSTRAP_STATE_FILE")" == "true" ]]; then
-    pass "control: without the role stamp the primary write is rejected and only a slug-less stub remains"
+    pass "control: without the role stamp the canonical writer derives primary"
   else
     echo "    state: $(cat "$BOOTSTRAP_STATE_FILE")"
-    fail "control replay did not reproduce the slug-less stub failure mode"
+    fail "control replay did not derive primary from the challenge pair"
   fi
   rm -rf "$BOOTSTRAP_STATE_TMP"
 else
@@ -314,9 +316,13 @@ if [[ -n "$SAVE_STATE_HELPER" ]]; then
   fi
 
   if save_task_state "HOK-9998" "blank-primary" "task/blank-primary" "/tmp/blank-primary" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "gpt-5" "gpt-5" "gpt-5" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
-    fail "runtime state should reject blank primary challenge role"
+    if [[ "$(jq -r '.tasks["HOK-9998"].challengeRole // ""' "$RUNTIME_STATE_FILE")" == "primary" ]]; then
+      pass "runtime state derives blank primary challenge role"
+    else
+      fail "runtime state should persist derived primary challenge role"
+    fi
   else
-    pass "runtime state rejects blank primary challenge role with error"
+    fail "runtime state should derive blank primary challenge role"
   fi
 
   if save_task_state "HOK-9998_c" "blank-challenger" "task/blank-primary-challenger" "/tmp/blank-challenger" "" "active" "codex" "HOK-9998" "true" "HOK-9998" "" "claude-sonnet-4" "gpt-5" "claude-sonnet-4" "gpt-5" "medium" "medium" "llm" "implementation" 2>/dev/null; then
