@@ -13,14 +13,20 @@ function cloneRegistry(): ModelRegistry {
 
 describe('effective-models', () => {
   it('excludes retired native-openrouter aliases from coding availability', () => {
-    const retired = ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b'];
     const { models } = listEffectiveModelsForStage('coding');
 
-    for (const alias of retired) {
+    // grok-code-fast is retained lifecycle-blocked for attribution.
+    assert.equal(models.includes('grok-code-fast'), false);
+    const blocked = explainEffectiveModelAvailability('grok-code-fast', 'coding');
+    assert.equal(blocked.available, false);
+    assert.equal(blocked.reason, 'blocked-lifecycle');
+
+    // HOK-2947 removed the stale aliases outright.
+    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'qwen-2.5-coder-32b']) {
       assert.equal(models.includes(alias), false, `${alias} should not be effective for coding`);
       const availability = explainEffectiveModelAvailability(alias, 'coding');
       assert.equal(availability.available, false);
-      assert.equal(availability.reason, 'blocked-lifecycle');
+      assert.equal(availability.reason, 'unknown-model');
     }
   });
 
@@ -43,8 +49,6 @@ describe('effective-models', () => {
     // `context-window-insufficient`.
     const contextWindowExcluded = [
       'kimi-k2',
-      'mistral-large-2',
-      'llama-3.3-70b',
     ];
     for (const modelId of contextWindowExcluded) {
       assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
@@ -53,18 +57,11 @@ describe('effective-models', () => {
       assert.equal(availability.reason, 'context-window-insufficient');
     }
 
-    // Models retained for historical attribution but lifecycle-blocked by prior
-    // work (HOK-2773, and qwen-2.5-72b by HOK-2783's registry admission
-    // criteria). blocked-lifecycle wins over context-window-insufficient.
-    const lifecycleExcluded = ['deepseek-coder-v2', 'qwen-2.5-coder-32b', 'qwen-2.5-72b'];
-    for (const modelId of lifecycleExcluded) {
-      assert.equal(models.includes(modelId), false, `${modelId} should not be effective for coding`);
-      const availability = explainEffectiveModelAvailability(modelId, 'coding');
-      assert.equal(availability.available, false);
-      assert.equal(availability.reason, 'blocked-lifecycle');
-    }
+    // HOK-2947 repointed mistral-large-2 to the 262k mistral-large-2512
+    // endpoint, so it now clears the coding floor.
+    assert.ok(models.includes('mistral-large-2'), 'mistral-large-2 should be effective for coding after the repoint');
 
-    // But they should still be available for planning
+    // But kimi-k2 should still be available for planning
     const { models: planningModels } = listEffectiveModelsForStage('planning');
     assert.ok(planningModels.includes('kimi-k2'), 'kimi-k2 should be available for planning');
   });
