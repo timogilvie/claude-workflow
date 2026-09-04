@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import type { ModelRegistry } from './model-registry.ts';
+import type { ModelRegistry, SupportedModelStage } from './model-registry.ts';
 import {
   assertNativeReadOnlyRoutable,
   assertRegistryAdmissionCriteria,
@@ -387,6 +387,76 @@ describe('model-registry', () => {
       })),
       /duplicate providerNativeId "provider\/dup"/,
     );
+  });
+
+  // HOK-2947: the legacy devstral-medium duplicate declared no identity block
+  // and slipped past the identity-gated guard. Non-deprecated aliases must be
+  // rejected regardless of identity; deprecated history stays exempt.
+  it('rejects duplicate providerNativeIds on non-deprecated aliases without identity metadata', () => {
+    assert.throws(
+      () => projectModelRegistryCatalog(catalogWith({
+        one: makeCapabilities({ supportedModel: { wavemillAlias: 'one', providerNativeId: 'provider/dup' } }),
+        two: makeCapabilities({ supportedModel: { wavemillAlias: 'two', providerNativeId: 'provider/dup' } }),
+      })),
+      /duplicate providerNativeId "provider\/dup"/,
+    );
+
+    assert.doesNotThrow(() => projectModelRegistryCatalog(catalogWith({
+      retained: makeCapabilities({ supportedModel: { wavemillAlias: 'retained', providerNativeId: 'provider/dup' } }),
+      historical: makeCapabilities({
+        supportedModel: { wavemillAlias: 'historical', providerNativeId: 'provider/dup', lifecycle: 'deprecated' },
+      }),
+    })));
+  });
+
+  // HOK-2947: Tier 1 roster refresh. Each alias must resolve to its intended
+  // provider wire id and clear every stage gate it declares.
+  it('resolves the Tier 1 OpenRouter roster to the intended wire ids and stages', () => {
+    const expected: Record<string, { providerNativeId: string; stages: string[] }> = {
+      'glm-5.3': { providerNativeId: 'z-ai/glm-5.3', stages: ['planning', 'coding', 'review'] },
+      'kimi-k3': { providerNativeId: 'moonshotai/kimi-k3', stages: ['planning', 'coding', 'review'] },
+      'gemini-3.8-flash': { providerNativeId: 'google/gemini-3.8-flash', stages: ['coding', 'review'] },
+      'deepseek-v4-pro': { providerNativeId: 'deepseek/deepseek-v4-pro-0813', stages: ['planning', 'coding', 'review'] },
+      'deepseek-v4-flash': { providerNativeId: 'deepseek/deepseek-v4-flash-0731', stages: ['planning', 'coding', 'review'] },
+    };
+
+    for (const [alias, { providerNativeId, stages }] of Object.entries(expected)) {
+      const capabilities = DEFAULT_MODEL_REGISTRY.models[alias];
+      assert.ok(capabilities, `${alias} should exist in the registry`);
+      assert.equal(capabilities.supportedModel?.providerNativeId, providerNativeId);
+      assert.deepEqual(capabilities.supportedModel?.stages, stages);
+      assert.equal(capabilities.supportedModel?.canonicalArtifactIdentity?.suiteVersion, 'v3');
+      assert.ok(
+        capabilities.contextWindowTokens >= 144_384,
+        `${alias} must clear the coding context floor`,
+      );
+      for (const taskType of ['routing', 'planning', 'coding', 'review', 'classify'] as TaskType[]) {
+        assert.ok(
+          capabilities.qualityScores[taskType] > 0,
+          `${alias} must carry a non-zero ${taskType} quality score`,
+        );
+      }
+      for (const stage of stages) {
+        assert.equal(
+          explainModelSupportExclusion(alias, stage as SupportedModelStage),
+          undefined,
+          `${alias} should be admissible for ${stage}`,
+        );
+      }
+    }
+  });
+
+  // HOK-2947 Fix 1: with non-zero scores and default-ladder eligibility the
+  // router's derived candidate ladder actually contains GLM 5.3 Flash instead
+  // of it losing every zero-score comparison.
+  it('includes glm-5.3-flash in derived router candidate ladders', () => {
+    const derived: ModelRegistry = { models: DEFAULT_MODEL_REGISTRY.models, ladders: {} };
+    for (const taskType of ['planning', 'coding', 'review'] as TaskType[]) {
+      assert.ok(
+        rankCandidates(derived, taskType).includes('glm-5.3-flash'),
+        `glm-5.3-flash should be a ranked ${taskType} candidate`,
+      );
+    }
   });
 
   it('resolves generic successors from declared lineage', () => {
