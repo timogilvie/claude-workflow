@@ -204,7 +204,9 @@ describe('resolveModelAgent', () => {
   });
 
   it('rejects launch-priority models that are not eligible for the requested phase', () => {
-    const registry = makeRegistry('qwen-2.5-coder-32b', {
+    // mistral-medium-3 is the remaining coding-only launch-priority row
+    // (qwen-2.5-coder-32b was retired by HOK-2947).
+    const registry = makeRegistry('mistral-medium-3', {
       agent: 'claude-openrouter',
       nativeCapability: {
         nativeProvider: 'openrouter',
@@ -220,7 +222,7 @@ describe('resolveModelAgent', () => {
     });
 
     const result = resolveModelAgent({
-      model: 'qwen-2.5-coder-32b',
+      model: 'mistral-medium-3',
       phase: 'planning',
       registry,
       now: new Date('2098-01-01T00:00:00.000Z'),
@@ -294,12 +296,19 @@ describe('resolveModelAgent', () => {
   });
 
   it('rejects retired native-openrouter models before certification checks', () => {
-    for (const model of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
+    for (const model of ['grok-code-fast']) {
       const result = resolveModelAgent({ model, phase: 'coding' });
       assert.equal(result.ok, false, `${model} should reject`);
       if (result.ok) assert.fail('expected rejection');
       assert.equal(result.reason, 'lifecycle-blocked');
       assert.match(result.diagnostic, /certification=retired/);
+    }
+    // Aliases removed outright by HOK-2947 reject as unknown models.
+    for (const model of ['deepseek-coder-v2', 'gemini-2.0-flash', 'qwen-2.5-coder-32b']) {
+      const result = resolveModelAgent({ model, phase: 'coding' });
+      assert.equal(result.ok, false, `${model} should reject`);
+      if (result.ok) assert.fail('expected rejection');
+      assert.equal(result.reason, 'unknown-model');
     }
   });
 
