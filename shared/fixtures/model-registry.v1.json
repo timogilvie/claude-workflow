@@ -2159,19 +2159,6 @@
         "costPerMillionInputTokensUsd": 1.12,
         "costPerMillionOutputTokensUsd": 3.36,
         "agent": "claude",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-09-04T00:00:00.000Z",
-            "certificationSuiteVersion": "v3"
-          }
-        },
         "supportedModel": {
           "wavemillAlias": "deepseek-v4-pro",
           "providerNativeId": "deepseek/deepseek-v4-pro-0813",
@@ -2281,19 +2268,6 @@
         "costPerMillionInputTokensUsd": 0.07,
         "costPerMillionOutputTokensUsd": 0.18,
         "agent": "claude",
-        "nativeCapability": {
-          "nativeProvider": "openrouter",
-          "piTransportKind": "openai-completions",
-          "readOnlyNative": "certified",
-          "compatFlags": {
-            "thinkingFormat": "openrouter"
-          },
-          "certification": {
-            "maxCertifiedPhase": "workflow",
-            "certifiedAt": "2026-09-04T00:00:00.000Z",
-            "certificationSuiteVersion": "v3"
-          }
-        },
         "supportedModel": {
           "wavemillAlias": "deepseek-v4-flash",
           "providerNativeId": "deepseek/deepseek-v4-flash-0731",
