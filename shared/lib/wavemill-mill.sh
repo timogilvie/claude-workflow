@@ -1482,6 +1482,11 @@ cleanup_stale_tasks() {
           log_warn "  $issue cleanup failed; keeping task state"
           continue
         fi
+        if [[ "$cleanup_rc" -eq 10 ]]; then
+          set_window_attention_state "$issue-$slug" "needs-user"
+          log_warn "  $issue cleanup preserved local work; keeping task state"
+          continue
+        fi
         if [[ "$cleanup_rc" -eq 0 && "$reason" != "branch deleted" && "$branch" != "main" && "$branch" != "master" ]]; then
           git -C "$REPO_DIR" push origin --delete "$branch" 2>/dev/null || true
         fi

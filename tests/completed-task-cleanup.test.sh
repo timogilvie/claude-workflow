@@ -74,6 +74,18 @@ HELPERS_FILE="$TEST_TMP/tmux_helpers.sh"
 
 CLEANUP_FILE="$TEST_TMP/cleanup_completed_task.sh"
 {
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600'
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_warn"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_timeout_seconds"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_kill_process_tree"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_with_timeout"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch"
@@ -147,6 +159,7 @@ run_cleanup_case() {
     source "$HELPERS_FILE"
     source "$REMOTE_CLEANUP_FILE"
     source "$CLEANUP_FILE"
+    wavemill_git_remote_with_timeout() { shift; git "$@"; }
 
     SESSION="wavemill"
     ISSUE="HOK-2348"
@@ -212,7 +225,7 @@ EOF
           ORDER+="prune;"
           return 0
           ;;
-        "branch -D")
+        "branch -D"|"branch -d")
           ORDER+="branch-delete;"
           [[ "$TEST_CASE" != "local-branch-fails" ]]
           return $?
@@ -221,17 +234,39 @@ EOF
           [[ "$TEST_CASE" != "local-branch-absent" ]]
           return $?
           ;;
+        "fetch origin")
+          return 0
+          ;;
         "rev-parse --verify")
+          case "${3:-}" in
+            *task-slug*) printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+            *auto/integration*) printf "%s\n" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+            *) printf "%s\n" "cccccccccccccccccccccccccccccccccccccccc" ;;
+          esac
           return 0
           ;;
         "merge-base --is-ancestor")
+          [[ "$TEST_CASE" != "preserved-local-work" ]]
+          return $?
+          ;;
+        "cat-file -e")
           return 0
           ;;
         "rev-list --count")
+          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+            printf "1\n"
+            return 0
+          fi
           printf "0\n"
           return 0
           ;;
         "rev-list "*)
+          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+            printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          fi
+          return 0
+          ;;
+        "ls-remote --heads")
           return 0
           ;;
         "ls-remote --exit-code")
@@ -343,6 +378,7 @@ run_common_dry_run_case() {
     source "$EXECUTE_FILE"
     source "$REMOTE_CLEANUP_FILE"
     source "$CLEANUP_FILE"
+    wavemill_git_remote_with_timeout() { shift; git "$@"; }
 
     SESSION="wavemill"
     ISSUE="HOK-2348"
@@ -431,6 +467,14 @@ check_not_contains "missing PR avoids remote delete" "$output" "push origin --de
 check_contains "missing PR logs retention" "$output" "retaining remote branch task/task-slug (no PR recorded)"
 check_contains "missing PR completes" "$output" "rc=0"
 
+output="$(run_cleanup_case preserved-local-work)"
+check_contains "preserved local work returns non-zero" "$output" "rc=1"
+check_contains "preserved local work keeps state" "$output" "remove_state_calls=0"
+check_contains "preserved local work preserves retry state" "$output" "reset_retry_calls=0"
+check_contains "preserved local work requests attention" "$output" "attention=needs-user"
+check_contains "preserved local work logs retention" "$output" "cleanup preserved local work"
+check_not_contains "preserved local work skips remote cleanup" "$output" "push origin --delete"
+
 output="$(run_cleanup_case archive-fails)"
 check_contains "archive failure returns non-zero" "$output" "rc=1"
 check_contains "archive failure stops before tmux/git" "$output" "order=archive;"
@@ -442,6 +486,7 @@ check_contains "worktree failure returns non-zero" "$output" "rc=1"
 check_contains "worktree failure preserves state" "$output" "remove_state_calls=0"
 check_contains "worktree failure preserves retry state" "$output" "reset_retry_calls=0"
 check_not_contains "worktree failure skips branch deletion" "$output" "branch -D"
+check_not_contains "worktree failure skips dynamic branch deletion" "$output" "branch -d"
 
 output="$(run_cleanup_case local-branch-fails)"
 check_contains "local branch failure returns non-zero" "$output" "rc=1"

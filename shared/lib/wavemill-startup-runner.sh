@@ -952,8 +952,15 @@ startup_run_task_phases() {
     elif ! ensure_worktree_dependencies_in_pane "$wt_dir" "$issue" "$SESSION" "$win" "$_deps_pm" "$_deps_cmd"; then
       # Keep the window open so the user can inspect the install failure.
       # Only remove a freshly created worktree if we can't reuse it later.
-      [[ -n "${created_new:-}" && "$created_new" == "true" ]] && \
-        git worktree remove --force "$wt_dir" >/dev/null 2>&1 || true
+      if [[ -n "${created_new:-}" && "$created_new" == "true" ]]; then
+        local cleanup_rc=0
+        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 10 ]]; then
+          startup_log "WARN: $issue dependency-failure cleanup preserved local work"
+        elif [[ "$cleanup_rc" -ne 0 ]]; then
+          startup_log "WARN: $issue dependency-failure cleanup failed"
+        fi
+      fi
       startup_phase_failed "$startup_id" deps "$issue" "dependency install"
       return 1
     else
