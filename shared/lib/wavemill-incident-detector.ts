@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
   readHookStatus,
@@ -7,7 +7,14 @@ import {
   readPlanningResult,
   redactIncidentData,
 } from './artifact-diagnostics.ts';
-import { createIncidentDraft, type IncidentRecord } from './wavemill-incident-model.ts';
+import {
+  canonicalizeRootCauseClass,
+  createIncidentDraft,
+  isRemoteRootCauseClass,
+  type IncidentCategory,
+  type IncidentRecord,
+  type IncidentRootCauseClass,
+} from './wavemill-incident-model.ts';
 
 const PLANNING_TERMINAL_REASONS = new Set([
   'turn_limit',
@@ -81,6 +88,9 @@ export class WorkflowStateDetector {
       const resultPath = join(taskPath, `.${stage}-result.json`);
       const phase = stringField(taskState?.phase);
       if (existsSync(markerPath) && !existsSync(resultPath)) {
+        // Marker mtime, not poll time: the same orphaned marker re-observed on
+        // every cycle must keep a stable event identity.
+        const markerTimestamp = safeMtimeIso(markerPath) ?? timestamp;
         incidents.push(createIncidentDraft({
           taskId,
           session: context.session ?? null,
@@ -94,7 +104,7 @@ export class WorkflowStateDetector {
           evidence: [{
             type: 'workflow_state',
             source: workflowStatePath,
-            timestamp,
+            timestamp: markerTimestamp,
             redactedData: redactIncidentData(`stage=${stage} phase=${phase ?? 'unknown'} marker=${basename(markerPath)} resultMissing=true`),
             key: `orphaned_${stage}_marker`,
           }],
@@ -139,7 +149,9 @@ export class JobFailureDetector {
         evidence: [{
           type: 'job_state',
           source: job.source,
-          timestamp: job.finishedAt ?? timestamp,
+          // Terminal event time, not poll time: an un-reaped historical failure
+          // must not register a fresh occurrence every observer cycle.
+          timestamp: job.finishedAt ?? job.startedAt ?? timestamp,
           redactedData: redactIncidentData(`id=${job.id ?? 'unknown'} kind=${job.kind ?? 'unknown'} status=${job.status} reason=${job.reason ?? 'unknown'} resultMissing=${missingResult}`),
           key: rootCauseClass,
         }],
@@ -179,22 +191,26 @@ export class DependencyHealthDetector {
       const hook = readHookStatus(hookPath);
       const detail = `${hook?.detail ?? ''} ${hook?.error ?? ''}`;
       if (!hook || !/\b(remote|ssh|git|github|ls-remote|network)\b/i.test(detail)) continue;
+      const rootCauseClass = canonicalizeRootCauseClass(detail);
+      const remote = isRemoteRootCauseClass(rootCauseClass);
       incidents.push(createIncidentDraft({
         taskId,
         session: context.session ?? null,
-        category: 'external_transient_dependency',
+        category: dependencyCategoryFor(rootCauseClass),
         severity: 'low',
         confidence: 'low',
         lifecycle: 'observed',
-        rootCauseClass: normalizeDependencyReason(detail),
-        summary: `${taskId} observed a remote dependency probe failure.`,
+        rootCauseClass,
+        summary: remote
+          ? `${taskId} observed a remote dependency probe failure.`
+          : `${taskId} observed a local harness failure (${rootCauseClass}).`,
         operatorAction: `Watch for repetition; escalate only when this reaches ${threshold} consecutive observations or blocks workflow progress.`,
         evidence: [{
           type: 'hook_status',
           source: hookPath,
           timestamp: hook.timestamp ? new Date(hook.timestamp).toISOString() : timestamp,
           redactedData: redactIncidentData(`state=${hook.state ?? 'unknown'} event=${hook.event ?? 'unknown'} detail=${detail}`),
-          key: 'remote_probe_failure',
+          key: remote ? 'remote_probe_failure' : rootCauseClass,
         }],
         metadata: { threshold },
       }));
@@ -214,14 +230,18 @@ export class DependencyHealthDetector {
       const reason = stringField(queueHealth.degradationReason) ?? 'dependency_planning_failed';
       const diagnostic = diagnosticReason(queueHealth) ?? reason;
       const failureCount = numberField(queueHealth.failureCount) ?? 1;
+      const classified = canonicalizeRootCauseClass(diagnostic);
+      // An unclassifiable degradation diagnostic is still a known local
+      // condition of the queue planner, not free text.
+      const rootCauseClass = classified === 'unclassified_local_failure' ? 'queue_planner_degraded' : classified;
       incidents.push(createIncidentDraft({
         taskId: null,
         session: context.session ?? null,
-        category: /config|credential|permission/i.test(diagnostic) ? 'configuration_operator_condition' : 'external_transient_dependency',
+        category: dependencyCategoryFor(rootCauseClass),
         severity: failureCount >= threshold ? 'medium' : 'low',
         confidence: failureCount >= threshold ? 'high' : 'medium',
         lifecycle: 'observed',
-        rootCauseClass: normalizeDependencyReason(diagnostic),
+        rootCauseClass,
         summary: `Queue planner fallback is active: ${reason}.`,
         operatorAction: 'Inspect queue-health diagnostics and dependency planner inputs; fallback is acceptable briefly but should not persist.',
         evidence: [{
@@ -243,15 +263,19 @@ export class DependencyHealthDetector {
         const detail = `${stringField(service.detail) ?? ''} ${stringField(service.lastError) ?? ''}`;
         const failureCount = numberField(service.failureCount) ?? numberField(service.restartAttemptCount) ?? 0;
         if (failureCount < threshold || !/\b(remote|ssh|github|dependency|probe)\b/i.test(detail)) continue;
+        const serviceRootCause = canonicalizeRootCauseClass(detail);
+        const serviceRemote = isRemoteRootCauseClass(serviceRootCause);
         incidents.push(createIncidentDraft({
           taskId: null,
           session: context.session ?? null,
-          category: 'external_transient_dependency',
+          category: dependencyCategoryFor(serviceRootCause),
           severity: 'medium',
           confidence: 'high',
           lifecycle: 'observed',
-          rootCauseClass: normalizeDependencyReason(detail),
-          summary: `${serviceName} dependency health is degraded by repeated probe failures.`,
+          rootCauseClass: serviceRootCause,
+          summary: serviceRemote
+            ? `${serviceName} dependency health is degraded by repeated probe failures.`
+            : `${serviceName} health is degraded by repeated local failures (${serviceRootCause}).`,
           operatorAction: 'Check the external dependency and credentials before treating this as a Wavemill product defect.',
           evidence: [{
             type: 'backstage_health',
@@ -290,12 +314,28 @@ function normalizePlanningReason(reason: string): string {
   return reason.replace(/[^a-z0-9_]+/gi, '_').toLowerCase();
 }
 
-function normalizeDependencyReason(value: string): string {
-  const lower = value.toLowerCase();
-  if (/ls-remote|ssh|publickey|github/.test(lower)) return 'remote_ssh_failure';
-  if (/timeout|timed out/.test(lower)) return 'remote_timeout';
-  if (/credential|permission|auth/.test(lower)) return 'remote_auth_failure';
-  return lower.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 80) || 'dependency_failure';
+/**
+ * Category routing for classified dependency signals. Only affirmatively
+ * remote failures stay external; auth/credential probes are operator-owned
+ * configuration, and everything else is a local harness/config condition.
+ */
+function dependencyCategoryFor(rootCauseClass: IncidentRootCauseClass): IncidentCategory {
+  if (rootCauseClass === 'remote_auth_failure'
+    || rootCauseClass === 'local_parse_failure'
+    || rootCauseClass === 'local_config_failure'
+    || rootCauseClass === 'queue_planner_degraded') {
+    return 'configuration_operator_condition';
+  }
+  if (isRemoteRootCauseClass(rootCauseClass)) return 'external_transient_dependency';
+  return 'model_task_harness_outcome';
+}
+
+function safeMtimeIso(path: string): string | undefined {
+  try {
+    return statSync(path).mtime.toISOString();
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveTaskPath(taskPath: string, candidate: string): string {
