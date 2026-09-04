@@ -597,7 +597,11 @@ export async function launchNativePlanning(options: LaunchNativePlanningOptions)
     }
 
     const taskPacket = readFileSync(taskPacketPath, 'utf-8');
-    const { content: systemPrompt, promptRef } = loadNativePhasePrompt(options.repoDir);
+    const { content: systemPrompt, promptRef } = loadNativePhasePrompt(options.repoDir, {
+      // Only phase-allowed tools are callable; the policy layer denies the rest.
+      tools: registryMetadata.filter((meta) => meta.allowedPhases.includes('planning')),
+      phase: 'planning',
+    });
     const apiKey = readyProvider ? getNativeProviderApiKey(readyProvider) : undefined;
     const model = options.loopModelOverride ?? {
       ...readyProvider!.model,
