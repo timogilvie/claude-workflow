@@ -901,6 +901,42 @@ challenge_stage_for_launch_env() {
   esac
 }
 
+challenge_selection_health_varied_model() {
+  local stage
+  stage="$(challenge_stage_for_launch_env "${1:-implementation}")"
+  case "$stage" in
+    plan) printf '%s\n' "${2:-${3:-}}" ;;
+    review) printf '%s\n' "${4:-${3:-}}" ;;
+    *) printf '%s\n' "${3:-}" ;;
+  esac
+}
+
+challenge_selection_health_ack_launch() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts ack-launch \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_stage_for_launch_env "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
+challenge_selection_health_release() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_stage_for_launch_env "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
 write_openrouter_warning_cache() {
   local warning_text="${1:-}"
   local warning_file="/tmp/${SESSION}-openrouter-warning.txt"
@@ -1166,6 +1202,33 @@ log_challenge_unavailable_plan() {
   echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
     [[ -n "$line" ]] && log_error "$line"
   done
+}
+
+log_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local reserved circuit reason
+  reserved=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByReservation // []) | length' 2>/dev/null || echo "0")
+  circuit=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByCircuit // []) | length' 2>/dev/null || echo "0")
+  reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  if [[ "$reserved" != "0" || "$circuit" != "0" || "$reason" == "challenge_deferred_selection_health" ]]; then
+    log "status" "  $issue: challenge selection health filtered candidates (reserved=$reserved, circuit=$circuit, reason=${reason:-selected})"
+  fi
+}
+
+release_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local stage model
+  stage=$(echo "$challenge_plan" | jq -r '.challengeStage // empty' 2>/dev/null || echo "")
+  model=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null || echo "")
+  [[ -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$issue" \
+      --stage "$stage" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
 }
 
 record_planning_launch_route_snapshot() {
@@ -11589,11 +11652,13 @@ EOF
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+      log_challenge_selection_health_plan "$issue" "$challenge_plan"
       if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
         log_challenge_unavailable_plan "$issue" "$challenge_plan"
         return 1
       fi
       if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
+        release_challenge_selection_health_plan "$issue" "$challenge_plan"
         # A plan-stage challenge cannot be formed before the expanded route
         # exists.  Retarget it to the implementation stage rather than dropping
         # to a single-model run: discarding the pair here is how an already
@@ -11606,6 +11671,7 @@ EOF
           challenge_plan="$retargeted_plan"
           challenge_mode="challenge"
           challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+          log_challenge_selection_health_plan "$issue" "$challenge_plan"
           log_warn "  $issue: Planner challenge unavailable before expansion — retargeted to implementation stage"
         else
           challenge_mode="single"
@@ -11738,6 +11804,8 @@ EOF
     if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
       if ! agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
         log_error "  Selected challenger route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
@@ -11746,41 +11814,59 @@ EOF
     else
       if [[ -n "$challenger_planner" ]] && ! challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning")"; then
         log_error "  Selected challenger planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       if [[ -n "$challenger_model" ]] && ! challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding")"; then
         log_error "  Selected challenger coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       if [[ -n "$challenger_reviewer" ]] && ! challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review")"; then
         log_error "  Selected challenger reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
     fi
 
     if [[ -n "$challenger_planner" && -z "$challenger_planner_agent" ]]; then
       log_error "  Selected challenger planner route is not launchable: agent resolution returned empty for model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_model" && -z "$challenger_agent" ]]; then
       log_error "  Selected challenger coder route is not launchable: agent resolution returned empty for model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer" && -z "$challenger_reviewer_agent" ]]; then
       log_error "  Selected challenger reviewer route is not launchable: agent resolution returned empty for model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
 
     if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
       log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
       log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
       log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
   fi
@@ -11815,14 +11901,20 @@ EOF
 
     if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
       log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
       log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
       log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
   fi
@@ -12118,13 +12210,23 @@ Implement from the issue description plus direct codebase analysis."
   local planner_launch_model resolved_planner_agent
   planner_launch_model="${planner_model:-claude-sonnet-5}"
   if declare -F agent_resolve_model >/dev/null 2>&1; then
-    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")" || return 1
+    if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")"; then
+      if [[ "$effective_challenge" == "true" ]]; then
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+      fi
+      return 1
+    fi
   fi
   if ! resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model" "planning")"; then
     write_stage_result "$feature_dir" "planning" "failed" "" "$planner_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Planning launch blocked by agent resolution failure.}"
     set_task_phase "$issue" "routing"
     set_window_attention_state "$win" "needs-user"
     log "warn" "⚠ $issue → Planning launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+    if [[ "$effective_challenge" == "true" ]]; then
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+    fi
     return 0
   fi
 
@@ -12138,7 +12240,15 @@ Implement from the issue description plus direct codebase analysis."
   local launch_rc=$?
   if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
     "$resolved_planner_agent" "$planner_launch_model"; then
+    if [[ "$effective_challenge" == "true" ]]; then
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+    fi
     return 0
+  fi
+  if [[ "$effective_challenge" == "true" ]]; then
+    challenge_selection_health_ack_launch "$challenge_pair" "$challenge_stage" \
+      "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
   fi
   log "status" "$issue Routing complete (direct), launched planning with $planner_launch_model"
 

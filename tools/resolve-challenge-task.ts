@@ -22,6 +22,17 @@ import { resolveAgent, tryResolveAgent } from '../shared/lib/model-router.ts';
 import { readBothRouteArtifacts } from '../shared/lib/route-artifact.ts';
 import { readTaskPromptFromFile } from '../shared/lib/workflow-router.ts';
 import { buildChallengeUnavailable } from '../shared/lib/challenge-unavailable.ts';
+import {
+  buildSelectionHealthDiagnostic,
+  buildSelectionHealthEvidence,
+  claimReservation,
+  computeSelectionExclusions,
+  normalizeSelectionHealthConfig,
+  readSelectionHealth,
+  type CircuitExclusion,
+  type ReservationExclusion,
+  type SelectionHealthDiagnostic,
+} from '../shared/lib/challenge-selection-health.ts';
 
 runTool({
   name: 'resolve-challenge-task',
@@ -65,6 +76,23 @@ runTool({
     const config = loadWavemillConfig(repoDir);
     const challenge = config.challenge || {};
     const router = config.router || {};
+    const selectionHealthConfig = normalizeSelectionHealthConfig(challenge.selectionHealth);
+    const selectionHealthEnabled = selectionHealthConfig.enabled;
+    let selectionHealthDiagnostic: SelectionHealthDiagnostic | undefined;
+    let selectionHealthReservationExclusions: ReservationExclusion[] = [];
+    let selectionHealthCircuitExclusions: CircuitExclusion[] = [];
+    let selectionHealthProbeGranted: { model: string; provider: string; canonicalModel: string } | null = null;
+    const selectionHealthOutput = () => selectionHealthEnabled
+      ? {
+          selectionHealth: buildSelectionHealthEvidence({
+            config: selectionHealthConfig,
+            excludedByReservation: selectionHealthReservationExclusions,
+            excludedByCircuit: selectionHealthCircuitExclusions,
+            probeGranted: selectionHealthProbeGranted,
+          }),
+          ...(selectionHealthDiagnostic ? { selectionHealthDiagnostic } : {}),
+        }
+      : {};
     const defaultAgent = router.defaultAgent || 'claude';
     const pool = getChallengeModelPool(challenge, router);
     const requestedRate = challenge.rate ?? 0.10;
@@ -104,6 +132,7 @@ runTool({
       ...base,
       reason,
       ...extra,
+      ...selectionHealthOutput(),
       ...(diagnostics.nativeCertificationRejections?.length
         ? { nativeCertificationRejections: diagnostics.nativeCertificationRejections }
         : {}),
@@ -205,7 +234,7 @@ runTool({
     const rotationSeed = `${issue}|${challengeStage}`;
     const recommendedChallengerModel = launchDecision.recommendation?.challengerModel;
 
-    const resolvePair = (activePreservedChallengerModel?: string) => {
+    const resolvePair = (candidatePool: string[], activePreservedChallengerModel?: string) => {
       let selectionFailureReason = 'selection_failed';
       let pair;
       let nativeCertificationRejections: ChallengeNativeRejection[] | undefined;
@@ -226,7 +255,7 @@ runTool({
       };
 
       if (featureDir) {
-        const selection = pickChallengeWorkflowsWithContextAndReason(pool, {
+        const selection = pickChallengeWorkflowsWithContextAndReason(candidatePool, {
           pairId: issue,
           issueId: issue,
           slug,
@@ -273,7 +302,7 @@ runTool({
         } catch (error) {
           // Fall back to model-only selection if task file is unreadable
           console.error(`Warning: Failed to read task file for routing: ${error}`);
-          const selection = pickChallengeModelsWithReason(pool, {
+          const selection = pickChallengeModelsWithReason(candidatePool, {
             pairId: issue,
             issueId: issue,
             slug,
@@ -295,7 +324,7 @@ runTool({
         }
       } else if (!pair) {
         // No task file provided - use model-only selection (backward compatibility)
-        const selection = pickChallengeModelsWithReason(pool, {
+        const selection = pickChallengeModelsWithReason(candidatePool, {
           pairId: issue,
           issueId: issue,
           slug,
@@ -323,12 +352,135 @@ runTool({
       return { pair, selectionFailureReason, nativeCertificationRejections, modelExclusions };
     };
 
+    const rememberSelectionHealthExclusions = (items: {
+      reservations: ReservationExclusion[];
+      circuits: CircuitExclusion[];
+    }) => {
+      const reservationKeys = new Set(selectionHealthReservationExclusions.map((item) =>
+        `${item.provider}|${item.canonicalModel}|${item.stage}|${item.ownerIssueId}|${item.expiresAt}`,
+      ));
+      for (const item of items.reservations) {
+        const key = `${item.provider}|${item.canonicalModel}|${item.stage}|${item.ownerIssueId}|${item.expiresAt}`;
+        if (!reservationKeys.has(key)) {
+          reservationKeys.add(key);
+          selectionHealthReservationExclusions.push(item);
+        }
+      }
+      const circuitKeys = new Set(selectionHealthCircuitExclusions.map((item) =>
+        `${item.provider}|${item.canonicalModel}|${item.state}|${item.cooldownUntil ?? ''}`,
+      ));
+      for (const item of items.circuits) {
+        const key = `${item.provider}|${item.canonicalModel}|${item.state}|${item.cooldownUntil ?? ''}`;
+        if (!circuitKeys.has(key)) {
+          circuitKeys.add(key);
+          selectionHealthCircuitExclusions.push(item);
+        }
+      }
+    };
+
+    const resolvePairWithSelectionHealth = async (activePreservedChallengerModel?: string) => {
+      const healthOwner = { issueId: issue, pairId: issue };
+      const healthExcludedModels = new Set<string>();
+      let lastResult: ReturnType<typeof resolvePair> | null = null;
+      const maxAttempts = Math.max(pool.length, 1);
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        let candidatePool = pool;
+        if (selectionHealthEnabled) {
+          try {
+            const snapshot = readSelectionHealth({ repoDir, config: selectionHealthConfig });
+            const exclusions = computeSelectionExclusions({
+              stage: challengeStage,
+              candidates: pool,
+              snapshot,
+              owner: healthOwner,
+              config: selectionHealthConfig,
+              additionallyExcludedModels: healthExcludedModels,
+            });
+            rememberSelectionHealthExclusions({
+              reservations: exclusions.excludedByReservation,
+              circuits: exclusions.excludedByCircuit,
+            });
+            candidatePool = exclusions.eligible;
+          } catch (error) {
+            selectionHealthDiagnostic = buildSelectionHealthDiagnostic(error, {
+              repoDir,
+              config: selectionHealthConfig,
+            });
+            if (selectionHealthDiagnostic) {
+              process.stderr.write(
+                `Challenge selection health deferred for ${issue}: ${selectionHealthDiagnostic.code} (${selectionHealthDiagnostic.path}).\n`,
+              );
+              return {
+                pair: null,
+                selectionFailureReason: 'challenge_deferred_selection_health',
+                nativeCertificationRejections: undefined,
+                modelExclusions: undefined,
+              };
+            }
+            throw error;
+          }
+        }
+
+        const result = resolvePair(candidatePool, activePreservedChallengerModel);
+        lastResult = result;
+        if (!result.pair || !selectionHealthEnabled) {
+          if (!result.pair && selectionHealthEnabled && (
+            selectionHealthReservationExclusions.length > 0
+            || selectionHealthCircuitExclusions.length > 0
+            || healthExcludedModels.size > 0
+          )) {
+            return { ...result, selectionFailureReason: 'challenge_deferred_selection_health' };
+          }
+          return result;
+        }
+
+        const effectiveStage = result.pair.challengeStage || 'implementation';
+        const challengerVaried = variedModelForStage(result.pair.challenger, effectiveStage);
+        try {
+          const claim = await claimReservation({
+            repoDir,
+            config: selectionHealthConfig,
+            model: challengerVaried,
+            stage: effectiveStage,
+            owner: healthOwner,
+          });
+          if (claim.claimed) {
+            selectionHealthProbeGranted = claim.probeGranted ?? null;
+            return result;
+          }
+          healthExcludedModels.add(challengerVaried);
+        } catch (error) {
+          selectionHealthDiagnostic = buildSelectionHealthDiagnostic(error, {
+            repoDir,
+            config: selectionHealthConfig,
+          });
+          if (selectionHealthDiagnostic) {
+            process.stderr.write(
+              `Challenge selection health deferred for ${issue}: ${selectionHealthDiagnostic.code} (${selectionHealthDiagnostic.path}).\n`,
+            );
+            return { ...result, pair: null, selectionFailureReason: 'challenge_deferred_selection_health' };
+          }
+          throw error;
+        }
+      }
+
+      return {
+        pair: null,
+        selectionFailureReason: selectionHealthEnabled
+          ? 'challenge_deferred_selection_health'
+          : (lastResult?.selectionFailureReason ?? 'selection_failed'),
+        nativeCertificationRejections: lastResult?.nativeCertificationRejections,
+        modelExclusions: lastResult?.modelExclusions,
+      };
+    };
+
     let {
       pair,
       selectionFailureReason,
       nativeCertificationRejections,
       modelExclusions,
-    } = resolvePair(preservedChallengerModel);
+    } = await resolvePairWithSelectionHealth(preservedChallengerModel);
     let preservationFallbackReason: string | undefined;
     if (preservedChallengerModel) {
       const selectedStage = pair?.challengeStage || challengeStage;
@@ -340,7 +492,7 @@ runTool({
           selectionFailureReason,
           nativeCertificationRejections,
           modelExclusions,
-        } = resolvePair(undefined));
+        } = await resolvePairWithSelectionHealth(undefined));
       }
     }
 
@@ -384,6 +536,7 @@ runTool({
           ...unavailable,
           slotsRequired: 0,
           reason: 'challenge_unavailable',
+          ...selectionHealthOutput(),
           selectionPath: launchDecision.selectionPath,
           ...(launchDecision.recommendation ? { challengeRecommendation: launchDecision.recommendation } : {}),
           ...(preservationFallbackReason ? { fallbackReason: preservationFallbackReason } : {}),
@@ -454,6 +607,7 @@ runTool({
       slotsRequired: 2,
       decisionSource: pair.routeContext?.decisionSource || 'bootstrap',
       reason: 'selected',
+      ...selectionHealthOutput(),
       primaryModel,
       selectionPath: launchDecision.selectionPath,
       challengerSource,

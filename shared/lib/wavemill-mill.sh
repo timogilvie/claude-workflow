@@ -2186,6 +2186,33 @@ log_challenge_unavailable_plan() {
   done
 }
 
+log_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local reserved circuit reason
+  reserved=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByReservation // []) | length' 2>/dev/null || echo "0")
+  circuit=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByCircuit // []) | length' 2>/dev/null || echo "0")
+  reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  if [[ "$reserved" != "0" || "$circuit" != "0" || "$reason" == "challenge_deferred_selection_health" ]]; then
+    log "status" "  $issue: challenge selection health filtered candidates (reserved=$reserved, circuit=$circuit, reason=${reason:-selected})"
+  fi
+}
+
+release_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local stage model
+  stage=$(echo "$challenge_plan" | jq -r '.challengeStage // empty' 2>/dev/null || echo "")
+  model=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null || echo "")
+  [[ -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$issue" \
+      --stage "$stage" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
 # ── Phase 5: Challenge-mode launch planning ──────────────────────────────
 FINAL_LAUNCH_ARGS=()
 slots_used=0
@@ -2243,11 +2270,13 @@ for t in "${TASKS[@]}"; do
     challenge_plan=$(npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
     challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
     challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+    log_challenge_selection_health_plan "$ISSUE" "$challenge_plan"
     if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
       log_challenge_unavailable_plan "$ISSUE" "$challenge_plan"
       continue
     fi
     if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
+      release_challenge_selection_health_plan "$ISSUE" "$challenge_plan"
       challenge_mode="single"
       challenge_reason="plan_stage_expanded_route_unavailable"
       log_warn "  $ISSUE: Planner challenge deferred until expanded route is available"

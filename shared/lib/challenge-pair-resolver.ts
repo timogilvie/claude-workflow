@@ -27,6 +27,11 @@ import {
   type ChallengeArmFailure,
 } from './arm-failure-taxonomy.ts';
 import { repairChallengePairingSync } from './challenge-pairing-repair.ts';
+import {
+  recordSelectionOutcome,
+  releaseReservation,
+} from './challenge-selection-health.ts';
+import type { ChallengeStage } from './challenge-scheduler.ts';
 
 const ORPHAN_PAIR_GRACE_MS = 60_000;
 const UNKNOWN_PR_NUMBER = 0;
@@ -126,6 +131,7 @@ export async function resolveUnresolvablePair(input: UnresolvablePairInput): Pro
 
   if (!input.dryRun) {
     appendChallengeComparison(resolution.record, evalsDir);
+    await safelyReleasePairSelectionHealth(input.repoDir, input.pairId, pairState);
   }
 
   return {
@@ -181,6 +187,7 @@ function hydrateCleanedAbortedArm(
         prNumber: null,
         role: missingRole,
         branch: null,
+        challengeStage: typeof artifact.stage === 'string' && artifact.stage.trim() ? artifact.stage.trim() : null,
         model: typeof artifact.model === 'string' && artifact.model.trim() ? artifact.model.trim() : null,
         updatedAt: Number.isFinite(timestamp) ? timestamp : null,
         evalFailed: false,
@@ -252,6 +259,7 @@ export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promi
 
   if (!input.dryRun) {
     appendChallengeComparison(record, evalsDir);
+    await safelyReleasePairSelectionHealth(input.repoDir, input.pairId, pairState);
     if (challenger) {
       await markChallengerSupersededForPrimaryMerge(input.repoDir, challenger, primaryPr, input.now);
     }
@@ -264,6 +272,57 @@ export async function resolvePrimaryMergedPair(input: PrimaryMergedInput): Promi
     reason: 'primary_merged',
     dryRun: input.dryRun === true,
   };
+}
+
+async function safelyReleasePairSelectionHealth(
+  repoDir: string,
+  pairId: string,
+  pairState: PairTaskState,
+): Promise<void> {
+  try {
+    await releasePairSelectionHealth(repoDir, pairId, pairState);
+  } catch (error) {
+    console.warn(`[challenge-pair-resolver] Failed to release selection health for ${pairId}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function releasePairSelectionHealth(
+  repoDir: string,
+  pairId: string,
+  pairState: PairTaskState,
+): Promise<void> {
+  const owner = { issueId: pairId, pairId };
+  const tasks = [pairState.primary, pairState.challenger].filter((task): task is TaskEvalState => Boolean(task));
+  await Promise.all(tasks.map(async (task) => {
+    const stage = normalizeChallengeStage(task.challengeStage ?? task.challengeAbortedStage);
+    const model = getTaskModel(task);
+    if (model === UNKNOWN_MODEL) {
+      return;
+    }
+    if (task.evalCompleted) {
+      await recordSelectionOutcome({
+        repoDir,
+        owner,
+        model,
+        stage,
+        success: true,
+      });
+      return;
+    }
+    await releaseReservation({
+      repoDir,
+      owner,
+      model,
+      stage,
+    });
+  }));
+}
+
+function normalizeChallengeStage(value: string | null | undefined): ChallengeStage {
+  const raw = value?.trim().toLowerCase();
+  if (raw === 'plan' || raw === 'planning' || raw === 'planner') return 'plan';
+  if (raw === 'review' || raw === 'reviewer') return 'review';
+  return 'implementation';
 }
 
 function detectUnresolvableReason(

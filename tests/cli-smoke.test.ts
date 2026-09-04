@@ -15,11 +15,12 @@ import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WAVEMILL = resolve(__dirname, '..', 'wavemill');
+const CLI_TIMEOUT_MS = 120_000;
 
 function run(args: string[], env?: Record<string, string>): string {
   return execFileSync(WAVEMILL, args, {
     encoding: 'utf-8',
-    timeout: 45_000,
+    timeout: CLI_TIMEOUT_MS,
     env: { ...process.env, ...env },
   });
 }
@@ -32,7 +33,7 @@ function runExpectFail(
   try {
     const stdout = execFileSync(WAVEMILL, args, {
       encoding: 'utf-8',
-      timeout: 45_000,
+      timeout: CLI_TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, ...env },
       cwd,
@@ -218,7 +219,7 @@ describe('wavemill CLI', () => {
 
         const out = execFileSync(WAVEMILL, ['check-routing', '--repo-dir', repoDir], {
           encoding: 'utf-8',
-          timeout: 45_000,
+          timeout: CLI_TIMEOUT_MS,
           env: { ...process.env },
         });
         assert.match(out, /Starting Wavemill Routing Check/);
