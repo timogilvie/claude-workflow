@@ -276,6 +276,12 @@ export interface HokusaiSubmissionRoutes {
 export interface HokusaiSubmissionOutcomes {
   completed_successfully: boolean;
   actual_cost_usd: number | null;
+  /**
+   * Coder-model execution latency in seconds, sourced from the eval record's
+   * `phaseDurationsSeconds.coding`. Null when no valid coding duration exists —
+   * never total workflow elapsed time, which includes queue/idle waits
+   * uncorrelated with model performance (HOK-2895).
+   */
   actual_time_seconds: number | null;
   intervention_count: number;
 }
@@ -806,11 +812,16 @@ export function toHokusaiSubmission(
       ? record.workflowCost
       : null;
 
+  // Latency is attributed to the coder model, so only the coding-phase
+  // duration qualifies. `record.timeSeconds` is total elapsed time dominated
+  // by queue/idle waits (observed ~96x inflation, HOK-2895) and must never be
+  // used as a fallback; missing latency beats systematically false latency.
+  const codingSeconds = record.phaseDurationsSeconds?.coding;
   const actualTimeSeconds =
-    typeof record.timeSeconds === 'number'
-    && Number.isFinite(record.timeSeconds)
-    && record.timeSeconds >= 0
-      ? record.timeSeconds
+    typeof codingSeconds === 'number'
+    && Number.isFinite(codingSeconds)
+    && codingSeconds >= 0
+      ? codingSeconds
       : null;
 
   const rubricSignals = extractRubricSignals(record);
