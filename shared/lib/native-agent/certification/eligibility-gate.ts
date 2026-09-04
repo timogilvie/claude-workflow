@@ -5,9 +5,12 @@ import {
   checkGlobalCertificationEligibility,
 } from './loader.ts';
 import { resolveCertificationSubject } from './identity.ts';
-import type {
-  CertificationPhase,
-  NativeCertificationArtifact,
+import {
+  evaluateLiveCodingCanaryEligibility,
+  type CertificationPhase,
+  type LiveCodingCanaryIneligibilityReason,
+  type LiveCodingCanaryStatus,
+  type NativeCertificationArtifact,
 } from './schema.ts';
 
 export type NativeGateRejectReason =
@@ -18,14 +21,30 @@ export type NativeGateRejectReason =
   | 'stale_artifact'
   | 'wrong_suite'
   | 'identity_reidentified'
-  | 'insufficient_phase';
+  | 'insufficient_phase'
+  | 'missing_live_canary'
+  | 'stale_live_canary'
+  | 'failed_live_canary'
+  | 'inconclusive_live_canary'
+  | 'non_live_canary'
+  | 'live_canary_identity_mismatch';
 
 export type NativeGateMode = 'task' | 'certification';
+
+/** Launch phases a caller may declare when evaluating the gate. */
+export type NativeGateLaunchPhase = 'task-expansion' | 'planning' | 'coding' | 'review';
 
 export interface NativeGateInput {
   modelId: string;
   mode: NativeGateMode;
   requiredPhase?: CertificationPhase;
+  /**
+   * Explicit launch phase being gated. When omitted, a coding launch is
+   * inferred fail-closed from `requiredPhase === 'patch'` (the certification
+   * phase used exclusively by coding launches). Coding launches additionally
+   * require a fresh, live, identity-matching coding canary pass.
+   */
+  launchPhase?: NativeGateLaunchPhase;
   registry: ModelRegistry;
   repoDir?: string;
   apiKeyPresent: boolean;
@@ -58,6 +77,10 @@ export interface NativeGateReject {
   artifactPath?: string;
   artifactScope?: 'global' | 'legacy-repo';
   subject?: unknown;
+  /** Status of the live coding canary, when a canary-specific reason rejected the model. */
+  liveCanaryStatus?: LiveCodingCanaryStatus;
+  /** ISO 8601 timestamp of the live coding canary run, when one was found. */
+  liveCanaryRanAt?: string;
 }
 
 export type NativeGateDecision = NativeGateReady | NativeGateReject;
@@ -143,6 +166,34 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     });
   }
 
+  // Deterministic certification alone is necessary but not sufficient for
+  // coding: a coding launch additionally requires a fresh, live,
+  // identity-matching structured-mutation canary pass (HOK-2943).
+  if (isCodingLaunch(input)) {
+    const canaryEligibility = evaluateLiveCodingCanaryEligibility(
+      eligibility.artifact,
+      requiredSuiteVersion,
+      input.now ?? new Date(),
+      subject.subject,
+    );
+    if (!canaryEligibility.eligible) {
+      const canary = canaryEligibility.canary;
+      return rejectDecision({
+        modelId: input.modelId,
+        reason: mapCanaryReason(canaryEligibility.reason),
+        nativeCapability: capability,
+        requiredPhase: input.requiredPhase,
+        foundPhase: eligibility.artifact.phase,
+        requiredSuiteVersion,
+        foundSuiteVersion: eligibility.artifact.suiteVersion,
+        certifiedAt: eligibility.artifact.certifiedAt,
+        artifactPath: eligibility.artifactPath ?? artifactPath,
+        artifactScope: eligibility.storageScope,
+        ...(canary ? { liveCanaryStatus: canary.status, liveCanaryRanAt: canary.ranAt } : {}),
+      });
+    }
+  }
+
   return {
     ok: true,
     modelId: input.modelId,
@@ -151,6 +202,35 @@ export function evaluateNativeProviderGate(input: NativeGateInput): NativeGateDe
     artifact: eligibility.artifact,
     certified: true,
   };
+}
+
+/**
+ * A coding launch is declared explicitly via `launchPhase: 'coding'` or,
+ * fail-closed, inferred from the `patch` certification phase that only coding
+ * launches require.
+ */
+function isCodingLaunch(input: NativeGateInput): boolean {
+  if (input.launchPhase !== undefined) {
+    return input.launchPhase === 'coding';
+  }
+  return input.requiredPhase === 'patch';
+}
+
+function mapCanaryReason(reason: LiveCodingCanaryIneligibilityReason): NativeGateRejectReason {
+  switch (reason) {
+    case 'missing':
+      return 'missing_live_canary';
+    case 'stale':
+      return 'stale_live_canary';
+    case 'failed':
+      return 'failed_live_canary';
+    case 'inconclusive':
+      return 'inconclusive_live_canary';
+    case 'not-live':
+      return 'non_live_canary';
+    case 'identity-mismatch':
+      return 'live_canary_identity_mismatch';
+  }
 }
 
 function mapEligibilityReason(reason: 'missing' | 'malformed' | 'identity-reidentified' | 'wrong-version' | 'stale' | 'phase-insufficient' | 'scenario-failure'): NativeGateRejectReason {
@@ -195,6 +275,8 @@ function formatRejectMessage(input: Omit<NativeGateReject, 'ok' | 'message'>): s
   if (input.artifactPath) parts.push(`artifactPath=${input.artifactPath}`);
   if (input.artifactScope) parts.push(`artifactScope=${input.artifactScope}`);
   if (input.subject) parts.push('subject=current-registry');
+  if (input.liveCanaryStatus) parts.push(`liveCanaryStatus=${input.liveCanaryStatus}`);
+  if (input.liveCanaryRanAt) parts.push(`liveCanaryRanAt=${input.liveCanaryRanAt}`);
 
   return parts.join('; ');
 }

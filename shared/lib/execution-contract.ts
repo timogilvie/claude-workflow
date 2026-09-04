@@ -274,6 +274,7 @@ function validateNativeProvider(contract: ExecutionContract, repoDir?: string, r
     modelId: contract.model,
     mode: 'task',
     requiredPhase: CERT_PHASE_BY_STAGE[contract.stageRole],
+    ...(contract.stageRole === 'coding' ? { launchPhase: 'coding' as const } : {}),
     registry,
     repoDir,
     apiKeyPresent: true,

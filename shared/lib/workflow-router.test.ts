@@ -11,6 +11,7 @@ import type { QuotaStatus } from './quota-state.ts';
 import { applyDifficultyFloor, readTaskPromptFromFile, routeWorkflow, routeWorkflowAuto, routeWorkflowHokusai, summarizeWorkflowRoute, tryPolicyResolution, STAGE_PHASE_REQUIREMENT } from './workflow-router.ts';
 import type { RouterCertificationRejection } from './workflow-router.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import {
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
@@ -268,6 +269,9 @@ function writeNativeCertificationArtifact(
     suiteVersion,
     certifiedAt,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    ...(phase !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: certifiedAt }) }
+      : {}),
   }, null, 2), 'utf-8');
 }
 
@@ -1915,6 +1919,11 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: FRESH_CERTIFIED_AT,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // HOK-2943: coder eligibility requires live canary evidence in addition
+    // to the deterministic phase; canary-negative cases override liveCanary.
+    ...((overrides.phase ?? 'patch') !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: FRESH_CERTIFIED_AT }) }
+      : {}),
     ...overrides,
   };
   writeFileSync(path, JSON.stringify(artifact));

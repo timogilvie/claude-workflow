@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { certifyAllNativeAgents, certifyNativeAgent } from './native-agent-certify.ts';
+import { certifyAllNativeAgents, certifyNativeAgent, renderCanaryStatusLine } from './native-agent-certify.ts';
 import type { HarnessReport, HarnessScenarioResult } from '../shared/lib/native-agent/certification/scenario-runner.ts';
-import type { NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
+import { CERTIFICATION_SCHEMA_VERSION, type NativeCertificationArtifact } from '../shared/lib/native-agent/certification/schema.ts';
+import { buildLiveCodingCanaryFixture } from '../shared/lib/native-agent/certification/canary-fixtures.ts';
+import { resolveCertificationSubject } from '../shared/lib/native-agent/certification/identity.ts';
 import { DEFAULT_CERTIFICATION_SUITE_VERSION } from '../shared/lib/native-agent/certification/scenarios.ts';
 import { computeIdentityFingerprint, type ModelRegistry } from '../shared/lib/model-registry.ts';
 
@@ -716,5 +718,265 @@ describe('certifyAllNativeAgents', () => {
     assert.equal(result.published.length, 0);
     assert.equal(result.skipped.length, 0);
     assert.deepEqual(result.failed.map((entry) => entry.model), ['gpt-4o']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOK-2943: live coding canary integration
+// ---------------------------------------------------------------------------
+
+describe('certifyNativeAgent live coding canary', () => {
+  const FIXED_NOW = new Date('2026-09-01T12:00:00.000Z');
+  const CANARY_RAN_AT = new Date(FIXED_NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const SUBJECT = resolveCertificationSubject({
+    provider: 'openai',
+    model: 'gpt-4o',
+    registry: STUB_REGISTRY,
+  }).subject;
+
+  const WORKFLOW_REPORT: HarnessReport = {
+    ...PASSING_REPORT,
+    results: [
+      {
+        scenarioId: 'wf1',
+        category: 'phase',
+        classification: 'deterministic',
+        phase: 'workflow',
+        status: 'pass',
+        durationMs: 1,
+      } as HarnessScenarioResult,
+    ],
+    countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+  };
+
+  function workflowCertifyOptions(overrides: Record<string, unknown> = {}) {
+    return {
+      provider: 'openai' as const,
+      model: 'gpt-4o',
+      phase: 'workflow' as const,
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      runScenariosFn: async () => WORKFLOW_REPORT,
+      loadPreviousArtifactFn: () => undefined,
+      now: () => FIXED_NOW,
+      env: {},
+      ...overrides,
+    };
+  }
+
+  function previousArtifactWithCanary(
+    canaryOverrides: Record<string, unknown> = {},
+  ): NativeCertificationArtifact {
+    return {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: SUBJECT,
+      provider: SUBJECT.providerId,
+      model: SUBJECT.providerModelId,
+      phase: 'workflow',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certifiedAt: new Date(FIXED_NOW.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+      scenarios: [{ scenarioId: 'wf1', passed: true }],
+      liveCanary: buildLiveCodingCanaryFixture(SUBJECT, DEFAULT_CERTIFICATION_SUITE_VERSION, {
+        ranAt: CANARY_RAN_AT,
+        ...canaryOverrides,
+      }),
+    };
+  }
+
+  it('dry-run never invokes the live canary runner or persists canary evidence', async () => {
+    let canaryCalls = 0;
+    let writeCalls = 0;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      dryRun: true,
+      liveCodingCanary: true,
+      runScenariosFn: async () => ({ ...WORKFLOW_REPORT, dryRun: true, liveCertifiable: false }),
+      runLiveCanaryFn: async () => { canaryCalls++; throw new Error('unreachable'); },
+      writeCertificationFn: () => { writeCalls++; return '/repo/cert.json'; },
+    }));
+
+    assert.equal(canaryCalls, 0, 'dry-run must never run the live canary');
+    assert.equal(writeCalls, 0);
+    assert.equal(result.codingEligible, false);
+    assert.equal(result.liveCanary, undefined);
+  });
+
+  it('persists a canary pass with the artifact and grants coding eligibility', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      liveCodingCanary: true,
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: CANARY_RAN_AT,
+        attempts: 1,
+      }),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.ok(written, 'artifact must be written');
+    assert.equal(written!.liveCanary?.status, 'pass');
+    assert.equal(written!.liveCanary?.isLive, true);
+    assert.equal(result.codingEligible, true);
+    assert.equal(result.liveCanary?.status, 'pass');
+    assert.equal(result.liveCanary?.carriedForward, undefined);
+  });
+
+  it('publishes deterministic evidence without canary evidence when the flag is absent', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    let canaryCalls = 0;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      runLiveCanaryFn: async () => { canaryCalls++; throw new Error('unreachable'); },
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.equal(canaryCalls, 0);
+    assert.ok(written, 'deterministic artifact still publishes');
+    assert.equal(written!.liveCanary, undefined, 'no canary evidence without the opt-in flag');
+    assert.equal(result.codingEligible, false, 'missing canary never grants coding eligibility');
+  });
+
+  it('carries forward a previous eligible canary pass on deterministic-only re-certification', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      loadPreviousArtifactFn: () => previousArtifactWithCanary(),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.equal(written!.liveCanary?.status, 'pass');
+    assert.equal(written!.liveCanary?.ranAt, CANARY_RAN_AT, 'original canary timestamp is preserved');
+    assert.equal(result.codingEligible, true);
+    assert.equal(result.liveCanary?.carriedForward, true);
+  });
+
+  it('does not carry forward stale, non-live, failed, or identity-mismatched previous canaries', async () => {
+    for (const canaryOverrides of [
+      { ranAt: new Date(FIXED_NOW.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString() },
+      { isLive: false },
+      { status: 'fail' as const, reason: 'protocol_failure' as const },
+      { providerNativeId: 'someone-else' },
+    ]) {
+      let written: NativeCertificationArtifact | undefined;
+      const result = await certifyNativeAgent(workflowCertifyOptions({
+        loadPreviousArtifactFn: () => previousArtifactWithCanary(canaryOverrides),
+        writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+          written = artifact;
+          return '/repo/cert.json';
+        },
+      }));
+      assert.equal(written!.liveCanary, undefined, `must drop previous canary for ${JSON.stringify(canaryOverrides)}`);
+      assert.equal(result.codingEligible, false);
+    }
+  });
+
+  it('preserves a previous fresh pass when a new canary attempt is inconclusive', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const inconclusiveRanAt = FIXED_NOW.toISOString();
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      liveCodingCanary: true,
+      loadPreviousArtifactFn: () => previousArtifactWithCanary(),
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: inconclusiveRanAt,
+        status: 'inconclusive',
+        reason: 'provider_transient_error',
+        detail: '429 rate limited',
+      }),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.equal(written!.liveCanary?.status, 'pass', 'previous pass remains authoritative');
+    assert.equal(written!.liveCanary?.ranAt, CANARY_RAN_AT);
+    assert.equal(written!.liveCanary?.lastInconclusiveAttempt?.ranAt, inconclusiveRanAt);
+    assert.equal(written!.liveCanary?.lastInconclusiveAttempt?.reason, 'provider_transient_error');
+    assert.equal(result.codingEligible, true);
+    assert.equal(result.liveCanary?.carriedForward, true);
+  });
+
+  it('records an inconclusive result and stays ineligible when no previous pass exists', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      liveCodingCanary: true,
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: FIXED_NOW.toISOString(),
+        status: 'inconclusive',
+        reason: 'provider_transient_error',
+      }),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.equal(written!.liveCanary?.status, 'inconclusive');
+    assert.equal(result.codingEligible, false);
+  });
+
+  it('lets a definitive canary failure revoke a previous identity-matching pass', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const result = await certifyNativeAgent(workflowCertifyOptions({
+      liveCodingCanary: true,
+      loadPreviousArtifactFn: () => previousArtifactWithCanary(),
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: FIXED_NOW.toISOString(),
+        status: 'fail',
+        reason: 'wrong_mutation',
+      }),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+    }));
+
+    assert.equal(written!.liveCanary?.status, 'fail', 'definitive failure replaces the previous pass');
+    assert.equal(written!.liveCanary?.reason, 'wrong_mutation');
+    assert.equal(result.codingEligible, false);
+  });
+
+  it('never runs the canary for read-only certification even when requested', async () => {
+    let canaryCalls = 0;
+    const result = await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'read-only',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      liveCodingCanary: true,
+      runScenariosFn: async () => PASSING_REPORT,
+      runLiveCanaryFn: async () => { canaryCalls++; throw new Error('unreachable'); },
+      loadPreviousArtifactFn: () => undefined,
+      writeCertificationFn: () => '/repo/cert.json',
+      now: () => FIXED_NOW,
+      env: {},
+    });
+
+    assert.equal(canaryCalls, 0, 'read-only certification cannot satisfy coding, so no canary runs');
+    assert.equal(result.codingEligible, false);
+  });
+
+  it('renderCanaryStatusLine states eligibility explicitly', async () => {
+    const passResult = await certifyNativeAgent(workflowCertifyOptions({
+      liveCodingCanary: true,
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: CANARY_RAN_AT,
+      }),
+      writeCertificationFn: () => '/repo/cert.json',
+    }));
+    assert.match(renderCanaryStatusLine(passResult, 'workflow'), /status=pass.*Coding eligibility: granted/);
+
+    const missingResult = await certifyNativeAgent(workflowCertifyOptions({
+      writeCertificationFn: () => '/repo/cert.json',
+    }));
+    assert.match(renderCanaryStatusLine(missingResult, 'workflow'), /missing.*NOT granted/);
+
+    assert.match(renderCanaryStatusLine(missingResult, 'read-only'), /not applicable/);
   });
 });
