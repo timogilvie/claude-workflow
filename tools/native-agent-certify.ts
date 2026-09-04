@@ -277,6 +277,11 @@ export async function certifyNativeAgent(opts: CertifyOptions): Promise<CertifyR
             },
           };
           canarySummary = summarizeCanary(liveCanary, true);
+        } else if (run.status === 'skipped' && previousCanary) {
+          // A canary that could not start (e.g. missing credentials) carries
+          // no evidence either way; the existing valid pass stays authoritative.
+          liveCanary = previousCanary;
+          canarySummary = summarizeCanary(previousCanary, true);
         } else {
           // Pass and definitive failure are both authoritative: a definitive
           // failure revokes any previously recorded pass for this identity.

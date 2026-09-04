@@ -13,6 +13,7 @@ import {
   resolveCertificationSubject,
 } from '../shared/lib/native-agent/certification/index.ts';
 import { DEFAULT_MODEL_REGISTRY } from '../shared/lib/model-registry.ts';
+import { buildLiveCodingCanaryFixture } from '../shared/lib/native-agent/certification/canary-fixtures.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
   getPatchCodingCertificationPath,
@@ -67,6 +68,10 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // HOK-2943: coder eligibility additionally requires live canary evidence.
+    ...(phase !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: CERT_DATE_FRESH }) }
+      : {}),
   }), 'utf-8');
 }
 

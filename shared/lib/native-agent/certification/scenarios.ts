@@ -27,6 +27,7 @@ import {
   type NativeCertificationArtifact,
 } from './schema.ts';
 import { filterNativeModels, type RouterRole } from './router-filter.ts';
+import { buildLiveCodingCanaryFixture } from './canary-fixtures.ts';
 import { checkCertificationEligibility } from '../certification/loader.ts';
 import { writeCertification, writeGlobalCertification } from '../certification/store.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from '../certification/storage.ts';
@@ -994,6 +995,10 @@ async function assertWorkflowNativeOpenRouterLaunchMatrix(_ctx: ScenarioContext)
         suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
         certifiedAt: new Date().toISOString(),
         scenarios: [{ scenarioId: 'workflow.phase.native-openrouter-launch-matrix', passed: true }],
+        // Synthetic canary evidence: this deterministic scenario verifies the
+        // router matrix contract, so the coder path needs an eligible canary
+        // fixture. Real coding eligibility still requires the live canary run.
+        liveCanary: buildLiveCodingCanaryFixture(subject.subject, DEFAULT_CERTIFICATION_SUITE_VERSION),
       };
       writeGlobalCertification(artifact);
 

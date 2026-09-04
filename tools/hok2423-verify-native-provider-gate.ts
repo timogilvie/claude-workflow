@@ -14,6 +14,7 @@ import {
   type CertificationPhase,
   type NativeCertificationArtifact,
 } from '../shared/lib/native-agent/certification/index.ts';
+import { buildLiveCodingCanaryFixture } from '../shared/lib/native-agent/certification/canary-fixtures.ts';
 import { resolveNativeAgentProviders } from '../shared/lib/native-agent/providers.ts';
 import type { ModelRegistry, NativeProviderName } from '../shared/lib/model-registry.ts';
 
@@ -275,6 +276,15 @@ function writeArtifact(
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // HOK-2943: coder resolver readiness and report coder eligibility both
+    // require live canary evidence; the fixture keeps them aligned.
+    ...((overrides.phase ?? 'workflow') !== 'read-only'
+      ? {
+        liveCanary: buildLiveCodingCanaryFixture(identity.subject, DEFAULT_CERTIFICATION_SUITE_VERSION, {
+          ranAt: new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+        }),
+      }
+      : {}),
     ...overrides,
   };
   writeFileSync(path, JSON.stringify(artifact, null, 2), 'utf-8');

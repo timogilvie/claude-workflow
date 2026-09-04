@@ -980,3 +980,68 @@ describe('certifyNativeAgent live coding canary', () => {
     assert.match(renderCanaryStatusLine(missingResult, 'read-only'), /not applicable/);
   });
 });
+
+describe('certifyNativeAgent skipped canary preservation', () => {
+  const FIXED_NOW = new Date('2026-09-01T12:00:00.000Z');
+  const CANARY_RAN_AT = new Date(FIXED_NOW.getTime() - 60 * 60 * 1000).toISOString();
+  const SUBJECT = resolveCertificationSubject({
+    provider: 'openai',
+    model: 'gpt-4o',
+    registry: STUB_REGISTRY,
+  }).subject;
+
+  it('a skipped canary run never revokes a valid previous pass', async () => {
+    let written: NativeCertificationArtifact | undefined;
+    const previous: NativeCertificationArtifact = {
+      schemaVersion: CERTIFICATION_SCHEMA_VERSION,
+      subject: SUBJECT,
+      provider: SUBJECT.providerId,
+      model: SUBJECT.providerModelId,
+      phase: 'workflow',
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certifiedAt: new Date(FIXED_NOW.getTime() - 24 * 60 * 60 * 1000).toISOString(),
+      scenarios: [{ scenarioId: 'wf1', passed: true }],
+      liveCanary: buildLiveCodingCanaryFixture(SUBJECT, DEFAULT_CERTIFICATION_SUITE_VERSION, {
+        ranAt: CANARY_RAN_AT,
+      }),
+    };
+
+    const result = await certifyNativeAgent({
+      provider: 'openai',
+      model: 'gpt-4o',
+      phase: 'workflow',
+      repoDir: '/repo',
+      registry: STUB_REGISTRY,
+      liveCodingCanary: true,
+      runScenariosFn: async () => ({
+        ...PASSING_REPORT,
+        results: [{
+          scenarioId: 'wf1',
+          category: 'phase',
+          classification: 'deterministic',
+          phase: 'workflow',
+          status: 'pass',
+          durationMs: 1,
+        } as HarnessScenarioResult],
+        countsByCategory: { tool: 0, usage: 0, transcript: 0, phase: 1 },
+      }),
+      loadPreviousArtifactFn: () => previous,
+      runLiveCanaryFn: async (opts) => buildLiveCodingCanaryFixture(opts.subject, opts.suiteVersion, {
+        ranAt: FIXED_NOW.toISOString(),
+        status: 'skipped',
+        reason: 'provider_config_error',
+      }),
+      writeCertificationFn: (_repoDir: string, artifact: NativeCertificationArtifact) => {
+        written = artifact;
+        return '/repo/cert.json';
+      },
+      now: () => FIXED_NOW,
+      env: {},
+    });
+
+    assert.equal(written!.liveCanary?.status, 'pass', 'valid pass stays authoritative past a skipped run');
+    assert.equal(written!.liveCanary?.ranAt, CANARY_RAN_AT);
+    assert.equal(result.codingEligible, true);
+    assert.equal(result.liveCanary?.carriedForward, true);
+  });
+});
