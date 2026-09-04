@@ -36,6 +36,12 @@ import {
   type DedupeRegistry,
 } from './dedupe.ts';
 import type { NetworkPolicy } from '../network-policy.ts';
+import {
+  publishReviewedBranch,
+  translateGitHubHeadError,
+  type BranchPublicationExecutor,
+  type BranchPublicationResult,
+} from '../../branch-publication.ts';
 
 export interface NormalizedReviewFinding {
   id: string;
@@ -86,6 +92,8 @@ export interface ReviewFlowOptions {
   linearClient: LinearClient;
   githubDeps?: Partial<GitHubToolDeps>;
   networkPolicy?: NetworkPolicy;
+  /** Branch-publication preflight; defaults to the real Git helper. Test seam only. */
+  publishBranchImpl?: BranchPublicationExecutor;
   fixFindings?: ReviewFindingFixExecutor;
   reviewChangesImpl?: CommandToolsDeps['reviewChangesImpl'];
   readStageResultImpl?: CommandToolsDeps['readStageResultImpl'];
@@ -132,6 +140,7 @@ export interface ReviewFlowResult {
   review: ReviewFlowReviewSummary;
   fixes: ReviewFlowFixSummary;
   linearComment?: LinearCommentResult;
+  branchPublication?: BranchPublicationResult;
   pullRequest?: GitHubCreatePrResult;
   labels: Array<GitHubAddLabelResult>;
   stageResult?: Awaited<ReturnType<typeof executeWriteStageResult>>;
@@ -264,6 +273,7 @@ function buildStageArtifacts(input: {
   review: ReviewFlowReviewSummary;
   fixes: ReviewFlowFixSummary;
   linearComment?: LinearCommentResult;
+  branchPublication?: BranchPublicationResult;
   pullRequest?: GitHubCreatePrResult;
   labels: GitHubAddLabelResult[];
   warnings: string[];
@@ -298,6 +308,7 @@ function buildStageArtifacts(input: {
     },
     fixes: input.fixes,
     linearComment: summarizeMutation(input.linearComment),
+    ...(input.branchPublication ? { branchPublication: input.branchPublication } : {}),
     pullRequest: pullRequestSummary,
     labels: input.labels.map((label) => summarizeMutation(label)),
     haltedBeforeMerge: true,
@@ -396,10 +407,12 @@ async function writeTerminalStageResult(
     review: ReviewFlowReviewSummary;
     fixes: ReviewFlowFixSummary;
     linearComment?: LinearCommentResult;
+    branchPublication?: BranchPublicationResult;
     pullRequest?: GitHubCreatePrResult;
     labels: GitHubAddLabelResult[];
     warnings: string[];
     failureReason?: string;
+    failureCategory?: string;
   },
 ): Promise<Awaited<ReturnType<typeof executeWriteStageResult>>> {
   const status: StageStatus = input.ok ? 'completed' : 'failed';
@@ -412,6 +425,9 @@ async function writeTerminalStageResult(
     artifacts: {
       ...buildStageArtifacts(input),
       ...(input.failureReason ? { failureReason: input.failureReason } : {}),
+      // A repository-mutation failure must stay distinguishable from
+      // provider/model failures; this category overrides the review's own.
+      ...(input.failureCategory ? { failureCategory: input.failureCategory } : {}),
     },
   }, deps);
 }
@@ -639,6 +655,76 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     warnings.push(`linear_comment: ${linearComment.message}`);
   }
 
+  // Publication preflight (HOK-2914): prove origin/<head> resolves to exactly
+  // the reviewed SHA before any PR create call. Runs after review/fixes so it
+  // publishes the SHA that was actually reviewed.
+  const publishBranch = options.publishBranchImpl ?? publishReviewedBranch;
+  const branchPublication = await publishBranch({
+    worktreeDir: reviewWorktreeDir,
+    branch: options.head,
+    reviewedSha: options.headSha,
+    baseBranch: options.base,
+  });
+
+  recordToolEvent({
+    options,
+    tool: 'branch_publication',
+    action: 'publish_branch',
+    details: branchPublication.ok
+      ? {
+          remote: branchPublication.remote,
+          branch: branchPublication.branch,
+          localSha: branchPublication.localSha,
+          remoteSha: branchPublication.remoteSha,
+        }
+      : {
+          remote: branchPublication.remote,
+          branch: branchPublication.branch,
+          reason: branchPublication.reason,
+          message: branchPublication.message,
+          localSha: branchPublication.localSha,
+          remoteSha: branchPublication.remoteSha,
+          recoveryCommand: branchPublication.recoveryCommand,
+        },
+    idempotency: {
+      key: `branch_publication:${options.repo}:${options.head}:${options.headSha}`,
+      outcome: branchPublication.ok ? branchPublication.outcome : 'skipped',
+      ref: null,
+      reason: branchPublication.ok ? undefined : branchPublication.message,
+    },
+    includeStageArtifact: true,
+  });
+
+  if (!branchPublication.ok) {
+    const failureCategory = branchPublication.reason === 'no-commits-ahead-of-base'
+      ? 'pr-orchestration'
+      : 'branch-publication';
+    warnings.push(`branch_publication: ${branchPublication.message}`);
+    const stageResult = await writeTerminalStageResult(options, deps, {
+      ok: false,
+      review,
+      fixes,
+      linearComment,
+      branchPublication,
+      labels,
+      warnings,
+      failureReason: `branch publication failed (${branchPublication.reason}): ${branchPublication.message}; recover with: ${branchPublication.recoveryCommand}`,
+      failureCategory,
+    });
+    return {
+      ok: false,
+      review,
+      fixes,
+      linearComment,
+      branchPublication,
+      labels,
+      stageResult,
+      haltedBeforeMerge: true,
+      merged: false,
+      warnings,
+    };
+  }
+
   pullRequest = await githubCreatePr({
     repo: options.repo,
     phase,
@@ -684,22 +770,32 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
   });
 
   if (!pullRequest.ok) {
-    warnings.push(`github_create_pr: ${pullRequest.message}`);
+    // The preflight should make GitHub's unresolvable-head error impossible,
+    // but if it still appears, surface the real diagnosis instead of the
+    // misleading "No commits between ..." text.
+    const translated = translateGitHubHeadError(pullRequest.message);
+    const failureReason = translated
+      ? `${translated} (GitHub said: ${pullRequest.message})`
+      : pullRequest.message;
+    warnings.push(`github_create_pr: ${failureReason}`);
     const stageResult = await writeTerminalStageResult(options, deps, {
       ok: false,
       review,
       fixes,
       linearComment,
+      branchPublication,
       pullRequest,
       labels,
       warnings,
-      failureReason: pullRequest.message,
+      failureReason,
+      failureCategory: translated ? 'branch-publication' : 'pr-orchestration',
     });
     return {
       ok: false,
       review,
       fixes,
       linearComment,
+      branchPublication,
       pullRequest,
       labels,
       stageResult,
@@ -772,6 +868,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     review,
     fixes,
     linearComment,
+    branchPublication,
     pullRequest,
     labels,
     warnings,
@@ -782,6 +879,7 @@ export async function runReviewFlow(options: ReviewFlowOptions): Promise<ReviewF
     review,
     fixes,
     linearComment,
+    branchPublication,
     pullRequest,
     labels,
     stageResult,

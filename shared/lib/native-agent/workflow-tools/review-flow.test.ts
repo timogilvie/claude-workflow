@@ -18,6 +18,7 @@ import type {
   WorkflowToolTranscriptEvent,
 } from './linear-tools.ts';
 import { runReviewFlow, type ReviewFindingFixExecutor } from './review-flow.ts';
+import type { BranchPublicationExecutor } from '../../branch-publication.ts';
 
 interface FixtureState {
   pullRequests: GitHubToolPullRequest[];
@@ -32,6 +33,17 @@ const ALLOW_REVIEW_FLOW_NETWORK_POLICY: NetworkPolicy = {
     linear_comment: { kind: 'allowlist', hosts: ['api.linear.app'] },
   },
 };
+
+// Fixture dirs are not git repos, so tests stub the publication preflight;
+// dedicated coverage for the real helper lives in branch-publication.test.ts.
+const stubPublishBranch: BranchPublicationExecutor = async ({ branch, reviewedSha }) => ({
+  ok: true,
+  outcome: 'pushed',
+  remote: 'origin',
+  branch,
+  localSha: reviewedSha,
+  remoteSha: reviewedSha,
+});
 
 function createLinearClient(state: FixtureState, behavior?: { failComment?: boolean }): LinearClient {
   return {
@@ -272,6 +284,7 @@ describe('runReviewFlow', () => {
       linearClient,
       githubDeps,
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: fixExecutor,
     });
@@ -317,6 +330,7 @@ describe('runReviewFlow', () => {
       linearClient,
       githubDeps,
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: fixExecutor,
     });
@@ -376,6 +390,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
       fixFindings: async ({ finding }) => ({
         ok: true,
@@ -433,6 +448,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewContextAppendix: 'Native coding handoff: commitCount=1 verification passed',
       reviewChangesImpl: async (options) => {
         reviewOptions = options;
@@ -499,6 +515,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
     });
 
@@ -546,6 +563,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       fixFindings: makeFixExecutor(async ({ finding }) => {
         fixAttempts.push(finding.id);
         return { ok: true, outcome: 'skipped', findingId: finding.id, message: 'noop' };
@@ -625,6 +643,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview({
         verdict: 'ready',
         codeReviewFindings: [
@@ -683,6 +702,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => {
         throw new Error('review provider failed');
       },
@@ -740,6 +760,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state),
       githubDeps: createGitHubDeps(state),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview({ needsStrongerReviewer: true, strongerReviewerReason: 'Human review needed' }),
     });
 
@@ -788,6 +809,7 @@ describe('runReviewFlow', () => {
       linearClient: createLinearClient(state, { failComment: true }),
       githubDeps: createGitHubDeps(state, { failCreatePr: true }),
       networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
     });
 
@@ -802,5 +824,185 @@ describe('runReviewFlow', () => {
     assert.equal(stored.status, 'failed');
     assert.match(stored.artifacts.failureReason, /GitHub create PR failed/);
     assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  function makeState(): FixtureState {
+    return {
+      pullRequests: [],
+      labelsByTarget: new Map(),
+      linearComments: [],
+      calls: {
+        linearCreateComment: 0,
+        linearUpdateComment: 0,
+        listOpenPullRequests: 0,
+        createPullRequest: 0,
+        updatePullRequest: 0,
+        getLabels: 0,
+        addLabel: 0,
+      },
+    };
+  }
+
+  function baseOptions(featureDir: string, state: FixtureState, recorder: ReturnType<typeof makeRecorder>) {
+    return {
+      issueId: 'HOK-2914',
+      featureDir,
+      repo: 'acme/widgets',
+      base: 'auto/integration',
+      head: 'task/review-flow',
+      headSha: 'abc123',
+      title: 'Implement native review flow',
+      body: 'Implements native review flow.',
+      sessionId: 'sess-1',
+      registry: createInMemoryDedupeRegistry({ clock: () => 1_000 }),
+      transcript: recorder.transcript,
+      stageArtifact: recorder.stageArtifact,
+      clock: () => 1_000,
+      linearClient: createLinearClient(state),
+      githubDeps: createGitHubDeps(state),
+      networkPolicy: ALLOW_REVIEW_FLOW_NETWORK_POLICY,
+      reviewChangesImpl: async () => makeReview(),
+    };
+  }
+
+  it('blocks PR creation and persists a branch-publication failure when the push fails (HOK-2914)', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state = makeState();
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      ...baseOptions(featureDir, state, recorder),
+      publishBranchImpl: async ({ branch }) => ({
+        ok: false,
+        reason: 'push-failed',
+        message: `push of ${branch} to origin failed: auth denied`,
+        remote: 'origin',
+        branch,
+        localSha: 'abc123',
+        recoveryCommand: 'git push -u origin task/review-flow',
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.pullRequest, undefined);
+    assert.equal(result.branchPublication?.ok, false);
+    assert.equal(state.calls.createPullRequest, 0);
+    assert.equal(state.calls.listOpenPullRequests, 0);
+    assert.equal(state.calls.addLabel, 0);
+    assert.ok(result.warnings.some((warning) => warning.includes('branch_publication')));
+
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      status: string;
+      artifacts: { failureReason: string; failureCategory: string; branchPublication: { reason: string; recoveryCommand: string } };
+    };
+    assert.equal(stored.status, 'failed');
+    assert.equal(stored.artifacts.failureCategory, 'branch-publication');
+    assert.equal(stored.artifacts.branchPublication.reason, 'push-failed');
+    assert.match(stored.artifacts.failureReason, /push-failed/);
+    assert.match(stored.artifacts.branchPublication.recoveryCommand, /git push -u origin/);
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  it('reports an empty branch (no commits ahead of base) distinctly from an unpushed branch', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state = makeState();
+    const recorder = makeRecorder();
+
+    const result = await runReviewFlow({
+      ...baseOptions(featureDir, state, recorder),
+      publishBranchImpl: async ({ branch, baseBranch }) => ({
+        ok: false,
+        reason: 'no-commits-ahead-of-base',
+        message: `branch ${branch} has no commits ahead of base ${baseBranch}`,
+        remote: 'origin',
+        branch,
+        localSha: 'abc123',
+        recoveryCommand: 'git push -u origin task/review-flow',
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(state.calls.createPullRequest, 0);
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      artifacts: { failureCategory: string; failureReason: string };
+    };
+    assert.equal(stored.artifacts.failureCategory, 'pr-orchestration');
+    assert.match(stored.artifacts.failureReason, /no commits ahead of base auto\/integration/);
+  });
+
+  it('publishes the reviewed SHA before PR creation and records the proof in artifacts', async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state = makeState();
+    const recorder = makeRecorder();
+    const callOrder: string[] = [];
+    const githubDeps = createGitHubDeps(state);
+    const originalCreate = githubDeps.createPullRequest.bind(githubDeps);
+    githubDeps.createPullRequest = async (input) => {
+      callOrder.push('createPullRequest');
+      return originalCreate(input);
+    };
+
+    const result = await runReviewFlow({
+      ...baseOptions(featureDir, state, recorder),
+      githubDeps,
+      publishBranchImpl: async ({ branch, reviewedSha }) => {
+        callOrder.push('publishBranch');
+        return {
+          ok: true,
+          outcome: 'pushed',
+          remote: 'origin',
+          branch,
+          localSha: reviewedSha,
+          remoteSha: reviewedSha,
+        };
+      },
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(callOrder, ['publishBranch', 'createPullRequest']);
+    assert.equal(result.branchPublication?.ok, true);
+    assert.equal(result.branchPublication?.ok && result.branchPublication.remoteSha, 'abc123');
+    const publicationIndex = recorder.transcriptEvents.findIndex((event) => event.tool === 'branch_publication');
+    const prIndex = recorder.transcriptEvents.findIndex((event) => event.tool === 'github_create_pr');
+    assert.ok(publicationIndex >= 0 && prIndex >= 0 && publicationIndex < prIndex);
+
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      status: string;
+      artifacts: { branchPublication: { ok: boolean; outcome: string; remoteSha: string } };
+    };
+    assert.equal(stored.status, 'completed');
+    assert.equal(stored.artifacts.branchPublication.ok, true);
+    assert.equal(stored.artifacts.branchPublication.remoteSha, 'abc123');
+    assertNoMergeOperations(recorder.transcriptEvents, recorder.stageArtifactEntries);
+  });
+
+  it("translates GitHub's unresolvable-head error into a branch-not-pushed diagnostic", async () => {
+    const featureDir = mkdtempSync(path.join(os.tmpdir(), 'review-flow-'));
+    tempDirs.push(featureDir);
+    const state = makeState();
+    const recorder = makeRecorder();
+    const githubDeps = createGitHubDeps(state);
+    githubDeps.createPullRequest = async () => {
+      throw new Error(
+        "GraphQL: Head sha can't be blank, Base sha can't be blank, No commits between main and task/review-flow, Head ref must be a branch (createPullRequest)",
+      );
+    };
+
+    const result = await runReviewFlow({
+      ...baseOptions(featureDir, state, recorder),
+      githubDeps,
+      publishBranchImpl: stubPublishBranch,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.pullRequest?.ok, false);
+    const stored = JSON.parse(readFileSync(path.join(featureDir, '.review-result.json'), 'utf8')) as {
+      artifacts: { failureReason: string; failureCategory: string };
+    };
+    assert.match(stored.artifacts.failureReason, /branch was never pushed to origin/);
+    assert.equal(stored.artifacts.failureCategory, 'branch-publication');
   });
 });

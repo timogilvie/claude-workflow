@@ -28,6 +28,18 @@ import type {
   WorkflowToolTranscriptEvent,
 } from './linear-tools.ts';
 import { runReviewFlow } from './review-flow.ts';
+import type { BranchPublicationExecutor } from '../../branch-publication.ts';
+
+// Fixture dirs are not git repos, so the publication preflight is stubbed;
+// the real helper is covered by branch-publication.test.ts.
+const stubPublishBranch: BranchPublicationExecutor = async ({ branch, reviewedSha }) => ({
+  ok: true,
+  outcome: 'pushed',
+  remote: 'origin',
+  branch,
+  localSha: reviewedSha,
+  remoteSha: reviewedSha,
+});
 
 // ---------------------------------------------------------------------------
 // Merge boundary guard
@@ -186,6 +198,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       linearClient,
       githubDeps,
       networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
     });
 
@@ -258,6 +271,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       linearClient,
       githubDeps,
       networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview(),
     };
 
@@ -326,6 +340,7 @@ describe('review-integration: fixture-backed full sequence + merge boundary', ()
       linearClient: makeLinearClient(),
       githubDeps,
       networkPolicy: ALLOW_REVIEW_INTEGRATION_NETWORK_POLICY,
+      publishBranchImpl: stubPublishBranch,
       reviewChangesImpl: async () => makeReview({ needsStrongerReviewer: true }),
     });
 
