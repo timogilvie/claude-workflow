@@ -1462,7 +1462,9 @@ function assertIdentityInvariants(registry: ModelRegistry): void {
     }
     aliases.set(alias, modelId);
 
-    if (providerNativeId && capabilities.identity) {
+    // Deprecated aliases may retain a historical providerNativeId; every
+    // other alias must map to a distinct provider-native model.
+    if (providerNativeId && (capabilities.identity || capabilities.supportedModel?.lifecycle !== 'deprecated')) {
       const previousProviderId = providerNativeIds.get(providerNativeId);
       if (previousProviderId && previousProviderId !== modelId) {
         throw new ModelValidationError(
