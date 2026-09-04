@@ -13,7 +13,7 @@ IMPORTANT: This tool calls the Claude API and takes 2-5 minutes. Configure your 
 - Exit code 2 = error -> log comprehensive diagnostics, record the final verdict as `error`, and {{ERROR_FOLLOWUP}} without certifying readiness
 
 The output is structured JSON with `verdict`, `codeReviewFindings`, and `uiFindings`.
-Each finding in `codeReviewFindings` or `uiFindings` includes `severity`, `location`, `category`, and `description`.
+Each finding in `codeReviewFindings` or `uiFindings` includes `severity`, `location`, `category`, and `description`. A finding may also carry `dismissed: true` with a `dismissalJustification` (and optional `dismissalEvidence`) when the reviewer disproved its own finding — dismissed blockers are audited false positives that do not count toward the verdict and need no fix.
 
 When exit code 2 occurs, you MUST log the following diagnostics to help debug the failure:
 ```text
@@ -36,6 +36,7 @@ This diagnostic information is CRITICAL for debugging recurring tool failures.
 For each iteration where issues are found:
 - Read the review JSON output carefully
 - Fix all blockers (severity: blocker) and straightforward warnings
+- If you investigate a blocker and prove it is a false positive, record it as dismissed with a non-empty justification (and cite the verification you ran) instead of fixing a non-existent problem or misreporting the count
 - Make targeted fixes only — do not refactor unrelated code
 - Run the review scope guard immediately before committing:
   `npx tsx tools/check-review-scope.ts --repo-dir .`

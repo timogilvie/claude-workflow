@@ -110,3 +110,55 @@ describe('buildChallengeStageEval planning execution outcome evidence', () => {
     }
   });
 });
+
+describe('buildChallengeStageEval review dismissal evidence (HOK-2932)', () => {
+  it('carries dismissed blocker counts and justifications into review evidence', () => {
+    const slug = 'review-dismissed';
+    const repoDir = mkdtempSync(join(tmpdir(), 'stage-evidence-'));
+    const featureDir = join(repoDir, 'features', slug);
+    mkdirSync(featureDir, { recursive: true });
+    writeFileSync(join(featureDir, '.review-result.json'), `${JSON.stringify({
+      stage: 'review',
+      status: 'completed',
+      agent: 'codex',
+      model: 'claude-opus-4-7',
+      notes: 'Sole blocker dismissed as a verified false positive.',
+      artifacts: {
+        type: 'review',
+        prNumber: 1282,
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 2,
+        blockerCount: 1,
+        warningCount: 0,
+        dismissedBlockers: [
+          {
+            location: 'scope-guard',
+            description: 'Diff includes files from already-merged PRs',
+            justification: 'False positive: stale diff base; PR diff is five in-scope files.',
+            evidence: 'git log auto/integration..HEAD -- <in-scope paths>',
+          },
+        ],
+      },
+    }, null, 2)}\n`);
+
+    try {
+      const evalStage = buildChallengeStageEval({
+        repoDir,
+        issueId: 'HOK-2932',
+        branchName: `task/${slug}`,
+        challengeStage: 'review',
+        record: makeRecord(),
+        stageArtifacts: { selfReviewSummary: 'verdict=not_ready blockers=1 dismissed=1' },
+      });
+
+      const reviewEvidence = evalStage?.evidence.find((item) => item.label === 'review_result');
+      assert.ok(reviewEvidence);
+      assert.match(reviewEvidence.summary, /blockers=1/);
+      assert.match(reviewEvidence.summary, /dismissedBlockers=1/);
+      assert.match(reviewEvidence.summary, /dismissalJustifications=.*stale diff base/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+});

@@ -22,6 +22,7 @@ import path from 'node:path';
 import {
   extractReviewOutcome,
   readAllStageResults,
+  reviewEffectiveBlockerCount,
   reviewResultPassed,
   type StageName,
   type StageResult,
@@ -564,12 +565,16 @@ function deriveEvidence(
       const outcome = extractReviewOutcome(result);
       const passed = reviewResultPassed(result);
       const failed = result.status === 'completed' && !passed;
+      const dismissedCount = outcome?.dismissedBlockers?.length ?? 0;
+      const effectiveCount = reviewEffectiveBlockerCount(outcome);
       const detail = outcome
         ? [
             `exitCode=${typeof outcome.exitCode === 'number' ? outcome.exitCode : 'missing'}`,
             `verdict=${outcome.verdict ?? 'missing'}`,
             `iterations=${typeof outcome.iterations === 'number' ? outcome.iterations : 'missing'}`,
             typeof outcome.blockerCount === 'number' ? `blockers=${outcome.blockerCount}` : '',
+            dismissedCount > 0 ? `dismissedBlockers=${dismissedCount}` : '',
+            dismissedCount > 0 && typeof effectiveCount === 'number' ? `effectiveBlockers=${effectiveCount}` : '',
             typeof outcome.warningCount === 'number' ? `warnings=${outcome.warningCount}` : '',
             outcome.reviewToolError ? `error=${outcome.reviewToolError}` : '',
           ].filter(Boolean).join(', ')

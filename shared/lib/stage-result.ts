@@ -99,6 +99,22 @@ export const INFRA_REVIEW_FAILURE_CATEGORIES = [
 ] as const;
 export type InfrastructureReviewFailureCategory = typeof INFRA_REVIEW_FAILURE_CATEGORIES[number];
 
+/**
+ * A blocker the reviewer found, investigated, and disproved (HOK-2932).
+ * Dismissals are auditable: the finding keeps its identity and the dismissal
+ * requires a non-blank justification. The ready gate only credits entries
+ * validated by {@link isValidBlockerDismissal}; anything else fails closed.
+ */
+export interface DismissedReviewBlocker {
+  location?: string;
+  category?: string;
+  description?: string;
+  /** Why the finding is invalid. Required and non-blank for the dismissal to count. */
+  justification?: string;
+  /** Verification the reviewer ran (e.g. a git/test command and its result). */
+  evidence?: string;
+}
+
 export interface ReviewArtifacts {
   type: 'review';
   prNumber?: number;
@@ -111,10 +127,12 @@ export interface ReviewArtifacts {
   verdict?: ReviewOutcomeVerdict;
   /** Number of self-review tool iterations attempted. */
   iterations?: number;
-  /** Final blocker count reported by self-review. */
+  /** Final raw blocker count reported by self-review (kept for audit; the gate uses the effective count). */
   blockerCount?: number;
   /** Final warning count reported by self-review. */
   warningCount?: number;
+  /** Blockers the reviewer investigated and disproved, each with a justification. */
+  dismissedBlockers?: DismissedReviewBlocker[];
   /** Review tool failure summary when the final run errored. */
   reviewToolError?: string;
   /** Retryable infrastructure category when review could not run meaningfully. */
@@ -129,6 +147,7 @@ export interface ReviewOutcome {
   iterations?: number;
   blockerCount?: number;
   warningCount?: number;
+  dismissedBlockers?: DismissedReviewBlocker[];
   reviewToolError?: string;
   failureCategory?: string;
   diagnostics?: Record<string, unknown>;
@@ -349,6 +368,30 @@ function objectRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Normalize a raw `dismissedBlockers` value. Non-array input returns undefined;
+ * non-object entries are preserved as empty records so they fail validation
+ * (and therefore the gate) instead of silently disappearing.
+ */
+function extractDismissedBlockers(value: unknown): DismissedReviewBlocker[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.map((entry) => {
+    const record = objectRecord(entry);
+    if (!record) return {};
+    return {
+      location: optionalString(record.location),
+      category: optionalString(record.category),
+      description: optionalString(record.description),
+      justification: optionalString(record.justification),
+      evidence: optionalString(record.evidence),
+    };
+  });
+}
+
 /**
  * Extract explicit final self-review evidence from either review artifact shape:
  * the shell path writes top-level `{type:"review", ...}` artifacts, while the
@@ -367,6 +410,7 @@ export function extractReviewOutcome(result: StageResult | null | undefined): Re
       iterations: finiteNumber(artifacts.iterations),
       blockerCount,
       warningCount,
+      dismissedBlockers: extractDismissedBlockers(artifacts.dismissedBlockers),
       reviewToolError: typeof artifacts.reviewToolError === 'string' ? artifacts.reviewToolError : undefined,
       failureCategory: typeof artifacts.failureCategory === 'string' ? artifacts.failureCategory : undefined,
       diagnostics: objectRecord(artifacts.diagnostics),
@@ -383,6 +427,7 @@ export function extractReviewOutcome(result: StageResult | null | undefined): Re
       iterations: finiteNumber(nested.iterations),
       blockerCount,
       warningCount,
+      dismissedBlockers: extractDismissedBlockers(nested.dismissedBlockers),
       reviewToolError: typeof nested.reviewToolError === 'string' ? nested.reviewToolError : undefined,
       failureCategory: typeof nested.failureCategory === 'string' ? nested.failureCategory : undefined,
       diagnostics: objectRecord(nested.diagnostics),
@@ -417,18 +462,61 @@ function isStageResultLike(value: unknown): value is StageResult {
   return record?.stage === 'review' && typeof record.status === 'string';
 }
 
+/** A dismissal only counts when it carries a non-blank justification. */
+export function isValidBlockerDismissal(
+  dismissal: DismissedReviewBlocker | null | undefined,
+): boolean {
+  return typeof dismissal?.justification === 'string' && dismissal.justification.trim() !== '';
+}
+
+/**
+ * Effective (undismissed) blocker count, derived from the auditable dismissal
+ * entries — never from an unexplained count. Fails closed: any malformed entry
+ * or dismissals exceeding the raw count yields no credit (raw count returned).
+ * Returns undefined when no raw blocker count was recorded.
+ */
+export function reviewEffectiveBlockerCount(
+  outcome: ReviewOutcome | ReviewArtifacts | null | undefined,
+): number | undefined {
+  const raw = finiteNumber(outcome?.blockerCount);
+  if (raw === undefined) return undefined;
+  const dismissals = outcome?.dismissedBlockers;
+  if (!Array.isArray(dismissals) || dismissals.length === 0) return raw;
+  if (!dismissals.every(isValidBlockerDismissal)) return raw;
+  if (dismissals.length > raw) return raw;
+  return raw - dismissals.length;
+}
+
+/**
+ * Readiness rule shared by every gate consumer (HOK-2932):
+ * - Legacy pass: exit 0, verdict `ready`, zero raw blockers — unchanged.
+ * - Ready with dismissals: exit 0, verdict `ready`, every raw blocker validly dismissed.
+ * - Dismissed not_ready: exit 1, verdict `not_ready`, at least one raw blocker,
+ *   and every one of them validly dismissed with a justification.
+ * Anything else — malformed dismissal, count mismatch, remaining blocker — fails.
+ */
+export function reviewOutcomePassesReadyGate(outcome: ReviewOutcome | null | undefined): boolean {
+  if (!outcome) return false;
+  if (typeof outcome.iterations !== 'number' || outcome.iterations < 1) return false;
+  const raw = outcome.blockerCount;
+  if (typeof raw !== 'number') return false;
+  const effective = reviewEffectiveBlockerCount(outcome);
+  if (effective !== 0) return false;
+  if (outcome.exitCode === 0 && outcome.verdict === 'ready') return true;
+  return outcome.exitCode === 1
+    && outcome.verdict === 'not_ready'
+    && raw >= 1
+    && (outcome.dismissedBlockers?.length ?? 0) === raw;
+}
+
 /**
  * Strict readiness predicate. A completed review stage is not enough; readiness
- * requires a recorded successful final self-review run with zero blockers.
+ * requires a recorded successful final self-review run with zero *effective*
+ * blockers — either none were found, or every one was auditably dismissed.
  */
 export function reviewResultPassed(result: StageResult | null | undefined): boolean {
   if (result?.status !== 'completed') return false;
-  const outcome = extractReviewOutcome(result);
-  return outcome?.exitCode === 0
-    && outcome.verdict === 'ready'
-    && typeof outcome.iterations === 'number'
-    && outcome.iterations >= 1
-    && outcome.blockerCount === 0;
+  return reviewOutcomePassesReadyGate(extractReviewOutcome(result));
 }
 
 // ────────────────────────────────────────────────────────────────

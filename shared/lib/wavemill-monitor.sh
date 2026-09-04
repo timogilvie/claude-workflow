@@ -7805,12 +7805,28 @@ ready_failed_check_summary() {
   ' 2>/dev/null
 }
 
+# Readiness rule shared with shared/lib/stage-result.ts reviewOutcomePassesReadyGate
+# (HOK-2932). Passes on zero *effective* blockers: either the legacy shape
+# (exit 0, ready, zero raw blockers) or every raw blocker auditably dismissed
+# with a non-blank justification. Malformed dismissals or count mismatches fail
+# closed — the raw count is never reduced by an unexplained number.
 review_result_passes_ready_gate() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
   [[ -f "$review_file" ]] || return 1
 
   jq -e '
+    def valid_dismissal_count:
+      (.dismissedBlockers // []) as $d
+      | if ($d | type) != "array" then -1
+        elif ([$d[] | select(
+            (type == "object") and
+            ((.justification? | type) == "string") and
+            (.justification | test("\\S"))
+          )] | length) != ($d | length) then -1
+        else ($d | length)
+        end;
+
     (.status == "completed") and (
       .artifacts as $artifacts
       | if ($artifacts.type // "") == "review" then
@@ -7818,10 +7834,19 @@ review_result_passes_ready_gate() {
         else
           ($artifacts.review // {})
         end
-      | (.exitCode == 0) and
-        (.verdict == "ready") and
-        (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
-        (((.blockerCount // .blockingIssues // .blockingCount) // null) == 0)
+      | (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
+        (((.blockerCount // .blockingIssues // .blockingCount) // null) as $raw
+          | (($raw | type) == "number") and
+            (valid_dismissal_count as $dismissed
+              | (
+                  (.exitCode == 0) and (.verdict == "ready") and
+                  (($raw == 0) or ($dismissed == $raw))
+                ) or (
+                  (.exitCode == 1) and (.verdict == "not_ready") and
+                  ($raw >= 1) and ($dismissed == $raw)
+                )
+            )
+        )
     )
   ' "$review_file" >/dev/null 2>&1
 }
@@ -7965,9 +7990,22 @@ review_result_summary() {
   fi
 
   jq -r '
+    def valid_dismissal_count:
+      (.dismissedBlockers // []) as $d
+      | if ($d | type) != "array" then -1
+        elif ([$d[] | select(
+            (type == "object") and
+            ((.justification? | type) == "string") and
+            (.justification | test("\\S"))
+          )] | length) != ($d | length) then -1
+        else ($d | length)
+        end;
+
     . as $root
     | (.artifacts // {}) as $artifacts
     | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | ((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null)) as $raw
+    | ($review | valid_dismissal_count) as $dismissed
       | [
         "status=" + ($root.status // "unknown"),
         "verdictState=" + (
@@ -7975,13 +8013,19 @@ review_result_summary() {
             (($review.exitCode | type) == "number") and
             (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
             (($review.iterations | type) == "number" and $review.iterations >= 1) and
-            (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+            (($raw | type) == "number")
           ) then
             if (
               ($root.status == "completed") and
-              ($review.exitCode == 0) and
-              ($review.verdict == "ready") and
-              ((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) == 0)
+              (
+                (
+                  ($review.exitCode == 0) and ($review.verdict == "ready") and
+                  (($raw == 0) or ($dismissed == $raw))
+                ) or (
+                  ($review.exitCode == 1) and ($review.verdict == "not_ready") and
+                  ($raw >= 1) and ($dismissed == $raw)
+                )
+              )
             ) then "passed" else "failed" end
           else
             "no-verdict-recorded"
@@ -7990,7 +8034,16 @@ review_result_summary() {
         "exitCode=" + (($review.exitCode // "missing") | tostring),
         "verdict=" + (($review.verdict // "missing") | tostring),
         "iterations=" + (($review.iterations // "missing") | tostring),
-        "blockers=" + ((($review.blockerCount // $review.blockingIssues // $review.blockingCount // "missing")) | tostring),
+        "blockers=" + (($raw // "missing") | tostring),
+        (if (($review.dismissedBlockers // []) | length) > 0 then
+          "dismissedBlockers=" + (($review.dismissedBlockers | length) | tostring)
+          + ", effectiveBlockers=" + (
+              if (($raw | type) == "number") and ($dismissed >= 0) and ($dismissed <= $raw)
+              then (($raw - $dismissed) | tostring)
+              else ($raw | tostring)
+              end
+            )
+        else empty end),
         (if ($review.failureCategory // "") != "" then "failureCategory=" + ($review.failureCategory | tostring) else empty end),
         (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end)
       ]
