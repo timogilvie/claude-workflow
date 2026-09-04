@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
 import { resolveCertificationSubject } from './native-agent/certification/identity.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
@@ -65,6 +66,7 @@ function writeGlobalArtifact(
     { root },
   );
   mkdirSync(dirname(path), { recursive: true });
+  const certifiedAt = opts.certifiedAt ?? CERTIFIED_AT;
   writeFileSync(path, JSON.stringify({
     schemaVersion: CERTIFICATION_SCHEMA_VERSION,
     subject: identity.subject,
@@ -72,8 +74,21 @@ function writeGlobalArtifact(
     model: identity.storageIdentity.model,
     phase,
     suiteVersion,
-    certifiedAt: opts.certifiedAt ?? CERTIFIED_AT,
+    certifiedAt,
     scenarios: [{ scenarioId: 'global-parity-smoke', passed: opts.scenarioPassed ?? true }],
+    // HOK-2943: coder-stage parity requires live canary evidence alongside the
+    // deterministic artifact. The canary uses a wall-clock-recent ranAt because
+    // the challenge snapshot evaluates with real time while router/availability
+    // snapshots pin `now`; freshness only bounds the upper edge, so a recent
+    // ranAt satisfies both. Degraded modes still reject on their deterministic
+    // reason, which the gate checks before the canary.
+    ...(phase !== 'read-only'
+      ? {
+        liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, {
+          ranAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        }),
+      }
+      : {}),
   }, null, 2), 'utf-8');
   return path;
 }
