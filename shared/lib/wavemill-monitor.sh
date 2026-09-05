@@ -1538,7 +1538,18 @@ challenge_cancel_challenger_arm() {
       local wt_dir="${WORKTREE_ROOT}/${challenger_slug}"
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
       local task_branch="task/${challenger_slug}"
-      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || true
+      local cleanup_rc=0
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || cleanup_rc=$?
+      if [[ "$cleanup_rc" -eq 10 ]]; then
+        set_window_attention_state "$win" "needs-user"
+        log_warn "  $challenger_key cleanup preserved local work during challenge collapse; keeping task state"
+        return 1
+      fi
+      if [[ "$cleanup_rc" -eq 20 ]]; then
+        set_window_attention_state "$win" "needs-user"
+        log_warn "  $challenger_key cleanup failed during challenge collapse; keeping task state"
+        return 1
+      fi
     fi
 
     git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
@@ -9973,7 +9984,18 @@ cleanup_aborted_challenge_arm() {
     return 0
   fi
 
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || true
+  local cleanup_rc=0
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || cleanup_rc=$?
+  if [[ "$cleanup_rc" -eq 10 ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue aborted challenge cleanup preserved local work; keeping task state"
+    return 1
+  fi
+  if [[ "$cleanup_rc" -eq 20 ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue aborted challenge cleanup failed; keeping task state"
+    return 1
+  fi
 
   if [[ -n "$pr" ]]; then
     log "debug" "$issue: retaining remote branch ${state_branch:-task/${slug}} (aborted cleanup does not delete PR branches)"
