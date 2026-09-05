@@ -101,6 +101,8 @@ export interface EvalRecordMetadata {
   challengePairId?: string;
   /** Side within a challenge pair. */
   challengeSide?: 'primary' | 'challenger';
+  /** Immutable PR head SHA that was evaluated for this record. */
+  evaluatedPrHeadSha?: string | null;
   /** Selected challenge execution contract. */
   challengeIntent?: ChallengeExecutionIntent | null;
   /** Challenge execution attestation. */
@@ -187,6 +189,13 @@ export function attachProviderMetadata(
 export function attachChallengePairId(record: EvalRecord, challengePairId?: string): void {
   if (challengePairId) {
     record.challengePairId = challengePairId;
+  }
+}
+
+/** Attach a sanitized evaluated PR head only when the producer can prove it. */
+export function attachEvaluatedPrHeadSha(record: EvalRecord, headSha?: string | null): void {
+  if (typeof headSha === 'string' && headSha.trim()) {
+    record.evaluatedPrHeadSha = headSha.trim();
   }
 }
 
@@ -1584,6 +1593,7 @@ export function enrichEvalRecord(record: EvalRecord, metadata: EvalRecordMetadat
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachEvaluatedPrHeadSha(record, metadata.evaluatedPrHeadSha);
   attachChallengeExecutionMetadata(record, {
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,
@@ -1643,6 +1653,7 @@ export function enrichTrainingMetadata(
   attachAgentType(record, metadata.agentType);
   attachProviderMetadata(record, metadata.provider, metadata.endpoint);
   attachChallengePairId(record, metadata.challengePairId);
+  attachEvaluatedPrHeadSha(record, metadata.evaluatedPrHeadSha);
   attachChallengeExecutionMetadata(record, {
     side: metadata.challengeSide,
     intent: metadata.challengeIntent,

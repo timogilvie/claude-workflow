@@ -218,6 +218,11 @@ export interface ChallengeComparison {
   /** Harness IDs for each arm's eval record; arms may legitimately differ. */
   primaryHarnessId?: string;
   challengerHarnessId?: string;
+  /** Exact eval rows selected against each PR's current head (HOK-2949). */
+  selectedEvalEvidence?: {
+    primary: { evalId: string; evaluatedPrHeadSha: string };
+    challenger: { evalId: string; evaluatedPrHeadSha: string };
+  };
   primaryEvalScore: number | null;
   challengerEvalScore: number | null;
   primaryCompleted?: boolean;

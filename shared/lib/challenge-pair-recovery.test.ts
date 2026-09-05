@@ -6,6 +6,23 @@ import { describe, it } from 'node:test';
 import { assessChallengePair, runChallengeRecovery } from './challenge-pair-recovery.ts';
 
 const NOW = () => '2026-01-01T00:00:00.000Z';
+const PRIMARY_HEAD = 'a'.repeat(40);
+const CHALLENGER_HEAD = 'b'.repeat(40);
+
+function resolveFixturePrIdentity(pr: string): { url: string; headSha: string } {
+  return {
+    url: pr,
+    headSha: pr.endsWith('/1') ? PRIMARY_HEAD : CHALLENGER_HEAD,
+  };
+}
+
+function assess(repoDir: string, pairId: string) {
+  return assessChallengePair(repoDir, pairId, NOW, resolveFixturePrIdentity);
+}
+
+function recover(repoDir: string, pairIds: string[], apply = false) {
+  return runChallengeRecovery({ repoDir, pairIds, apply, now: NOW, resolvePrIdentity: resolveFixturePrIdentity });
+}
 
 interface ArmSpec {
   slug: string;
@@ -22,6 +39,8 @@ interface FixtureSpec {
   challenger?: ArmSpec;
   record?: Record<string, unknown>;
   evalPrUrls?: string[];
+  evalRows?: Record<string, unknown>[];
+  writeRecord?: boolean;
 }
 
 function makeRepo(spec: FixtureSpec): string {
@@ -65,12 +84,24 @@ function makeRepo(spec: FixtureSpec): string {
     primaryEvalScore: 0.9,
     challengerEvalScore: 0.93,
   };
-  writeFileSync(join(evalsDir, 'challenge-records.jsonl'), `${JSON.stringify(record)}\n`);
+  writeFileSync(
+    join(evalsDir, 'challenge-records.jsonl'),
+    spec.writeRecord === false ? '' : `${JSON.stringify(record)}\n`,
+  );
 
   const prUrls = spec.evalPrUrls ?? ['https://example.test/pull/1', 'https://example.test/pull/2'];
+  const evalRows = spec.evalRows ?? prUrls.map((prUrl) => ({
+    id: `eval-${prUrl.endsWith('/1') ? 'primary' : 'challenger'}`,
+    challengePairId: spec.pairId,
+    challengeSide: prUrl.endsWith('/1') ? 'primary' : 'challenger',
+    prUrl,
+    score: prUrl.endsWith('/1') ? 0.9 : 0.93,
+    timestamp: '2026-08-14T23:00:00.000Z',
+    evaluatedPrHeadSha: prUrl.endsWith('/1') ? PRIMARY_HEAD : CHALLENGER_HEAD,
+  }));
   writeFileSync(
     join(evalsDir, 'evals.jsonl'),
-    prUrls.map((prUrl) => JSON.stringify({ prUrl })).join('\n') + (prUrls.length ? '\n' : ''),
+    evalRows.map((row) => JSON.stringify(row)).join('\n') + (evalRows.length ? '\n' : ''),
   );
 
   return repoDir;
@@ -85,10 +116,102 @@ function provenFixture(): FixtureSpec {
 }
 
 describe('challenge recovery assessment', () => {
+  it('recovers HOK-2934-style eval-only evidence at each current head', () => {
+    const spec = provenFixture();
+    spec.writeRecord = false;
+    spec.evalRows = [
+      {
+        id: 'primary-old', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/1', score: 0.1,
+        timestamp: '2026-08-14T20:00:00.000Z', evaluatedPrHeadSha: 'c'.repeat(40),
+      },
+      {
+        id: 'primary-current', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/1', score: 0.9,
+        timestamp: '2026-08-14T22:00:00.000Z', evaluatedPrHeadSha: PRIMARY_HEAD,
+      },
+      {
+        id: 'challenger-current', challengePairId: 'PAIR-1', challengeSide: 'challenger',
+        prUrl: 'https://example.test/pull/2', score: 0.93,
+        timestamp: '2026-08-14T22:01:00.000Z', evaluatedPrHeadSha: CHALLENGER_HEAD,
+      },
+    ];
+    const repoDir = makeRepo(spec);
+    try {
+      const result = recover(repoDir, ['PAIR-1']);
+      const assessment = result.assessments[0];
+      assert.equal(assessment.verdict, 'supersedable');
+      assert.equal(assessment.arms[0].selectedEvalId, 'primary-current');
+      assert.equal(assessment.arms[1].selectedEvalId, 'challenger-current');
+      assert.equal(assessment.arms[0].evalScore, 0.9);
+      assert.equal(assessment.arms[1].evalScore, 0.93);
+      assert.equal(result.auditEntriesWritten, 0);
+      assert.equal(existsSync(join(repoDir, '.wavemill', 'evals', 'challenge-recovery-audit.jsonl')), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses old-head-only evidence instead of using a comparison score', () => {
+    const spec = provenFixture();
+    spec.writeRecord = false;
+    spec.evalRows = [
+      {
+        id: 'primary-old', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/1', score: 0.9,
+        timestamp: '2026-08-14T20:00:00.000Z', evaluatedPrHeadSha: 'c'.repeat(40),
+      },
+      {
+        id: 'challenger-current', challengePairId: 'PAIR-1', challengeSide: 'challenger',
+        prUrl: 'https://example.test/pull/2', score: 0.93,
+        timestamp: '2026-08-14T22:01:00.000Z', evaluatedPrHeadSha: CHALLENGER_HEAD,
+      },
+    ];
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assess(repoDir, 'PAIR-1');
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.equal(assessment.arms[0].selectorReason, 'old_head_only');
+      assert.ok(assessment.blockers.some((blocker) => blocker.includes('current-head eval evidence refused (old_head_only)')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses ambiguous eval-derived PR identities when no comparison exists', () => {
+    const spec = provenFixture();
+    spec.writeRecord = false;
+    spec.evalRows = [
+      {
+        id: 'primary-one', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/1', score: 0.9,
+        timestamp: '2026-08-14T20:00:00.000Z', evaluatedPrHeadSha: PRIMARY_HEAD,
+      },
+      {
+        id: 'primary-two', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/3', score: 0.9,
+        timestamp: '2026-08-14T20:00:00.000Z', evaluatedPrHeadSha: PRIMARY_HEAD,
+      },
+      {
+        id: 'challenger-current', challengePairId: 'PAIR-1', challengeSide: 'challenger',
+        prUrl: 'https://example.test/pull/2', score: 0.93,
+        timestamp: '2026-08-14T22:01:00.000Z', evaluatedPrHeadSha: CHALLENGER_HEAD,
+      },
+    ];
+    const repoDir = makeRepo(spec);
+    try {
+      const assessment = assess(repoDir, 'PAIR-1');
+      assert.equal(assessment.verdict, 'quarantine-upheld');
+      assert.ok(assessment.arms[0].gaps.some((gap) => gap.includes('ambiguous PR identity')));
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('supersedes only when both arms and a shared immutable intent are proven', () => {
     const repoDir = makeRepo(provenFixture());
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'supersedable');
       assert.equal(assessment.intentProven, true);
       assert.deepEqual(assessment.blockers, []);
@@ -105,7 +228,7 @@ describe('challenge recovery assessment', () => {
     delete spec.challenger!.intentCreatedAt;
     const repoDir = makeRepo(spec);
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'quarantine-upheld');
       assert.equal(assessment.intentProven, false);
       assert.ok(assessment.blockers.some((b) => b.includes('intent is missing')));
@@ -119,7 +242,7 @@ describe('challenge recovery assessment', () => {
     spec.challenger!.intentCreatedAt = '2026-08-15T09:00:00.000Z';
     const repoDir = makeRepo(spec);
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'quarantine-upheld');
       assert.ok(assessment.blockers.some((b) => b.includes('disagree on intent createdAt')));
     } finally {
@@ -132,7 +255,7 @@ describe('challenge recovery assessment', () => {
     spec.challenger!.stageModel = 'claude-haiku-4-5-20251001';
     const repoDir = makeRepo(spec);
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'quarantine-upheld');
       assert.ok(assessment.blockers.some((b) => b.includes('identical control')));
     } finally {
@@ -145,7 +268,7 @@ describe('challenge recovery assessment', () => {
     spec.challenger!.stageStatus = 'failed';
     const repoDir = makeRepo(spec);
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'quarantine-upheld');
       assert.ok(assessment.blockers.some((b) => b.includes('did not complete')));
     } finally {
@@ -158,7 +281,7 @@ describe('challenge recovery assessment', () => {
     spec.challenger!.writeStageResult = false;
     const repoDir = makeRepo(spec);
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-1', NOW);
+      const assessment = assess(repoDir, 'PAIR-1');
       assert.equal(assessment.verdict, 'quarantine-upheld');
       assert.ok(assessment.blockers.some((b) => b.includes('worktree evidence')));
     } finally {
@@ -169,7 +292,7 @@ describe('challenge recovery assessment', () => {
   it('reports pair-not-found without inventing evidence', () => {
     const repoDir = makeRepo(provenFixture());
     try {
-      const assessment = assessChallengePair(repoDir, 'PAIR-NOPE', NOW);
+      const assessment = assess(repoDir, 'PAIR-NOPE');
       assert.equal(assessment.verdict, 'pair-not-found');
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
@@ -182,7 +305,7 @@ describe('challenge recovery application', () => {
     const repoDir = makeRepo(provenFixture());
     try {
       assert.throws(
-        () => runChallengeRecovery({ repoDir, pairIds: [], apply: true }),
+        () => recover(repoDir, [], true),
         /explicit pair IDs/,
       );
     } finally {
@@ -195,7 +318,7 @@ describe('challenge recovery application', () => {
     const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
     const before = readFileSync(recordsPath, 'utf8');
     try {
-      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], now: NOW });
+      const result = recover(repoDir, ['PAIR-1']);
       assert.equal(result.applied, false);
       assert.equal(result.supersedingRecordsWritten, 0);
       assert.equal(result.auditEntriesWritten, 0);
@@ -211,7 +334,7 @@ describe('challenge recovery application', () => {
     const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
     const originalLine = readFileSync(recordsPath, 'utf8').trim();
     try {
-      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      const result = recover(repoDir, ['PAIR-1'], true);
       assert.equal(result.supersedingRecordsWritten, 1);
 
       const lines = readFileSync(recordsPath, 'utf8').trim().split('\n');
@@ -229,6 +352,10 @@ describe('challenge recovery application', () => {
       // `winner` is the field the merge gate actually keys off.
       assert.equal(superseding.winner, 'challenger');
       assert.equal(superseding.supersedes.invalidChallengeReason, 'state_vs_derived_side_mismatch');
+      assert.deepEqual(superseding.selectedEvalEvidence, {
+        primary: { evalId: 'eval-primary', evaluatedPrHeadSha: PRIMARY_HEAD },
+        challenger: { evalId: 'eval-challenger', evaluatedPrHeadSha: CHALLENGER_HEAD },
+      });
     } finally {
       rmSync(repoDir, { recursive: true, force: true });
     }
@@ -247,10 +374,22 @@ describe('challenge recovery application', () => {
       primaryEvalScore: 0.9,
       challengerEvalScore: 0.9,
     };
+    spec.evalRows = [
+      {
+        id: 'equal-primary', challengePairId: 'PAIR-1', challengeSide: 'primary',
+        prUrl: 'https://example.test/pull/1', score: 0.9,
+        timestamp: '2026-08-14T23:00:00.000Z', evaluatedPrHeadSha: PRIMARY_HEAD,
+      },
+      {
+        id: 'equal-challenger', challengePairId: 'PAIR-1', challengeSide: 'challenger',
+        prUrl: 'https://example.test/pull/2', score: 0.9,
+        timestamp: '2026-08-14T23:00:00.000Z', evaluatedPrHeadSha: CHALLENGER_HEAD,
+      },
+    ];
     const repoDir = makeRepo(spec);
     const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
     try {
-      runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      recover(repoDir, ['PAIR-1'], true);
       const lines = readFileSync(recordsPath, 'utf8').trim().split('\n');
       const superseding = JSON.parse(lines[1]);
       // Naming a winner arbitrarily would send an equally-scored PR to the
@@ -269,7 +408,7 @@ describe('challenge recovery application', () => {
     const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
     const before = readFileSync(recordsPath, 'utf8');
     try {
-      const result = runChallengeRecovery({ repoDir, pairIds: ['PAIR-1'], apply: true, now: NOW });
+      const result = recover(repoDir, ['PAIR-1'], true);
       assert.equal(result.supersedingRecordsWritten, 0);
       assert.equal(result.auditEntriesWritten, 1);
       assert.equal(readFileSync(recordsPath, 'utf8'), before);
