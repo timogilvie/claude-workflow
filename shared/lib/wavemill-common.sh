@@ -378,6 +378,7 @@ cleanup_remote_task_branch() {
 
 _wavemill_write_preserved_branch_incident() {
   local reason="$1" branch="$2" wt_dir="$3" base_branch="$4" commits_ahead="$5" commit_shas="$6" caller="${7:-cleanup}"
+  local base_sha="${8:-}" local_head_sha="${9:-}" remote_head_sha="${10:-}" verification_reason="${11:-}"
   local incident_dir marker_name marker_path tmp_path created_at
 
   [[ -n "${REPO_DIR:-}" && -n "$branch" ]] || return 1
@@ -398,6 +399,10 @@ _wavemill_write_preserved_branch_incident() {
     --arg commitShas "$commit_shas" \
     --arg createdAt "$created_at" \
     --arg caller "$caller" \
+    --arg baseSha "$base_sha" \
+    --arg localHeadSha "$local_head_sha" \
+    --arg remoteHeadSha "$remote_head_sha" \
+    --arg verificationReason "$verification_reason" \
     '{
       reason: $reason,
       branch: $branch,
@@ -407,7 +412,11 @@ _wavemill_write_preserved_branch_incident() {
       commitShas: ($commitShas | split("\n") | map(select(length > 0))),
       createdAt: $createdAt,
       caller: $caller
-    }' > "$tmp_path"; then
+    }
+    | if $baseSha != "" then . + {baseSha: $baseSha} else . end
+    | if $localHeadSha != "" then . + {localHeadSha: $localHeadSha} else . end
+    | if $remoteHeadSha != "" then . + {remoteHeadSha: $remoteHeadSha} else . end
+    | if $verificationReason != "" then . + {verificationReason: $verificationReason} else . end' > "$tmp_path"; then
     mv "$tmp_path" "$marker_path"
     return 0
   fi
@@ -426,10 +435,24 @@ safe_remove_task_worktree_and_branch() {
   local local_branch_exists="false"
   local remote_branch_exists="false"
   local base_ref=""
+  local base_sha=""
+  local local_head_sha=""
+  local initial_head_sha=""
+  local verified_head_sha=""
+  local remote_head_sha=""
+  local remote_timeout=""
+  local remote_ref=""
+  local remote_output=""
+  local remote_lookup_rc=0
+  local fetch_rc=0
   local commits_ahead=""
   local commit_shas=""
   local rev_list_ok="false"
   local merged_to_base="false"
+  local merged_to_current_head="false"
+  local remote_contains_head="false"
+  local preservation_reason="unpushed_commits"
+  local verification_reason=""
 
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
@@ -463,19 +486,38 @@ safe_remove_task_worktree_and_branch() {
   if [[ "$branch_is_deletable" == "true" ]] \
     && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
     local_branch_exists="true"
-    if git -C "$REPO_DIR" show-ref --verify --quiet "refs/remotes/origin/$task_branch" 2>/dev/null; then
-      remote_branch_exists="true"
+
+    if ! initial_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "${task_branch}^{commit}" 2>/dev/null)"; then
+      verification_reason="local_head_unresolvable"
+    else
+      local_head_sha="$initial_head_sha"
     fi
 
-    if git -C "$REPO_DIR" rev-parse --verify --quiet "${base_branch}^{commit}" >/dev/null 2>&1; then
-      base_ref="$base_branch"
-    elif git -C "$REPO_DIR" rev-parse --verify --quiet "origin/${base_branch}^{commit}" >/dev/null 2>&1; then
-      base_ref="origin/$base_branch"
+    remote_timeout="$(wavemill_git_remote_timeout_seconds)"
+    if [[ -z "$verification_reason" ]]; then
+      wavemill_git_remote_with_timeout "$remote_timeout" -C "$REPO_DIR" fetch origin \
+        "refs/heads/${base_branch}:refs/remotes/origin/${base_branch}" >/dev/null 2>&1 || fetch_rc=$?
+      if (( fetch_rc != 0 )); then
+        verification_reason="base_fetch_failed:$fetch_rc"
+      fi
     fi
 
-    if [[ -n "$base_ref" ]]; then
+    if [[ -z "$verification_reason" ]]; then
+      base_ref="refs/remotes/origin/$base_branch"
+      if base_sha="$(git -C "$REPO_DIR" rev-parse --verify "${base_ref}^{commit}" 2>/dev/null)"; then
+        :
+      else
+        base_ref=""
+        verification_reason="origin_base_unresolvable"
+      fi
+    fi
+
+    if [[ -z "$verification_reason" && -n "$base_ref" ]]; then
       if git -C "$REPO_DIR" merge-base --is-ancestor "$task_branch" "$base_ref" 2>/dev/null; then
         merged_to_base="true"
+      fi
+      if git -C "$REPO_DIR" merge-base --is-ancestor "$task_branch" HEAD 2>/dev/null; then
+        merged_to_current_head="true"
       fi
       if commits_ahead="$(git -C "$REPO_DIR" rev-list --count "${base_ref}..${task_branch}" 2>/dev/null)" \
         && [[ "$commits_ahead" =~ ^[0-9]+$ ]]; then
@@ -484,17 +526,69 @@ safe_remove_task_worktree_and_branch() {
       fi
     fi
 
-    if [[ "$rev_list_ok" != "true" ]]; then
+    if [[ -z "$verification_reason" && "$rev_list_ok" != "true" ]]; then
+      verification_reason="rev_list_failed"
+    fi
+
+    if [[ -z "$verification_reason" && "$merged_to_base" != "true" ]] && (( commits_ahead > 0 )); then
+      remote_ref="refs/heads/$task_branch"
+      remote_lookup_rc=0
+      if remote_output="$(wavemill_git_remote_with_timeout "$remote_timeout" -C "$REPO_DIR" ls-remote --heads origin "$remote_ref" 2>/dev/null)"; then
+        remote_head_sha="$(printf '%s\n' "$remote_output" | awk '{print $1; exit}')"
+        :
+      else
+        remote_lookup_rc=$?
+        verification_reason="remote_head_lookup_failed:$remote_lookup_rc"
+      fi
+
+      if [[ -z "$verification_reason" ]]; then
+        if [[ -n "$remote_head_sha" ]]; then
+          remote_branch_exists="true"
+          if [[ "$remote_head_sha" == "$local_head_sha" ]]; then
+            remote_contains_head="true"
+          else
+            fetch_rc=0
+            wavemill_git_remote_with_timeout "$remote_timeout" -C "$REPO_DIR" fetch origin \
+              "refs/heads/${task_branch}:refs/remotes/origin/${task_branch}" >/dev/null 2>&1 || fetch_rc=$?
+            if (( fetch_rc != 0 )); then
+              verification_reason="remote_task_fetch_failed:$fetch_rc"
+            elif git -C "$REPO_DIR" cat-file -e "${remote_head_sha}^{commit}" 2>/dev/null \
+              && git -C "$REPO_DIR" merge-base --is-ancestor "$local_head_sha" "$remote_head_sha" 2>/dev/null; then
+              remote_contains_head="true"
+            fi
+          fi
+        fi
+
+        if [[ -z "$verification_reason" && "$remote_contains_head" != "true" ]]; then
+          verification_reason="remote_missing_local_head"
+        fi
+      fi
+    fi
+
+    if [[ -z "$verification_reason" ]]; then
+      if ! verified_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "${task_branch}^{commit}" 2>/dev/null)" \
+        || [[ "$verified_head_sha" != "$initial_head_sha" ]]; then
+        local_head_sha="${verified_head_sha:-$local_head_sha}"
+        verification_reason="local_head_changed"
+      fi
+    fi
+
+    if [[ -n "$verification_reason" ]]; then
       commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
-      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "" "$commit_shas" "$caller"; then
+      if [[ "$verification_reason" == remote_missing_local_head ]]; then
+        commits_ahead="${commits_ahead:-}"
+      else
+        commits_ahead=""
+      fi
+      if ! _wavemill_write_preserved_branch_incident "$preservation_reason" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller" "$base_sha" "$local_head_sha" "$remote_head_sha" "$verification_reason"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
-      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch could not be compared to $base_branch; retained. Recover with: git -C $REPO_DIR push origin $task_branch"
+      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch cleanup lacked authoritative git evidence ($verification_reason); retained. Recover with: git -C $REPO_DIR push origin $task_branch"
       return 10
     fi
 
     if (( commits_ahead > 0 )) && [[ "$remote_branch_exists" != "true" && "$merged_to_base" != "true" ]]; then
-      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller"; then
+      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller" "$base_sha" "$local_head_sha" "$remote_head_sha" "remote_branch_absent"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
       log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch has $commits_ahead unpushed commit(s) not on origin/${base_branch}; retained. Recover with: git -C $REPO_DIR push origin $task_branch"
@@ -512,7 +606,9 @@ safe_remove_task_worktree_and_branch() {
   fi
 
   if [[ "$local_branch_exists" == "true" ]]; then
-    if wavemill_cleanup_run git -C "$REPO_DIR" branch -D "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
+    local branch_delete_flag="-D"
+    [[ "$merged_to_current_head" == "true" ]] && branch_delete_flag="-d"
+    if wavemill_cleanup_run git -C "$REPO_DIR" branch "$branch_delete_flag" "$task_branch" >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null; then
       log "debug" "Deleted local branch: $task_branch"
     else
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
@@ -571,12 +667,17 @@ cleanup_completed_task() {
   if [[ "$cleanup_rc" -eq 20 ]]; then
     return 1
   fi
-
-  if [[ "$cleanup_rc" -ne 10 ]]; then
-    cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+  if [[ "$cleanup_rc" -eq 10 ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue cleanup preserved local work; keeping task state"
+    return 1
   fi
 
+  cleanup_remote_task_branch "$issue" "$task_branch" "$pr" || return 1
+
   wavemill_cleanup_run git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
+  reconciliation_lease_release "${WORKTREE_ROOT}/${slug}/features/${slug}" 2>/dev/null || true
+  rm -f "${WORKTREE_ROOT}/${slug}/features/${slug}/.pane-release-blocked.json" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
   remove_task_state "$issue"
@@ -3813,6 +3914,193 @@ state_mutate() {
 # TASK STATE LEDGER
 # ============================================================================
 
+get_task_execution_owner() {
+  local issue="$1" owner=""
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    owner="$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner // "task"' "$STATE_FILE" 2>/dev/null || echo "task")"
+  fi
+  case "$owner" in
+    task|queue|reconciliation) printf '%s\n' "$owner" ;;
+    *) printf '%s\n' "task" ;;
+  esac
+}
+
+get_task_pane_state() {
+  local issue="$1" pane_state=""
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // "active"' "$STATE_FILE" 2>/dev/null || echo "active")"
+  fi
+  case "$pane_state" in
+    active|released|rehydrating) printf '%s\n' "$pane_state" ;;
+    *) printf '%s\n' "active" ;;
+  esac
+}
+
+set_task_queue_owned() {
+  local issue="$1" capsule_digest="${2:-}" handoff_at="${3:-}"
+  [[ -n "$handoff_at" ]] || handoff_at="$(date +%s)"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "queue",
+         paneState: "released",
+         queueHandoffAt: ($handoffAt | tonumber),
+         capsuleDigest: $capsuleDigest,
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue" \
+    --arg capsuleDigest "$capsule_digest" \
+    --arg handoffAt "$handoff_at"
+}
+
+set_task_reconciliation_owned() {
+  local issue="$1"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "reconciliation",
+         paneState: "rehydrating",
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue"
+}
+
+set_task_task_owned() {
+  local issue="$1" pane_state="${2:-active}"
+  [[ "$pane_state" == "active" || "$pane_state" == "rehydrating" || "$pane_state" == "released" ]] || pane_state="active"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" \
+    '(.tasks[$issue] // {}) as $existing
+     | .tasks[$issue] = ($existing + {
+         executionOwner: "task",
+         paneState: $paneState,
+         updated: (now | todate)
+       })' \
+    --arg issue "$issue" \
+    --arg paneState "$pane_state"
+}
+
+task_worktree_release_safety() {
+  local wt_dir="${1:-}" task_branch="${2:-}" base_branch="${3:-${BASE_BRANCH:-main}}"
+  local dirty_status="" commits_ahead=""
+
+  if [[ -z "$wt_dir" || ! -d "$wt_dir" ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if [[ -z "$task_branch" ]]; then
+    task_branch="$(git -C "$wt_dir" branch --show-current 2>/dev/null || true)"
+  fi
+  if [[ -z "$task_branch" ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if [[ -n "$dirty_status" ]]; then
+    printf '%s\n' "dirty-worktree"
+    return 1
+  fi
+  if ! git -C "$wt_dir" rev-parse --verify --quiet "origin/${task_branch}^{commit}" >/dev/null 2>&1; then
+    printf '%s\n' "no-remote-branch"
+    return 1
+  fi
+  if ! commits_ahead="$(git -C "$wt_dir" rev-list --count "origin/${task_branch}..${task_branch}" 2>/dev/null)" \
+    || [[ ! "$commits_ahead" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "git-error"
+    return 1
+  fi
+  if (( commits_ahead > 0 )); then
+    printf '%s\n' "unpushed-commits"
+    return 1
+  fi
+  printf '%s\n' "ok"
+  return 0
+}
+
+reconciliation_lease_dir() {
+  local state_dir="$1"
+  printf '%s\n' "$state_dir/.reconciliation-lease"
+}
+
+reconciliation_lease_info() {
+  local state_dir="$1" lease_file
+  lease_file="$(reconciliation_lease_dir "$state_dir")/lease.json"
+  [[ -f "$lease_file" ]] || return 1
+  cat "$lease_file"
+}
+
+reconciliation_lease_release() {
+  local state_dir="$1" lease_dir
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  rm -f "$lease_dir/lease.json" 2>/dev/null || true
+  rmdir "$lease_dir" 2>/dev/null || true
+}
+
+reconciliation_lease_held() {
+  local state_dir="$1" lease_dir lease_pid
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  [[ -d "$lease_dir" ]] || return 1
+  lease_pid="$(jq -r '.pid // empty' "$lease_dir/lease.json" 2>/dev/null || true)"
+  if [[ "$lease_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lease_pid" 2>/dev/null; then
+    local task_state issue slug wt_dir pane_state target
+    task_state=""
+    if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+      task_state="$(jq -c --arg state_dir "$state_dir" '
+        (.tasks // {}) | to_entries[]
+        | select((.value.worktree + "/features/" + .value.slug) == $state_dir)
+        | {issue:.key, slug:.value.slug, worktree:.value.worktree, paneState:(.value.paneState // "active")}
+      ' "$STATE_FILE" 2>/dev/null | head -n 1 || true)"
+    fi
+    issue="$(jq -r '.issue // empty' <<< "$task_state" 2>/dev/null || true)"
+    slug="$(jq -r '.slug // empty' <<< "$task_state" 2>/dev/null || true)"
+    wt_dir="$(jq -r '.worktree // empty' <<< "$task_state" 2>/dev/null || true)"
+    pane_state="$(jq -r '.paneState // "active"' <<< "$task_state" 2>/dev/null || echo "active")"
+    if [[ -n "$issue" && -n "$slug" && "$pane_state" != "rehydrating" ]]; then
+      target="$(_tmux_task_window_target "${SESSION:-wavemill}" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+      if [[ -z "$target" ]]; then
+        reconciliation_lease_release "$state_dir"
+        return 1
+      fi
+    fi
+  fi
+  return 0
+}
+
+reconciliation_lease_acquire() {
+  local state_dir="$1" pr="$2" head="$3" lease_dir lease_file tmp_file
+  lease_dir="$(reconciliation_lease_dir "$state_dir")"
+  if reconciliation_lease_held "$state_dir"; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+  if ! mkdir "$lease_dir" 2>/dev/null; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+  lease_file="$lease_dir/lease.json"
+  tmp_file="$lease_dir/lease.json.tmp.$$"
+  jq -n \
+    --arg pr "$pr" \
+    --arg headSha "$head" \
+    --arg session "${SESSION:-}" \
+    --argjson pid "$$" \
+    --argjson acquiredAt "$(date +%s)" \
+    '{pr:$pr, headSha:$headSha, session:$session, pid:$pid, acquiredAt:$acquiredAt}' > "$tmp_file" 2>/dev/null \
+    && mv "$tmp_file" "$lease_file" 2>/dev/null || {
+      rm -f "$tmp_file" 2>/dev/null || true
+      rmdir "$lease_dir" 2>/dev/null || true
+      printf '%s\n' "reconciliation-lease-write-failed"
+      return 1
+    }
+  printf '%s\n' "ok"
+  return 0
+}
+
 # Canonical task-state writer (HOK-2900). Before canonicalization the parent
 # mill, the startup runner, and the extracted monitor each carried a private
 # copy whose semantics had drifted: the parent copy defaulted an omitted
@@ -3856,8 +4144,11 @@ save_task_state() {
   local linear_issue="${8:-$issue}" challenge="${9:-}" challenge_pair="${10:-}" challenge_role="${11:-}" challenge_model="${12:-}"
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}" phase="${20:-}" window_id="${21:-}"
+  if [[ "$challenge" == "true" && -z "$challenge_role" && -n "$challenge_pair" && "$challenge_pair" == "$issue" ]]; then
+    challenge_role="primary"
+  fi
   if [[ "$challenge" == "true" && -z "$challenge_role" ]]; then
-    echo "Error: challengeRole cannot be empty for challenge task $issue" >&2
+    echo "Error: challengeRole cannot be empty for challenge task $issue (challengePairId '$challenge_pair' does not identify a primary role)" >&2
     return 1
   fi
 

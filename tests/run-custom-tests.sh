@@ -35,6 +35,7 @@ fi
 CUSTOM_TS_TESTS=(
   shared/lib/check-routing.test.ts
   shared/lib/challenge-coverage-selector.test.ts
+  shared/lib/challenge-selection-health.test.ts
   shared/lib/challenge-score-selector.test.ts
   shared/lib/challenge-scheduler.test.ts
   shared/lib/constraint-parser.test.ts

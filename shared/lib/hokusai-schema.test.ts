@@ -81,6 +81,12 @@ function makeRecord(overrides: Partial<EvalRecord> = {}): EvalRecord {
     score: 0.8,
     scoreBand: 'Minor Feedback',
     timeSeconds: 1840,
+    phaseDurationsSeconds: {
+      planning: 610,
+      coding: 940,
+      review: 250,
+      total: 1800,
+    },
     timestamp: '2026-04-13T12:00:00.000Z',
     interventionRequired: false,
     interventionCount: 1,
@@ -564,7 +570,7 @@ describe('hokusai-schema', () => {
         observed_outcomes: {
           completed_successfully: true,
           actual_cost_usd: 2.41,
-          actual_time_seconds: 1840,
+          actual_time_seconds: 940,
           intervention_count: 1,
         },
       });
@@ -744,23 +750,71 @@ describe('hokusai-schema', () => {
       assert.equal(result.observed_outcomes.actual_cost_usd, null);
     });
 
-    it('accepts zero timeSeconds and zero workflowCost as valid observed outcomes', () => {
+    it('accepts zero coding duration and zero workflowCost as valid observed outcomes', () => {
       const result = expectSuccess(toHokusaiSubmission(makeRecord({
         workflowCost: 0,
-        timeSeconds: 0,
+        phaseDurationsSeconds: {
+          planning: 12,
+          coding: 0,
+          review: 5,
+          total: 17,
+        },
       })));
 
       assert.equal(result.observed_outcomes.actual_cost_usd, 0);
       assert.equal(result.observed_outcomes.actual_time_seconds, 0);
     });
 
-    it('keeps submissions eligible when timeSeconds is unknown', () => {
+    it('keeps submissions eligible when phase durations are missing', () => {
       const result = expectSuccess(toHokusaiSubmission(makeRecord({
-        timeSeconds: null,
+        phaseDurationsSeconds: undefined,
       })));
 
       assert.equal(result.observed_outcomes.actual_time_seconds, null);
       assert.equal(result.observed_outcomes.actual_cost_usd, 2.41);
+    });
+
+    it('submits coding execution time, not queue-inflated total elapsed time', () => {
+      // Regression for HOK-2895: a task queued for ~19h submitted 81,308s as
+      // the coder model's latency when the model only ran for 845.707s.
+      const result = expectSuccess(toHokusaiSubmission(makeRecord({
+        timeSeconds: 81_308.214,
+        phaseDurationsSeconds: {
+          planning: 69_968.308,
+          coding: 845.707,
+          review: 10_494.199,
+          total: 81_308.214,
+        },
+      })));
+
+      assert.equal(result.observed_outcomes.actual_time_seconds, 845.707);
+    });
+
+    it('never falls back to elapsed timeSeconds when the coding duration is absent', () => {
+      const result = expectSuccess(toHokusaiSubmission(makeRecord({
+        timeSeconds: 1840,
+        phaseDurationsSeconds: {
+          planning: 900,
+          review: 300,
+          total: 1200,
+        },
+      })));
+
+      assert.equal(result.observed_outcomes.actual_time_seconds, null);
+    });
+
+    it('submits null latency for malformed or negative coding durations', () => {
+      for (const coding of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const result = expectSuccess(toHokusaiSubmission(makeRecord({
+          phaseDurationsSeconds: { coding },
+        })));
+
+        assert.equal(
+          result.observed_outcomes.actual_time_seconds,
+          null,
+          `coding=${coding} should submit null latency`,
+        );
+      }
     });
 
     it('returns eligibility failure when routing information is unavailable', () => {
@@ -1098,7 +1152,8 @@ describe('hokusai-schema', () => {
     });
 
     it('accepts null actual_time_seconds', () => {
-      const submission = expectSuccess(toHokusaiSubmission(makeRecord({ timeSeconds: null })));
+      const submission = expectSuccess(toHokusaiSubmission(makeRecord({ phaseDurationsSeconds: undefined })));
+      assert.equal(submission.observed_outcomes.actual_time_seconds, null);
 
       assert.deepEqual(validateHokusaiSubmission(submission), {
         valid: true,

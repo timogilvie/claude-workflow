@@ -51,7 +51,7 @@ If directory doesn't exist, create it using the `featureName` from selected-task
 #### For Feature Workflow
 
 **3a. Generate PRD**
-Use the PRD template from `~/.claude/tools/prompts/prd-prompt-template.md`:
+Use the PRD template from `tools/prompts/prd-prompt-template.md`:
 
 Role: Senior product manager for Hokusai
 Task: Generate PRD that a junior team member can follow
@@ -69,7 +69,7 @@ Required sections:
 Reference: Review project README.md and https://docs.hokus.ai/
 
 **3b. Generate Tasks**
-Use the tasks template from `~/.claude/tools/prompts/tasks-prompt-template.md`:
+Use the tasks template from `tools/prompts/tasks-prompt-template.md`:
 
 Role: Product manager working with junior developer
 Task: Create detailed, prioritized task list from PRD
@@ -98,7 +98,7 @@ Required components:
 #### For Bugfix Workflow
 
 **3a. Generate Investigation Plan**
-Use template from `~/.claude/tools/prompts/bug-investigation-template.md`:
+Use template from `tools/prompts/bug-investigation-template.md`:
 
 Role: Senior software engineer and debugging specialist
 Task: Create comprehensive investigation plan
@@ -116,7 +116,7 @@ Required sections:
 8. Timeline (first appeared, deployments, frequency, patterns)
 
 **3b. Generate Hypotheses Document**
-Use template from `~/.claude/tools/prompts/bug-hypothesis-template.md`:
+Use template from `tools/prompts/bug-hypothesis-template.md`:
 
 Output: `bugs/<bug-name>/hypotheses.md`
 
@@ -142,7 +142,7 @@ Format for each hypothesis:
 ```
 
 **3c. Generate Fix Tasks Document**
-Use template from `~/.claude/tools/prompts/bug-tasks-template.md`:
+Use template from `tools/prompts/bug-tasks-template.md`:
 
 Output: `bugs/<bug-name>/fix-tasks.md`
 

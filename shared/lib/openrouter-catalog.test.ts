@@ -82,7 +82,7 @@ describe('loadLaunchPriorityFixture', () => {
     const list = loadLaunchPriorityList();
     assert.ok(list.length >= 25, `expected at least 25 launch-priority models, got ${list.length}`);
     const aliases = new Set(list.map((m) => m.wavemillAlias));
-    for (const required of ['gpt-5.5', 'deepseek-r1', 'qwen-2.5-coder-32b', 'kimi-k2', 'glm-5.2', 'kimi-k2.7-code', 'ox-alpha']) {
+    for (const required of ['gpt-5.5', 'deepseek-r1', 'kimi-k2', 'glm-5.2', 'glm-5.3', 'kimi-k3', 'gemini-3.8-flash', 'kimi-k2.7-code']) {
       assert.ok(aliases.has(required), `expected fixture to include ${required}`);
     }
   });
@@ -209,11 +209,13 @@ describe('OpenRouter alias mapping', () => {
     assert.equal(resolveOpenRouterIdFromWavemillAlias('does-not-exist'), null);
   });
 
-  it('keeps retired aliases in the fixture as deprecated rows', () => {
+  it('drops retired aliases from the fixture while keeping grok-code-fast deprecated', () => {
     const byAlias = new Map(loadLaunchPriorityList().map((model) => [model.wavemillAlias, model]));
-    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'grok-code-fast', 'qwen-2.5-coder-32b']) {
-      assert.equal(byAlias.get(alias)?.status, 'deprecated', `${alias} should remain as deprecated`);
+    // HOK-2947 removed the stale rows outright.
+    for (const alias of ['deepseek-coder-v2', 'gemini-2.0-flash', 'qwen-2.5-coder-32b', 'qwen-2.5-72b', 'llama-3.3-70b', 'llama-4-scout', 'devstral-small']) {
+      assert.equal(byAlias.get(alias), undefined, `${alias} should be removed from the fixture`);
     }
+    assert.equal(byAlias.get('grok-code-fast')?.status, 'deprecated', 'grok-code-fast should remain as deprecated');
   });
 
   it('resolves Kimi/Qwen/GLM/Ox aliases and ids through one native OpenRouter identity', () => {

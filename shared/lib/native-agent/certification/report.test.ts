@@ -9,6 +9,7 @@ import {
   renderReportTable,
 } from './report.ts';
 import { CERTIFICATION_SCHEMA_VERSION, CERTIFICATION_TTL_DAYS } from './schema.ts';
+import { buildLiveCodingCanaryFixture } from './canary-fixtures.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
 import { resolveCertificationSubject } from './identity.ts';
 import type { ModelRegistry } from '../../model-registry.ts';
@@ -21,6 +22,8 @@ import type { NativeCertificationArtifact } from './schema.ts';
 const NOW = new Date('2026-01-15T12:00:00.000Z');
 const FRESH_DATE = new Date('2026-01-01T00:00:00.000Z').toISOString();
 const STALE_DATE = new Date(NOW.getTime() - (CERTIFICATION_TTL_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString();
+// Within the (shorter) live-canary TTL relative to NOW.
+const CANARY_FRESH_DATE = new Date(NOW.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
 function makeRegistry(overrides: Record<string, unknown> = {}): ModelRegistry {
   return {
@@ -352,7 +355,29 @@ describe('buildModelCertificationReport', () => {
     }
   });
 
-  it('workflow-phase artifact is eligible for all stages', () => {
+  it('workflow-phase artifact with a live canary pass is eligible for all stages', () => {
+    const registry = makeRegistry();
+    const subject = resolveCertificationSubject({ provider: 'openai', model: 'gpt-4o', registry });
+    const workflowArtifact = makeArtifact({
+      phase: 'workflow',
+      subject: subject.subject,
+      liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', { ranAt: CANARY_FRESH_DATE }),
+    });
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: workflowArtifact }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.equal(row.state, 'ready-for-challenge');
+    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    assert.equal(row.liveCanary.eligible, true);
+    assert.equal(row.liveCanary.status, 'pass');
+  });
+
+  it('workflow-phase artifact without a live canary never gains the coder stage', () => {
     const workflowArtifact = makeArtifact({ phase: 'workflow' });
     const registry = makeRegistry();
     const rows = buildModelCertificationReport({
@@ -364,7 +389,35 @@ describe('buildModelCertificationReport', () => {
     const row = rows.find(r => r.model === 'gpt-4o');
     assert.ok(row, 'gpt-4o row missing');
     assert.equal(row.state, 'ready-for-challenge');
-    assert.deepEqual(row.eligibleStages.sort(), ['coder', 'planner', 'reviewer'].sort());
+    assert.deepEqual(row.eligibleStages.sort(), ['planner', 'reviewer'].sort());
+    assert.equal(row.liveCanary.eligible, false);
+    assert.equal(row.liveCanary.reason, 'missing');
+  });
+
+  it('failed live canary keeps coder excluded and surfaces the failure reason', () => {
+    const registry = makeRegistry();
+    const subject = resolveCertificationSubject({ provider: 'openai', model: 'gpt-4o', registry });
+    const workflowArtifact = makeArtifact({
+      phase: 'workflow',
+      subject: subject.subject,
+      liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', {
+        ranAt: CANARY_FRESH_DATE,
+        status: 'fail',
+        reason: 'protocol_failure',
+      }),
+    });
+    const rows = buildModelCertificationReport({
+      registry,
+      now: NOW,
+      loadCertificationFn: () => ({ ok: true as const, artifact: workflowArtifact }),
+    });
+
+    const row = rows.find(r => r.model === 'gpt-4o');
+    assert.ok(row, 'gpt-4o row missing');
+    assert.deepEqual(row.eligibleStages.sort(), ['planner', 'reviewer'].sort());
+    assert.equal(row.liveCanary.eligible, false);
+    assert.equal(row.liveCanary.reason, 'failed');
+    assert.equal(row.liveCanary.failureReason, 'protocol_failure');
   });
 
   it('loads mapped OpenRouter artifacts for aliased models', () => {
@@ -415,6 +468,7 @@ describe('buildModelCertificationReport', () => {
         suiteVersion: 'v1',
         certifiedAt: FRESH_DATE,
         scenarios: [{ scenarioId: 's1', passed: true }],
+        liveCanary: buildLiveCodingCanaryFixture(subject.subject, 'v1', { ranAt: CANARY_FRESH_DATE }),
       }));
 
       const rows = buildModelCertificationReport({ registry, repoDir, now: NOW });

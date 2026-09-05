@@ -144,6 +144,7 @@ export function explainEffectiveModelAvailability(
       modelId,
       mode: 'task',
       requiredPhase: STAGE_TO_CERTIFICATION_PHASE[normalizedStage],
+      ...(normalizedStage === 'coding' ? { launchPhase: 'coding' as const } : {}),
       registry,
       repoDir: opts.repoDir,
       apiKeyPresent: opts.apiKeyPresent ?? true,

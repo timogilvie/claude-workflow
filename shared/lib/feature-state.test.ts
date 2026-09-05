@@ -725,6 +725,71 @@ test('review tool error is surfaced as failed review evidence', async () => {
   }
 });
 
+test('all-dismissed blockers pass review and surface dismissal counts in evidence (HOK-2932)', async () => {
+  const featureDir = makeTempDir();
+  try {
+    writeReviewResult(featureDir, {
+      artifacts: {
+        type: 'review',
+        prNumber: 1282,
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 2,
+        blockerCount: 1,
+        warningCount: 0,
+        dismissedBlockers: [
+          {
+            location: 'scope-guard',
+            description: 'Diff includes files from already-merged PRs',
+            justification: 'False positive: stale diff base; PR diff is in scope.',
+            evidence: 'git log auto/integration..HEAD',
+          },
+        ],
+      },
+    });
+
+    const state = await deriveFeatureState({ featureDir, issueId: 'HOK-2932', slug: 'dismissed-review' });
+    const verdict = state.evidence.find((item) => item.kind === 'review_verdict');
+
+    assert.equal(state.outcome.reviewPassed, true);
+    assert.equal(verdict?.status, 'pass');
+    assert.match(verdict?.detail ?? '', /blockers=1/);
+    assert.match(verdict?.detail ?? '', /dismissedBlockers=1/);
+    assert.match(verdict?.detail ?? '', /effectiveBlockers=0/);
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
+test('undismissed blocker still fails review even alongside a valid dismissal', async () => {
+  const featureDir = makeTempDir();
+  try {
+    writeReviewResult(featureDir, {
+      artifacts: {
+        type: 'review',
+        prNumber: 1282,
+        exitCode: 1,
+        verdict: 'not_ready',
+        iterations: 2,
+        blockerCount: 2,
+        warningCount: 0,
+        dismissedBlockers: [
+          { justification: 'One finding disproved with a verified repro attempt.' },
+        ],
+      },
+    });
+
+    const state = await deriveFeatureState({ featureDir, issueId: 'HOK-2932', slug: 'mixed-review' });
+    const verdict = state.evidence.find((item) => item.kind === 'review_verdict');
+
+    assert.equal(state.outcome.reviewPassed, false);
+    assert.equal(verdict?.status, 'fail');
+    assert.match(verdict?.detail ?? '', /effectiveBlockers=1/);
+  } finally {
+    cleanup([featureDir]);
+  }
+});
+
 test('native agent/model: stage results with native agent round-trip through feature state', async () => {
   const featureDir = makeTempDir();
   try {

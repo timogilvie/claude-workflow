@@ -205,6 +205,7 @@ function resolveRegistryBackedNativeAgent(input: {
       modelId: input.modelId,
       mode: 'task',
       requiredPhase,
+      launchPhase: input.phase,
       registry: input.registry,
       repoDir: input.repoDir,
       apiKeyPresent: true,

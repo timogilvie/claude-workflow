@@ -20,7 +20,7 @@ Use this skill when:
 ### Step 1: Fetch the Issue
 
 ```bash
-npx tsx ~/.claude/tools/get-issue.ts HOK-XXX
+npx tsx tools/get-issue.ts HOK-XXX
 ```
 
 Review the output: title, current description, project, state, priority, labels, parent/child relationships, and comments.
@@ -37,7 +37,7 @@ Run multiple Explore agents in parallel for different aspects (e.g., one for UI 
 
 ### Step 3: Generate the Task Packet
 
-Write the expanded description following the structure in `~/.claude/tools/prompts/issue-writer.md`:
+Write the expanded description following the structure in `tools/prompts/issue-writer.md`:
 
 1. **Objective** — What / Why / Scope In / Scope Out
 2. **Technical Context** — Repository, key files, dependencies, architecture notes
@@ -114,7 +114,7 @@ Save the expanded description to a temp file, then push it to Linear:
 ```bash
 # Write expanded description to temp file (use Write tool)
 # Then update Linear:
-npx tsx ~/.claude/tools/update-issue.ts HOK-XXX --file /tmp/hok-xxx-expanded.md
+npx tsx tools/update-issue.ts HOK-XXX --file /tmp/hok-xxx-expanded.md
 ```
 
 ### Step 5: Apply Auto-Labels
@@ -122,7 +122,7 @@ npx tsx ~/.claude/tools/update-issue.ts HOK-XXX --file /tmp/hok-xxx-expanded.md
 After updating the issue description, automatically apply the proposed labels:
 
 ```bash
-npx tsx ~/.claude/tools/auto-label-issue.ts HOK-XXX
+npx tsx tools/auto-label-issue.ts HOK-XXX
 ```
 
 This will:
@@ -134,7 +134,7 @@ This will:
 If labels don't exist yet, create them first:
 
 ```bash
-npx tsx ~/.claude/tools/init-labels.ts
+npx tsx tools/init-labels.ts
 ```
 
 ### Step 6: Report Back

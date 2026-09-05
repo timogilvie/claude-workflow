@@ -272,6 +272,39 @@ recommendations target the least-covered (model, stage) cell, and
 `low-data-stage` recommendations pick the least-tested model for the starved
 stage specifically.
 
+## Challenge Selection Health
+
+`challenge.selectionHealth` defaults on and keeps temporary state in
+`.wavemill/challenge-selection-health.json`. It reserves selected challenger
+models before eval records exist and temporarily opens provider/model circuits
+after typed transient upstream failures. It does not edit the permanent disabled
+model registry.
+
+```json
+{
+  "challenge": {
+    "selectionHealth": {
+      "enabled": true,
+      "reservation": {
+        "selectionTtlSeconds": 900,
+        "inflightTtlSeconds": 7200
+      },
+      "circuit": {
+        "transientFailureThreshold": 3,
+        "windowSeconds": 1800,
+        "cooldownSeconds": 900
+      }
+    }
+  }
+}
+```
+
+Set `challenge.selectionHealth.enabled` to `false` to restore legacy challenge
+selection behavior. Inspect current temporary state with
+`npx tsx tools/challenge-selection-health.ts status --repo-dir . --json`; clear a
+demonstrably stale entry with `clear --provider openrouter --model MODEL` or
+clear all temporary health state with `clear --all`.
+
 ## Local Paths Guidance
 
 - Relative paths shared by the team can live in `.wavemill-config.json`.

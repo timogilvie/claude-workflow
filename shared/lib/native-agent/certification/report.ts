@@ -10,8 +10,12 @@
 
 import {
   CERTIFICATION_TTL_DAYS,
+  evaluateLiveCodingCanaryEligibility,
   phaseSatisfies,
   type CertificationPhase,
+  type LiveCodingCanaryFailureReason,
+  type LiveCodingCanaryIneligibilityReason,
+  type LiveCodingCanaryStatus,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import { evaluateEligibility, loadCertification, loadGlobalCertification } from './loader.ts';
@@ -73,6 +77,20 @@ export interface ModelCertificationReportRow {
     state: ModelCertificationState;
     artifactPath?: string;
     storageScope?: 'global' | 'legacy-repo';
+  };
+  /**
+   * Live coding canary readiness. `eligible` mirrors the coder gate: only a
+   * fresh, live, identity-matching pass makes a model coder-ready — the coder
+   * stage never appears in `eligibleStages` from deterministic evidence alone.
+   */
+  liveCanary: {
+    eligible: boolean;
+    status?: LiveCodingCanaryStatus;
+    isLive?: boolean;
+    ranAt?: string;
+    expiresAt?: string;
+    reason?: LiveCodingCanaryIneligibilityReason;
+    failureReason?: LiveCodingCanaryFailureReason;
   };
   localReadiness: Partial<Record<RouterRole, { ready: boolean; reasons: string[] }>>;
   exclusion?: ModelExclusionDiagnostic;
@@ -144,6 +162,7 @@ export function buildModelCertificationReport(
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
         globalCertification: { state: 'certified-unavailable' },
+        liveCanary: { eligible: false, reason: 'missing' },
         localReadiness: buildLocalReadiness(repoDir, []),
         ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
@@ -164,6 +183,7 @@ export function buildModelCertificationReport(
         knownLimitations: flattenLimitations([nativeCapability.limitations]),
         scenarios: [],
         globalCertification: { state: 'not-certified' },
+        liveCanary: { eligible: false, reason: 'missing' },
         localReadiness: buildLocalReadiness(repoDir, []),
         ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
@@ -192,6 +212,7 @@ export function buildModelCertificationReport(
           ...(getLoadedPath(loaded) ? { artifactPath: getLoadedPath(loaded) } : {}),
           ...(getLoadedScope(loaded) ? { storageScope: getLoadedScope(loaded) } : {}),
         },
+        liveCanary: { eligible: false, reason: 'missing' },
         localReadiness: buildLocalReadiness(repoDir, []),
         ...(findModelExclusion(modelId, 'coding', repoDir) ? { exclusion: findModelExclusion(modelId, 'coding', repoDir) } : {}),
       });
@@ -299,7 +320,10 @@ function rowFromArtifactState(
   const ageDays = computeAgeDays(artifact.certifiedAt, now);
   const expiresAt = computeExpiresAt(artifact).toISOString();
   const expiresInDays = computeDaysUntil(expiresAt, now);
-  const eligibleStages = state === 'ready-for-challenge' ? computeEligibleStages(artifact.phase) : [];
+  const liveCanary = summarizeLiveCanary(artifact, now);
+  const eligibleStages = state === 'ready-for-challenge'
+    ? computeEligibleStages(artifact.phase, liveCanary.eligible)
+    : [];
 
   return {
     provider, model, native,
@@ -314,7 +338,29 @@ function rowFromArtifactState(
     knownLimitations,
     scenarios,
     globalCertification: { state },
+    liveCanary,
     localReadiness: {},
+  };
+}
+
+function summarizeLiveCanary(
+  artifact: NativeCertificationArtifact,
+  now: Date,
+): ModelCertificationReportRow['liveCanary'] {
+  const eligibility = evaluateLiveCodingCanaryEligibility(artifact, artifact.suiteVersion, now);
+  const canary = artifact.liveCanary;
+  return {
+    eligible: eligibility.eligible,
+    ...(canary
+      ? {
+        status: canary.status,
+        isLive: canary.isLive,
+        ranAt: canary.ranAt,
+        ...(canary.expiresAt ? { expiresAt: canary.expiresAt } : {}),
+        ...(canary.reason ? { failureReason: canary.reason } : {}),
+      }
+      : {}),
+    ...(eligibility.eligible ? {} : { reason: eligibility.reason }),
   };
 }
 
@@ -349,7 +395,7 @@ export function serializeReport(
 // Human-readable table
 // ---------------------------------------------------------------------------
 
-const COLUMN_HEADERS = ['Provider', 'Model', 'Status', 'Local Ready', 'Eligible Stages', 'Phase', 'Suite', 'Age', 'Expires', 'Exclusion', 'Limitations'] as const;
+const COLUMN_HEADERS = ['Provider', 'Model', 'Status', 'Local Ready', 'Eligible Stages', 'Phase', 'Canary', 'Suite', 'Age', 'Expires', 'Exclusion', 'Limitations'] as const;
 
 /**
  * Render the report as a human-readable table.
@@ -368,6 +414,7 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
     summarizeLocalReadiness(row),
     row.eligibleStages.length > 0 ? row.eligibleStages.join(', ') : '—',
     row.certifiedPhase ?? '—',
+    summarizeCanaryCell(row),
     row.suiteVersion ?? '—',
     row.ageDays !== undefined ? String(row.ageDays) : '—',
     row.expiresInDays !== undefined ? String(row.expiresInDays) : '—',
@@ -402,8 +449,20 @@ export function renderReportTable(rows: ModelCertificationReportRow[]): string {
 
 const ALL_ROLES: RouterRole[] = ['reviewer', 'coder', 'planner'];
 
-function computeEligibleStages(certifiedPhase: CertificationPhase): RouterRole[] {
-  return ALL_ROLES.filter(role => phaseSatisfies(certifiedPhase, STAGE_PHASE_REQUIREMENT[role]));
+/**
+ * Coder eligibility requires the live coding canary in addition to the
+ * deterministic phase — deterministic evidence alone never labels a model
+ * ready for coder challenges.
+ */
+function computeEligibleStages(
+  certifiedPhase: CertificationPhase,
+  liveCanaryEligible: boolean,
+): RouterRole[] {
+  return ALL_ROLES.filter(role => {
+    if (!phaseSatisfies(certifiedPhase, STAGE_PHASE_REQUIREMENT[role])) return false;
+    if (role === 'coder') return liveCanaryEligible;
+    return true;
+  });
 }
 
 function computeAgeDays(certifiedAt: string, now: Date): number {
@@ -437,6 +496,16 @@ function flattenLimitations(sources: (string[] | undefined)[]): string[] {
 
 function deduplicateStrings(values: string[]): string[] {
   return [...new Set(values)];
+}
+
+function summarizeCanaryCell(row: ModelCertificationReportRow): string {
+  if (row.liveCanary.eligible) {
+    return 'pass (live)';
+  }
+  if (row.liveCanary.status) {
+    return `${row.liveCanary.status} (${row.liveCanary.reason ?? 'ineligible'})`;
+  }
+  return row.liveCanary.reason ?? '—';
 }
 
 function summarizeLocalReadiness(row: ModelCertificationReportRow): string {

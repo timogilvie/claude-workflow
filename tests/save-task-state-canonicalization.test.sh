@@ -266,28 +266,100 @@ check_state "challenge=false argument is written" "false" "$STARTUP_STATE_FILE" 
 check_state "blank challenge fields do not create empty records" "absent" \
   "$STARTUP_STATE_FILE" '.tasks["HOK-2901"].challengePairId // "absent"'
 
-# A challenge write with no role must still fail before any mutation.
-printf '%s\n' '{"session":"canonicalization-validation","tasks":{"HOK-2902":{"slug":"hok-2902","status":"review","validationProbe":"kept"}}}' \
-  > "$VALIDATION_STATE_FILE"
-VALIDATION_RESULT="$(bash -c '
+# Challenge-role derivation: a primary challenge write can derive an omitted
+# role from challengePairId == issue, but underivable empty roles still fail
+# before any mutation.
+printf '%s\n' '{"session":"canonicalization-validation","tasks":{}}' > "$VALIDATION_STATE_FILE"
+DERIVED_ROLE_RESULT="$(bash -c '
   set -euo pipefail
   STATE_FILE="$1"; WORKTREE="$2"; REPO_DIR="$3"
   source "$REPO_DIR/shared/lib/wavemill-common.sh"
   log_warn() { :; }
-  if save_task_state "HOK-2902" "hok-2902" "task/hok-2902" "$WORKTREE" "9" "coding" "codex" "HOK-2902" \
-    "true" "HOK-2902" "" "model-a" \
-    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation" 2>/dev/null; then
-    printf "mutated\n"
+  if save_task_state "HOK-2931" "hok-2931" "task/hok-2931" "$WORKTREE" "9" "coding" "codex" "HOK-2931" \
+    "true" "HOK-2931" "" "model-a" \
+    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation"; then
+    printf "saved\n"
   else
     printf "rejected\n"
   fi
 ' bash "$VALIDATION_STATE_FILE" "$WORKTREE" "$REPO_DIR")"
 
-check_eq "challenge write without a role is rejected" "rejected" "$VALIDATION_RESULT"
-check_state "rejected challenge write leaves the stored status untouched" "review" \
-  "$VALIDATION_STATE_FILE" '.tasks["HOK-2902"].status'
-check_state "rejected challenge write leaves the task object untouched" "kept" \
-  "$VALIDATION_STATE_FILE" '.tasks["HOK-2902"].validationProbe'
+check_eq "matching challenge pair derives an omitted primary role" "saved" "$DERIVED_ROLE_RESULT"
+check_state "derived challengeRole is persisted as primary" "primary" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2931"].challengeRole'
+check_state "derived-role write keeps the challenge pair id" "HOK-2931" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2931"].challengePairId'
+
+printf '%s\n' '{"session":"canonicalization-validation","tasks":{"HOK-2932":{"slug":"hok-2932","status":"review","validationProbe":"kept"}}}' \
+  > "$VALIDATION_STATE_FILE"
+EMPTY_PAIR_ERR="$TEST_TMP/empty-pair.err"
+EMPTY_PAIR_RESULT="$(bash -c '
+  set -euo pipefail
+  STATE_FILE="$1"; WORKTREE="$2"; REPO_DIR="$3"; ERR_FILE="$4"
+  source "$REPO_DIR/shared/lib/wavemill-common.sh"
+  log_warn() { :; }
+  if save_task_state "HOK-2932" "hok-2932" "task/hok-2932" "$WORKTREE" "9" "coding" "codex" "HOK-2932" \
+    "true" "" "" "model-a" \
+    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation" 2>"$ERR_FILE"; then
+    printf "mutated\n"
+  else
+    printf "rejected\n"
+  fi
+' bash "$VALIDATION_STATE_FILE" "$WORKTREE" "$REPO_DIR" "$EMPTY_PAIR_ERR")"
+
+check_eq "challenge write with empty pair and empty role is rejected" "rejected" "$EMPTY_PAIR_RESULT"
+check_contains "empty-pair rejection emits the existing role error" \
+  "$(<"$EMPTY_PAIR_ERR")" "Error: challengeRole cannot be empty for challenge task HOK-2932"
+check_state "empty-pair rejection leaves the stored status untouched" "review" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2932"].status'
+check_state "empty-pair rejection leaves the task object untouched" "kept" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2932"].validationProbe'
+
+printf '%s\n' '{"session":"canonicalization-validation","tasks":{"HOK-2933":{"slug":"hok-2933","status":"review","validationProbe":"kept"}}}' \
+  > "$VALIDATION_STATE_FILE"
+MISMATCHED_PAIR_ERR="$TEST_TMP/mismatched-pair.err"
+MISMATCHED_PAIR_RESULT="$(bash -c '
+  set -euo pipefail
+  STATE_FILE="$1"; WORKTREE="$2"; REPO_DIR="$3"; ERR_FILE="$4"
+  source "$REPO_DIR/shared/lib/wavemill-common.sh"
+  log_warn() { :; }
+  if save_task_state "HOK-2933" "hok-2933" "task/hok-2933" "$WORKTREE" "9" "coding" "codex" "HOK-2933" \
+    "true" "HOK-9999" "" "model-a" \
+    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation" 2>"$ERR_FILE"; then
+    printf "mutated\n"
+  else
+    printf "rejected\n"
+  fi
+' bash "$VALIDATION_STATE_FILE" "$WORKTREE" "$REPO_DIR" "$MISMATCHED_PAIR_ERR")"
+
+check_eq "challenge write with mismatched pair and empty role is rejected" "rejected" "$MISMATCHED_PAIR_RESULT"
+check_contains "mismatched-pair rejection emits the existing role error" \
+  "$(<"$MISMATCHED_PAIR_ERR")" "Error: challengeRole cannot be empty for challenge task HOK-2933"
+check_state "mismatched-pair rejection leaves the stored status untouched" "review" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2933"].status'
+check_state "mismatched-pair rejection leaves the task object untouched" "kept" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2933"].validationProbe'
+
+printf '%s\n' '{"session":"canonicalization-validation","tasks":{}}' > "$VALIDATION_STATE_FILE"
+EXPLICIT_ROLE_RESULTS="$(bash -c '
+  set -euo pipefail
+  STATE_FILE="$1"; WORKTREE="$2"; REPO_DIR="$3"
+  source "$REPO_DIR/shared/lib/wavemill-common.sh"
+  log_warn() { :; }
+  save_task_state "HOK-2934" "hok-2934" "task/hok-2934" "$WORKTREE" "10" "coding" "codex" "HOK-2934" \
+    "true" "HOK-2934" "challenger" "model-a" \
+    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation"
+  save_task_state "HOK-2931_c" "hok-2931-c" "task/hok-2931-c" "$WORKTREE" "11" "coding" "codex" "HOK-2931_c" \
+    "true" "HOK-2931" "challenger" "model-b" \
+    "planner-m" "coder-m" "reviewer-m" "light" "medium" "llm" "implementation"
+  printf "saved\n"
+' bash "$VALIDATION_STATE_FILE" "$WORKTREE" "$REPO_DIR")"
+
+check_eq "explicit challenge roles are accepted" "saved" "$EXPLICIT_ROLE_RESULTS"
+check_state "explicit role is not replaced by derivation" "challenger" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2934"].challengeRole'
+check_state "explicit challenger role writes are unaffected" "challenger" \
+  "$VALIDATION_STATE_FILE" '.tasks["HOK-2931_c"].challengeRole'
 
 echo ""
 echo "Passed: $PASS"

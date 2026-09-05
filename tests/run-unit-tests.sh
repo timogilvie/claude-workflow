@@ -47,6 +47,7 @@ TESTS=(
   shared/lib/native-agent/transcript-compactor.test.ts
   shared/lib/native-agent/context-window-guard.test.ts
   shared/lib/native-agent/prompt-size-log.test.ts
+  shared/lib/native-agent/prompts.test.ts
   shared/lib/native-agent/pi-usage-cost.test.ts
   shared/lib/native-agent/provenance.test.ts
   shared/lib/native-agent/redaction.test.ts
@@ -126,6 +127,7 @@ TESTS=(
   shared/lib/challenge-pair-resolver.test.ts
   shared/lib/arm-failure-taxonomy.test.ts
   shared/lib/arm-reliability.test.ts
+  shared/lib/challenge-selection-health.test.ts
   shared/lib/stale-task-branches.test.ts
   shared/lib/tend-controller.test.ts
   shared/lib/observer-status-renderer.test.ts
@@ -258,6 +260,7 @@ TESTS=(
   tools/check-cross-pr-reverts.test.ts
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
+  tools/incidents.test.ts
   tools/launch-validation.test.ts
   tools/measure-repo-attribution.test.ts
   tools/observer.test.ts
@@ -289,6 +292,7 @@ TESTS=(
   shared/lib/native-agent/certification/scenarios.test.ts
   shared/lib/native-agent/certification/scenario-runner.test.ts
   shared/lib/native-agent/certification/eligibility-gate.test.ts
+  shared/lib/native-agent/certification/live-coding-canary.test.ts
   shared/lib/native-agent/certification/report.test.ts
   shared/lib/native-agent/certification/rollout-regression.test.ts
   tools/native-agent-certify.test.ts
@@ -352,6 +356,7 @@ TESTS=(
   shared/lib/permissions-verifier.test.ts
   shared/lib/plan-validator.test.ts
   shared/lib/post-completion-hook.test.ts
+  shared/lib/branch-publication.test.ts
   shared/lib/pre-pr-verification-gate.test.ts
   shared/lib/pre-pr-verification.test.ts
   shared/lib/project-context-compactor.test.ts

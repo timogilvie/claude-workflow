@@ -34,6 +34,18 @@ trap 'rm -rf "$tmp"' EXIT
 
 helper_file="$tmp/safe-cleanup-helper.sh"
 {
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600'
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_warn"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_timeout_seconds"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_kill_process_tree"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_with_timeout"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "wavemill_cleanup_run"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
@@ -165,6 +177,7 @@ case_merged_deleted() {
   add_task_worktree "$repo" "$branch" "$wt"
   commit_in_worktree "$wt" "feature.txt" "feature"
   git -C "$repo" merge --ff-only "$branch" >/dev/null
+  git -C "$repo" push origin auto/integration >/dev/null 2>&1
 
   out="$(run_helper "$repo" "$wt" "$branch")"
   marker="$(marker_path "$repo" "$branch")"
@@ -172,6 +185,64 @@ case_merged_deleted() {
   branch_exists "$repo" "$branch" && fail "merged branch was retained"
   assert_absent "$wt"
   assert_absent "$marker"
+}
+
+case_pushed_then_local_commit_retained() {
+  local repo branch wt out marker
+  repo="$(setup_repo pushed-then-local)"
+  branch="task/pushed-then-local"
+  wt="$tmp/pushed-then-local/wt"
+  add_task_worktree "$repo" "$branch" "$wt"
+  commit_in_worktree "$wt" "feature.txt" "feature"
+  git -C "$wt" push -u origin "$branch" >/dev/null 2>&1
+  git -C "$repo" fetch origin "$branch" >/dev/null 2>&1
+  commit_in_worktree "$wt" "local.txt" "local"
+
+  out="$(run_helper "$repo" "$wt" "$branch")"
+  marker="$(marker_path "$repo" "$branch")"
+  assert_contains "$out" "rc=10" "pushed-then-local return"
+  branch_exists "$repo" "$branch" || fail "pushed-then-local branch was deleted"
+  assert_exists "$wt"
+  assert_exists "$marker"
+  [[ "$(jq -r '.reason' "$marker")" == "unpushed_commits" ]] || fail "pushed-then-local marker reason mismatch"
+  [[ "$(jq -r '.verificationReason' "$marker")" == "remote_missing_local_head" ]] || fail "pushed-then-local verification reason mismatch"
+  assert_contains "$out" "PRESERVED_UNPUSHED_WORK" "pushed-then-local warning"
+}
+
+case_stale_local_base_uses_origin_base() {
+  local repo branch wt out marker
+  repo="$(setup_repo stale-local-base)"
+  branch="task/stale-local-base"
+  wt="$tmp/stale-local-base/wt"
+  add_task_worktree "$repo" "$branch" "$wt"
+  commit_in_worktree "$wt" "feature.txt" "feature"
+  git -C "$wt" push origin HEAD:auto/integration >/dev/null 2>&1
+
+  out="$(run_helper "$repo" "$wt" "$branch")"
+  marker="$(marker_path "$repo" "$branch")"
+  assert_contains "$out" "rc=0" "stale-local-base return"
+  branch_exists "$repo" "$branch" && fail "stale-local-base branch was retained"
+  assert_absent "$wt"
+  assert_absent "$marker"
+}
+
+case_remote_verification_failure_preserved() {
+  local repo branch wt out marker
+  repo="$(setup_repo remote-verification-failure)"
+  branch="task/remote-verification-failure"
+  wt="$tmp/remote-verification-failure/wt"
+  add_task_worktree "$repo" "$branch" "$wt"
+  commit_in_worktree "$wt" "feature.txt" "feature"
+  git -C "$repo" remote set-url origin "$tmp/remote-verification-failure/missing-origin.git"
+
+  out="$(run_helper "$repo" "$wt" "$branch")"
+  marker="$(marker_path "$repo" "$branch")"
+  assert_contains "$out" "rc=10" "remote-verification-failure return"
+  branch_exists "$repo" "$branch" || fail "remote-verification-failure branch was deleted"
+  assert_exists "$wt"
+  assert_exists "$marker"
+  [[ "$(jq -r '.verificationReason' "$marker")" == base_fetch_failed:* ]] || fail "remote-verification-failure reason mismatch"
+  assert_contains "$out" "PRESERVED_UNPUSHED_WORK" "remote-verification-failure warning"
 }
 
 case_no_new_commits_deleted() {
@@ -244,22 +315,23 @@ case_all_sites_refactored() {
   local non_helper_matches helper_matches
   non_helper_matches="$(grep -nE 'branch -[dD]|worktree remove --force|worktree remove' \
     "$REPO_ROOT/shared/lib/wavemill-mill.sh" \
-    "$REPO_ROOT/shared/lib/wavemill-monitor.sh" || true)"
+    "$REPO_ROOT/shared/lib/wavemill-monitor.sh" \
+    "$REPO_ROOT/shared/lib/wavemill-startup-runner.sh" || true)"
   [[ -z "$non_helper_matches" ]] || fail "unsafe cleanup remains outside helper: $non_helper_matches"
 
-  helper_matches="$(awk '
-    /^safe_remove_task_worktree_and_branch\(\) \{/ { in_fn = 1 }
-    in_fn && /branch -[dD]|worktree remove/ { print }
-    in_fn && /^}/ { in_fn = 0 }
-  ' "$COMMON_SCRIPT")"
+  helper_matches="$(extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch")"
   assert_contains "$helper_matches" "worktree remove" "helper worktree cleanup"
-  assert_contains "$helper_matches" "branch -D" "helper branch cleanup"
+  assert_contains "$helper_matches" "branch \"\$branch_delete_flag\"" "helper branch cleanup"
+  assert_contains "$helper_matches" "branch_delete_flag=\"-D\"" "helper force cleanup only after guard"
   [[ "$helper_matches" != *"--force"* ]] || fail "helper still force-removes worktrees"
 }
 
 case_unpushed_commits_retained
 case_pushed_unmerged_deleted
 case_merged_deleted
+case_pushed_then_local_commit_retained
+case_stale_local_base_uses_origin_base
+case_remote_verification_failure_preserved
 case_no_new_commits_deleted
 case_dirty_worktree_retained
 case_protected_branch_refused

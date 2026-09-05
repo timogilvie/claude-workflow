@@ -174,6 +174,7 @@ for fn in \
   write_native_launch_failure_artifact \
   emit_native_launch_failure_attention \
   native_hook_terminal_failure_detail \
+  native_coding_failure_handoff_reason \
   native_terminal_failure_kind \
   native_terminal_failure_next_action \
   emit_native_terminal_failure_attention \

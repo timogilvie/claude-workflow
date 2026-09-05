@@ -45,6 +45,28 @@ test('classifies provider and ambiguous failures conservatively', () => {
   assert.equal(classifyArmFault({ failureKind: 'invalid-model-id' }), 'harness-fault');
 });
 
+test('classifies the HOK-2933 typed-handoff failure kinds', () => {
+  // A completion-protocol violation is the model's fault: the provider
+  // returned output, but the model never produced a valid completion artifact.
+  assert.equal(classifyArmFault({
+    failureKind: 'native-completion-protocol',
+    detail: 'model emitted apply_patch as assistant text with zero structured tool calls',
+  }), 'model-fault');
+  assert.equal(isModelQualitySignal(classifyArmFault({ failureKind: 'native-completion-protocol' })), true);
+
+  // Unclassified failures must stay out of the quality corpus, even when the
+  // detail contains strings the native-provider-error refinement would match.
+  assert.equal(classifyArmFault({ failureKind: 'native-unclassified' }), 'unknown-fault');
+  assert.equal(classifyArmFault({
+    failureKind: 'native-unclassified',
+    detail: 'some novel agent failure mentioning upstream',
+  }), 'unknown-fault');
+  assert.equal(isModelQualitySignal(classifyArmFault({ failureKind: 'native-unclassified' })), false);
+
+  assert.equal(parseAbortFailureKind('terminal_stage_failure:native-completion-protocol'), 'native-completion-protocol');
+  assert.equal(parseAbortFailureKind('terminal_launch_failure:native-unclassified'), 'native-unclassified');
+});
+
 test('parses abort failure kinds and quality eligibility', () => {
   assert.equal(parseAbortFailureKind('terminal_stage_failure:tool-use-unsupported'), 'tool-use-unsupported');
   assert.equal(parseAbortFailureKind('terminal_stage_failure:empty-model-turn'), 'empty-model-turn');

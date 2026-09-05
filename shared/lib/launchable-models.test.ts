@@ -8,28 +8,20 @@ import { buildLaunchabilityMatrix, LAUNCHABILITY_STAGES, type LaunchabilityStage
 import { resolveModelAgent } from './model-agent-resolution.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
 import { buildGlobalCertificationPath } from './native-agent/certification/loader.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import { resolveCertificationSubject } from './native-agent/certification/identity.ts';
 import { CERTIFICATION_SCHEMA_VERSION } from './native-agent/certification/schema.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './native-agent/certification/storage.ts';
 import { loadLaunchPriorityList } from './openrouter-catalog.ts';
 
 const WATCHLIST_STAGE_MAP = {
-  'deepseek-coder-v2': ['coder'],
-  'qwen-2.5-coder-32b': ['coder'],
   'qwen-3-235b': ['planner', 'coder', 'reviewer'],
-  'qwen-2.5-72b': ['coder'],
   'kimi-k2-thinking': ['planner', 'coder', 'reviewer'],
-  'gemini-2.0-flash': ['coder'],
-  'llama-4-scout': ['coder'],
   'mistral-medium-3': ['coder'],
   'devstral-medium': ['coder'],
   'grok-code-fast': ['coder'],
 } satisfies Record<string, LaunchabilityStage[]>;
 const RETIRED_MODELS = new Set([
-  'deepseek-coder-v2',
-  'qwen-2.5-coder-32b',
-  'qwen-2.5-72b',
-  'gemini-2.0-flash',
   'grok-code-fast',
 ]);
 // Watchlist models whose declared coding-stage context window falls below the
@@ -119,6 +111,10 @@ function writeCertification(modelId: string, certificationRoot?: string): void {
     certifiedAt: '2026-07-15T00:00:00.000Z',
     expiresAt: '2026-09-13T00:00:00.000Z',
     scenarios: [{ scenarioId: 'native-openrouter-workflow-launch', passed: true }],
+    // HOK-2943: coder launchability additionally requires live canary evidence.
+    liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, {
+      ranAt: '2026-07-29T00:00:00.000Z',
+    }),
   };
   writeFileSync(path, JSON.stringify(artifact, null, 2), 'utf-8');
 }
@@ -267,11 +263,11 @@ describe('launch-priority watchlist launchability', () => {
     assert.equal(kimiPlanningCell.launchable, true, 'kimi-k2 should be launchable for planning');
     assert.equal(kimiPlanningCell.agent, 'native-openrouter', 'kimi-k2 should resolve to native-openrouter');
     
-    // Check mistral-large-2 for coding - should be blocked due to context window
+    // mistral-large-2 now points at the 262k mistral-large-2512 endpoint
+    // (HOK-2947), which clears the coding floor.
     const mistralCodingCell = matrix.cells.find(cell => cell.modelId === 'mistral-large-2' && cell.stage === 'coder');
     assert.ok(mistralCodingCell, 'mistral-large-2 coding cell should exist');
-    assert.equal(mistralCodingCell.launchable, false, 'mistral-large-2 should not be launchable for coding');
-    assert.equal(mistralCodingCell.blocker, 'context-window', 'mistral-large-2 should be blocked due to context window');
+    assert.equal(mistralCodingCell.launchable, true, 'mistral-large-2 should be launchable for coding after the repoint');
   });
 
   it('uses explicit certificationRoot instead of the ambient global root', () => {

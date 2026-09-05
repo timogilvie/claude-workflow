@@ -29,6 +29,7 @@ import { projectChallengeIntentForPersistence } from './challenge-execution-cont
 import { resolveOpenRouterModelId } from './openrouter-provider.ts';
 import type { RouteArtifactSnapshot } from './route-artifact.ts';
 import { CERTIFICATION_SCHEMA_VERSION, type CertificationSubject } from './native-agent/certification/schema.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 import {
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   GLOBAL_CERTIFICATION_ROOT_ENV,
@@ -335,6 +336,9 @@ function writeNativeChallengeRepo(options: {
       suiteVersion,
       certifiedAt: RUNTIME_FRESH_CERTIFIED_AT,
       scenarios: [{ scenarioId: 'challenge.native.pass', passed: true }],
+      ...(options.phase !== 'read-only'
+        ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: RUNTIME_FRESH_CERTIFIED_AT }) }
+        : {}),
     }),
   );
   if (options.enablePatchCoding) {
@@ -2004,6 +2008,12 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // Coding-capable phases carry an eligible live canary by default so the
+    // HOK-2943 coder gate exercises the downstream rejection under test;
+    // canary-negative cases override liveCanary explicitly.
+    ...((overrides.phase ?? 'patch') !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: CERT_DATE_FRESH }) }
+      : {}),
     ...overrides,
   };
   writeFileSync(path, JSON.stringify(artifact));
@@ -2781,14 +2791,16 @@ test('phase semantics match router: native implementation is fail-closed and pla
 });
 
 test('plan-stage challenge rejects role-ineligible forced native challenger before route expansion', () => {
+  // HOK-2947 retired qwen-2.5-coder-32b; mistral-medium-3 is the remaining
+  // coding-only launch-priority row that exercises the same rejection path.
   const { repoDir, cleanup } = makeNativeTestRepo({
-    'qwen-2.5-coder-32b': openRouterNativeModelEntry('workflow'),
+    'mistral-medium-3': openRouterNativeModelEntry('workflow'),
   });
   try {
-    writeCertArtifact(repoDir, 'qwen', 'qwen-2.5-coder-32b-instruct', 'v1', { phase: 'workflow' });
+    writeCertArtifact(repoDir, 'mistralai', 'mistral-medium-3-5', 'v1', { phase: 'workflow' });
 
     const result = pickChallengeWorkflowsWithReason(
-      ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'qwen-2.5-coder-32b'],
+      ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'mistral-medium-3'],
       {
         pairId: 'NC-010-R',
         issueId: 'NC-010-R',
@@ -2796,7 +2808,7 @@ test('plan-stage challenge rejects role-ineligible forced native challenger befo
         prompt: 'plan the implementation workflow',
         challengeStage: 'plan',
         primaryModel: 'claude-opus-4-6',
-        suggestedChallengerModel: 'qwen-2.5-coder-32b',
+        suggestedChallengerModel: 'mistral-medium-3',
         repoDir,
         now: TEST_NOW,
         randomFn: () => 0,
@@ -2819,10 +2831,10 @@ test('plan-stage challenge rejects role-ineligible forced native challenger befo
 
     assert.ok(result.pair, 'eligible non-native fallback should keep plan challenge viable');
     assert.equal(result.pair!.challengeStage, 'plan');
-    assert.notEqual(result.pair!.challenger.planner, 'qwen-2.5-coder-32b');
+    assert.notEqual(result.pair!.challenger.planner, 'mistral-medium-3');
     assert.equal(result.pair!.challenger.planner, 'claude-sonnet-4-5-20250929');
     const rejection = (result.nativeCertificationRejections || []).find(
-      (entry) => entry.modelId === 'qwen-2.5-coder-32b' && entry.role === 'planner',
+      (entry) => entry.modelId === 'mistral-medium-3' && entry.role === 'planner',
     );
     assert.ok(rejection, 'role-ineligible native planner challenger must be reported');
     assert.equal(rejection!.reason, 'role-ineligible');

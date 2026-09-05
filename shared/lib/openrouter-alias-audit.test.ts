@@ -65,10 +65,13 @@ describe('openrouter alias audit', () => {
     assert.equal(report.checked, 4);
     assert.equal(report.schemaVersion, '2');
     assert.equal(report.selectableFindings, 0);
+    // HOK-2947 removed the retired aliases' launch-priority mapping rows, so
+    // they no longer resolve to a wire id; grok-code-fast keeps its row.
     assert.deepEqual(report.findings.map((finding) => [finding.alias, finding.reason, finding.selectable]), [
       ['deepseek-coder-v2', 'unresolved-openrouter-id', false],
-      ['gemini-2.0-flash', 'not-found-in-openrouter', false],
+      ['gemini-2.0-flash', 'unresolved-openrouter-id', false],
       ['grok-code-fast', 'not-found-in-openrouter', false],
+      ['qwen-2.5-coder-32b', 'unresolved-openrouter-id', false],
     ]);
   });
 

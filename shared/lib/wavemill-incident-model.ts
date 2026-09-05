@@ -11,6 +11,93 @@ export type IncidentSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 export type IncidentConfidence = 'definite' | 'high' | 'medium' | 'low';
 export type IncidentLifecycle = 'observed' | 'active' | 'resolved' | 'archived';
 
+/**
+ * Bounded root-cause taxonomy. `rootCauseClass` must always be one of these
+ * values; raw diagnostic text belongs in evidence `redactedData`, never in the
+ * class itself. Unbounded free-text classes defeat fingerprint dedup (HOK-2929).
+ */
+export const INCIDENT_ROOT_CAUSE_CLASSES = [
+  // Planning terminal reasons (model_task_harness_outcome)
+  'turn_limit',
+  'tool_call_limit',
+  'wall_clock_limit',
+  'tool_stagnation',
+  'invalid_plan',
+  'empty_final_plan',
+  'provider_error',
+  'aborted',
+  // Workflow / background-job state
+  'orphaned_completion_marker',
+  'failed_background_job',
+  'failed_job_no_result',
+  'missing_eval_records_for_comparison',
+  // Affirmatively remote dependency failures (external_transient_dependency)
+  'remote_ssh_failure',
+  'remote_timeout',
+  'remote_auth_failure',
+  'remote_dependency_failure',
+  // Local harness / configuration conditions
+  'local_parse_failure',
+  'local_config_failure',
+  'native_completion_protocol_failure',
+  'harness_liveness_deadlock',
+  'queue_planner_degraded',
+  'unclassified_local_failure',
+] as const;
+
+export type IncidentRootCauseClass = typeof INCIDENT_ROOT_CAUSE_CLASSES[number];
+
+const ROOT_CAUSE_CLASS_SET = new Set<string>(INCIDENT_ROOT_CAUSE_CLASSES);
+
+/**
+ * Map raw diagnostic text (or a legacy slugified class) to a stable bounded
+ * class. Local harness signatures are checked before remote ones so hook text
+ * mentioning git/github incidentally is not mislabelled as a remote dependency
+ * failure; typed native completion-protocol reasons (HOK-2933) take precedence.
+ */
+export function canonicalizeRootCauseClass(raw: string): IncidentRootCauseClass {
+  const value = (raw ?? '').trim();
+  if (ROOT_CAUSE_CLASS_SET.has(value)) return value as IncidentRootCauseClass;
+  const lower = value.toLowerCase();
+  if (/native[-_ ]completion[-_ ]protocol|no_completion_artifact|invalid_completion_artifact|coding[-_ ]complete|coding[-_ ]blocked[-_ ]completion/.test(lower)) {
+    return 'native_completion_protocol_failure';
+  }
+  if (/blocked[-_ ]completion|live blocking command|auto[-_ ]advance[-_ ]refused/.test(lower)) {
+    return 'harness_liveness_deadlock';
+  }
+  if (/failed[-_ ]to[-_ ]parse|unexpected[-_ ]token|parse[-_ ]error|syntax[-_ ]error|malformed[-_ ]json/.test(lower)) {
+    return 'local_parse_failure';
+  }
+  if (/invalid[-_ ]config|schema[-_ ]validation|missing[-_ ]config/.test(lower)) {
+    return 'local_config_failure';
+  }
+  if (/ls-remote|ssh|publickey|github/.test(lower)) return 'remote_ssh_failure';
+  if (/timeout|timed[-_ ]out/.test(lower)) return 'remote_timeout';
+  if (/credential|permission|auth/.test(lower)) return 'remote_auth_failure';
+  return 'unclassified_local_failure';
+}
+
+/** True when the class describes an affirmatively remote dependency failure. */
+export function isRemoteRootCauseClass(rootCauseClass: IncidentRootCauseClass): boolean {
+  return rootCauseClass.startsWith('remote_');
+}
+
+export type IncidentResolutionAction = 'auto_resolved' | 'operator_resolved' | 'operator_archived';
+
+export interface IncidentResolutionMetadata {
+  action: IncidentResolutionAction;
+  at: string;
+  reason?: string;
+}
+
+export interface IncidentRecurrenceMetadata {
+  /** Number of times a resolved/archived record was reopened by a new distinct event. */
+  count: number;
+  lastRecurredAt: string;
+  /** Lifecycle the record held when the recurrence reopened it. */
+  reopenedFrom: IncidentLifecycle;
+}
+
 export type IncidentEvidenceType =
   | 'planning_result'
   | 'workflow_state'
@@ -54,6 +141,16 @@ export interface IncidentMetadata {
   }>;
   /** Explicit issue identifiers supplied by the incident detector for correlation. */
   knownIssueIds?: string[];
+  /** Stable keys of distinct source events already counted, capped; polling an unchanged event is a no-op. */
+  seenEventKeys?: string[];
+  /** Timestamp of the last distinct source event (as opposed to the last poll). */
+  lastEventAt?: string;
+  /** Consecutive successful observer cycles without a fresh distinct event. */
+  missedCycles?: number;
+  /** How and when the record last transitioned to resolved/archived. */
+  resolution?: IncidentResolutionMetadata;
+  /** Recurrence audit trail: set when a resolved/archived record is reopened. */
+  recurrence?: IncidentRecurrenceMetadata;
   [key: string]: unknown;
 }
 
@@ -68,9 +165,12 @@ export interface IncidentRecord {
   confidence: IncidentConfidence;
   lifecycle: IncidentLifecycle;
   createdAt: string;
+  /** When the first distinct event for this fingerprint was observed; backfilled on legacy records. */
+  firstObservedAt: string;
   lastObservedAt: string;
+  /** Number of distinct source events (not poll cycles) attributed to this fingerprint. */
   occurrenceCount: number;
-  rootCauseClass: string;
+  rootCauseClass: IncidentRootCauseClass;
   summary: string;
   operatorAction: string;
   evidence: IncidentEvidence[];
@@ -79,8 +179,8 @@ export interface IncidentRecord {
 
 export type NewIncidentRecord = Omit<
   IncidentRecord,
-  'schemaVersion' | 'id' | 'fingerprint' | 'createdAt' | 'lastObservedAt' | 'occurrenceCount'
-> & Partial<Pick<IncidentRecord, 'schemaVersion' | 'id' | 'fingerprint' | 'createdAt' | 'lastObservedAt' | 'occurrenceCount'>>;
+  'schemaVersion' | 'id' | 'fingerprint' | 'createdAt' | 'firstObservedAt' | 'lastObservedAt' | 'occurrenceCount'
+> & Partial<Pick<IncidentRecord, 'schemaVersion' | 'id' | 'fingerprint' | 'createdAt' | 'firstObservedAt' | 'lastObservedAt' | 'occurrenceCount'>>;
 
 export function createIncidentDraft(input: NewIncidentRecord): IncidentRecord {
   return {
@@ -94,6 +194,7 @@ export function createIncidentDraft(input: NewIncidentRecord): IncidentRecord {
     confidence: input.confidence,
     lifecycle: input.lifecycle,
     createdAt: input.createdAt ?? '',
+    firstObservedAt: input.firstObservedAt ?? '',
     lastObservedAt: input.lastObservedAt ?? '',
     occurrenceCount: input.occurrenceCount ?? 0,
     rootCauseClass: input.rootCauseClass,

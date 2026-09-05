@@ -101,6 +101,22 @@ else
   fail "cleanup logging still reports generic branch deletion"
 fi
 
+if grep -Fq 'refs/remotes/origin/${base_branch}' <<< "$safe_cleanup" \
+  && grep -Fq 'ls-remote --heads origin "$remote_ref"' <<< "$safe_cleanup" \
+  && grep -Fq 'merge-base --is-ancestor "$local_head_sha" "$remote_head_sha"' <<< "$safe_cleanup"; then
+  pass "cleanup verifies authoritative base and remote head evidence"
+else
+  fail "cleanup is missing authoritative base/head verification"
+fi
+
+if grep -Fq 'branch "$branch_delete_flag" "$task_branch"' <<< "$safe_cleanup" \
+  && grep -Fq 'branch_delete_flag="-D"' <<< "$safe_cleanup" \
+  && grep -Fq 'merged_to_current_head' <<< "$safe_cleanup"; then
+  pass "cleanup selects branch delete mode after guard checks"
+else
+  fail "cleanup branch deletion is not routed through guarded delete mode"
+fi
+
 if grep -Fq 'Local branch cleanup failed after worktree removal: $task_branch' <<< "$safe_cleanup" \
   && grep -Fq 'return 20' <<< "$safe_cleanup"; then
   pass "cleanup retains state when local branch deletion fails"
@@ -110,10 +126,18 @@ fi
 
 if grep -Fq 'Refusing to delete protected branch: $task_branch' <<< "$safe_cleanup" \
   && grep -Fq 'safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner"' "$MILL_SCRIPT" \
-  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm"' "$MONITOR_SCRIPT_FILE"; then
+  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm"' "$MONITOR_SCRIPT_FILE" \
+  && grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure"' "$REPO_DIR/shared/lib/wavemill-startup-runner.sh"; then
   pass "cleanup guards protected branches through shared helper"
 else
   fail "cleanup is missing protected branch guards"
+fi
+
+if ! grep -R -nE 'worktree remove --force|branch -D' \
+  "$MILL_SCRIPT" "$MONITOR_SCRIPT_FILE" "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" >/dev/null; then
+  pass "cleanup has no direct forced deletion outside shared helper"
+else
+  fail "direct forced cleanup remains outside shared helper"
 fi
 
 echo ""

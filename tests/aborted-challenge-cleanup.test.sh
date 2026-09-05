@@ -36,6 +36,18 @@ trap 'rm -rf "$tmp"' EXIT
 
 cleanup_file="$tmp/aborted-cleanup.sh"
 {
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600'
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_warn"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_timeout_seconds"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_kill_process_tree"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_with_timeout"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "wavemill_cleanup_run"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
@@ -61,6 +73,7 @@ run_cleanup_case() {
   CASE_DIR="$case_dir" CLEANUP_FILE="$cleanup_file" TEST_CASE="$test_case" bash -lc '
     set -euo pipefail
     source "$CLEANUP_FILE"
+    wavemill_git_remote_with_timeout() { shift; git "$@"; }
 
     SESSION="wavemill"
     ISSUE="HOK-2839_c"
@@ -131,12 +144,36 @@ EOF
       case "${1:-} ${2:-}" in
         "status --porcelain") return 0 ;;
         "worktree remove") ORDER+="git-worktree;" ; return 0 ;;
+        "fetch origin") return 0 ;;
         "show-ref --verify") return 0 ;;
-        "rev-parse --verify") return 0 ;;
-        "merge-base --is-ancestor") return 0 ;;
-        "rev-list --count") printf "0\n" ; return 0 ;;
-        "rev-list "*) return 0 ;;
-        "branch -D") ORDER+="git-branch;" ; return 0 ;;
+        "rev-parse --verify")
+          case "${3:-}" in
+            *demo-challenger*) printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+            *auto/integration*) printf "%s\n" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+            *) printf "%s\n" "cccccccccccccccccccccccccccccccccccccccc" ;;
+          esac
+          return 0
+          ;;
+        "merge-base --is-ancestor")
+          [[ "$TEST_CASE" != "preserved-local-work" ]]
+          return $?
+          ;;
+        "rev-list --count")
+          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+            printf "1\n"
+          else
+            printf "0\n"
+          fi
+          return 0
+          ;;
+        "rev-list "*)
+          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+            printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          fi
+          return 0
+          ;;
+        "ls-remote --heads") return 0 ;;
+        "branch -D"|"branch -d") ORDER+="git-branch;" ; return 0 ;;
         "worktree prune") return 0 ;;
       esac
       return 0
@@ -169,5 +206,12 @@ output="$(run_cleanup_case persistent-window)"
 [[ "$output" == *"phase=aborted"* ]] || { echo "$output"; echo "persistent window phase not terminal" >&2; exit 1; }
 [[ "$output" == *"attention=needs-user"* ]] || { echo "$output"; echo "persistent window did not request attention" >&2; exit 1; }
 [[ "$output" != *"git-worktree"* ]] || { echo "$output"; echo "persistent window should not remove worktree" >&2; exit 1; }
+
+output="$(run_cleanup_case preserved-local-work)"
+[[ "$output" == *"present=true"* ]] || { echo "$output"; echo "preserved local work should keep task state" >&2; exit 1; }
+[[ "$output" == *"status=aborted"* ]] || { echo "$output"; echo "preserved local work did not terminalize" >&2; exit 1; }
+[[ "$output" == *"phase=aborted"* ]] || { echo "$output"; echo "preserved local work phase not terminal" >&2; exit 1; }
+[[ "$output" == *"attention=needs-user"* ]] || { echo "$output"; echo "preserved local work did not request attention" >&2; exit 1; }
+[[ "$output" != *"cleaned=1"* ]] || { echo "$output"; echo "preserved local work should not be marked cleaned" >&2; exit 1; }
 
 echo "aborted-challenge-cleanup test passed"
