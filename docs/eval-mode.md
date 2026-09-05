@@ -319,6 +319,22 @@ Options:
 
 ## Multi-Repo Aggregation
 
+## Challenge current-head evidence
+
+Challenge comparisons and append-only recovery select an eval only when its
+`challengePairId`, `challengeSide`, canonical PR identity, and
+`evaluatedPrHeadSha` exactly match the arm's current GitHub PR head. When a
+head is re-evaluated, the newest timestamp wins; equal timestamps use a stable
+eval-ID tie-breaker. The resulting comparison provenance records both selected
+eval IDs and evaluated head SHAs.
+
+Historical JSONL rows are never rewritten. A legacy row can be used only when
+its immutable `verificationTelemetry.checked_shas.head` proves the evaluated
+head. Rows without either head field are provisional evidence and recovery or
+comparison refuses them rather than treating today’s PR head as historical
+fact. Refusals expose pair, arm, current head, candidate eval IDs/heads, and a
+stable reason without logging prompts or diffs.
+
 ### Overview
 Combine eval records from multiple repositories into a single JSONL file for cross-repo analysis and ML training using `wavemill eval aggregate`.
 

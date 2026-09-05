@@ -59,6 +59,7 @@ import {
 } from './route-artifact.ts';
 import { printEvalSummary, formatDifficultyDisplay, formatTaskContextDisplay, formatRepoContextDisplay, formatInterventionDisplay } from './eval-summary-printer.ts';
 import { errorMessage } from './error-utils.ts';
+import { resolvePrIdentityMetadata } from './pr-comparison.ts';
 import type {
   EvalExecutedPlanning,
   EvalPhaseDurations,
@@ -484,6 +485,19 @@ export function enrichPostCompletionRecord(
     explicitSide: input.challengeSide,
   });
   const challengeIntent = loadPostCompletionChallengeIntent(input);
+  const verificationTelemetry = loadVerificationTelemetry(input.worktreePath || input.repoDir, input.repoDir);
+  let evaluatedPrHeadSha: string | undefined;
+  const prIdentity = record.prUrl;
+  if (prIdentity) {
+    try {
+      evaluatedPrHeadSha = resolvePrIdentityMetadata(prIdentity, input.repoDir).head_sha;
+    } catch (error) {
+      // Verification telemetry is still immutable evidence when live GitHub
+      // metadata is unavailable at persistence time.
+      evaluatedPrHeadSha = verificationTelemetry?.checked_shas?.head;
+      console.warn(`Post-completion eval: could not resolve evaluated PR head — ${errorMessage(error)}`);
+    }
+  }
 
   enrichTrainingMetadata(record, {
     agentType: input.agentType,
@@ -491,6 +505,7 @@ export function enrichPostCompletionRecord(
     endpoint: getDeepSeekProviderMetadata(record.modelId, input.repoDir)?.endpoint,
     challengePairId: input.challengePairId,
     challengeSide: challengeSide.side,
+    evaluatedPrHeadSha,
     challengeIntent,
     challengeStageEval: buildChallengeStageEval({
       repoDir: input.repoDir,
@@ -518,7 +533,7 @@ export function enrichPostCompletionRecord(
     ),
     executedPlanning: input.executedPlanning,
     planningExecutionOutcome: input.planningExecutionOutcome,
-    verificationTelemetry: loadVerificationTelemetry(input.worktreePath || input.repoDir, input.repoDir),
+    verificationTelemetry,
     phaseDurations: input.phaseDurations,
     routePrediction: input.routePrediction,
     routing: input.routing,

@@ -11,6 +11,7 @@ import type { EvalRecord } from './eval-schema.ts';
 import {
   attachEligibility,
   attachAgentType,
+  attachEvaluatedPrHeadSha,
   attachAttemptedModel,
   attachBudgetMetadata,
   attachChallengeExecutionMetadata,
@@ -121,6 +122,17 @@ describe('eval-record-builder', () => {
     it('should default to "claude" when empty string', () => {
       attachAgentType(baseRecord, '');
       expect(baseRecord.agentType).toBe('claude');
+    });
+  });
+
+  describe('attachEvaluatedPrHeadSha', () => {
+    it('persists only a sanitized non-empty evaluated head', () => {
+      attachEvaluatedPrHeadSha(baseRecord, '  abc123  ');
+      expect(baseRecord.evaluatedPrHeadSha).toBe('abc123');
+
+      const blank = { ...baseRecord, evaluatedPrHeadSha: undefined };
+      attachEvaluatedPrHeadSha(blank, '  ');
+      expect(blank.evaluatedPrHeadSha).toBeUndefined();
     });
   });
 

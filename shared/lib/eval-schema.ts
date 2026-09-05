@@ -102,6 +102,10 @@
  *   recorded agent activity windows instead of presuming every commit is
  *   agent-authored; when no attribution evidence exists it records this type
  *   rather than silently returning zero interventions. Additive. (HOK-2894)
+ * - **1.45.0**: Added optional `evaluatedPrHeadSha`, the authoritative pull
+ *   request head evaluated by a challenge eval. Historical rows remain valid;
+ *   consumers may only derive this from immutable verification telemetry.
+ *   (HOK-2949)
  * - **1.28.0**: Added optional `quarantine_reason` and write-time eval corpus
  *   validation for `taskDescriptor`, non-empty `models_available`, and
  *   canonical reviewer/stage model IDs (HOK-2072); expanded
@@ -181,7 +185,7 @@ import type { ChallengeStage } from './challenge-mode.ts';
  *
  * @since 1.44.0 added unknown_attribution intervention type (HOK-2894)
  */
-export const SCHEMA_VERSION = '1.44.0';
+export const SCHEMA_VERSION = '1.45.0';
 
 export type RoutingRole = 'planner' | 'coder' | 'reviewer';
 
@@ -1784,6 +1788,13 @@ export interface EvalRecord {
 
   /** Pull request URL, if the task produced a PR */
   prUrl?: string;
+
+  /**
+   * Immutable PR head SHA that was evaluated when this row was produced.
+   * This is intentionally distinct from a PR's head when a reader happens to
+   * inspect it later; challenge evidence must match this value exactly.
+   */
+  evaluatedPrHeadSha?: string;
 
   /** Token usage from the LLM judge API call */
   tokenUsage?: TokenUsage;
