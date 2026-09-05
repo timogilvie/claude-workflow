@@ -111,7 +111,10 @@ function validateCatalogSemantics(catalog: ModelRegistryCatalog): void {
     mapId(aliases, alias, entry.id, 'wavemill alias');
 
     const providerNativeId = (supportedModel as { providerNativeId?: unknown } | undefined)?.providerNativeId;
-    if (identity !== undefined) {
+    const lifecycle = (supportedModel as { lifecycle?: unknown } | undefined)?.lifecycle;
+    // Deprecated aliases may retain a historical providerNativeId; every
+    // other alias must map to a distinct provider-native model.
+    if (identity !== undefined || lifecycle !== 'deprecated') {
       mapId(providerNativeIds, providerNativeId, entry.id, 'providerNativeId');
     }
   }

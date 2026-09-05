@@ -184,6 +184,9 @@ export function resolveNativeAgentProviders(
         continue;
       }
 
+      // No explicit launchPhase: the gate infers a coding launch fail-closed
+      // from requiredPhase === 'patch', keeping resolver decisions consistent
+      // with report/router coder eligibility for the same required phase.
       const decision = evaluateNativeProviderGate({
         modelId,
         mode,

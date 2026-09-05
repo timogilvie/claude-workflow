@@ -375,6 +375,7 @@ export function auditLaunchPriorityCoverage(options: AuditOptions = {}): LaunchP
         modelId: model,
         mode: 'task',
         requiredPhase: phaseForRole(role),
+        ...(role === 'coding' ? { launchPhase: 'coding' as const } : {}),
         registry,
         repoDir: options.repoDir,
         apiKeyPresent: options.nativeCertificationApiKeyPresent ?? true,

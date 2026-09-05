@@ -66,6 +66,7 @@ type StageResultShape = {
     iterations?: unknown;
     blockerCount?: unknown;
     warningCount?: unknown;
+    dismissedBlockers?: unknown;
     reviewToolError?: unknown;
     prNumber?: unknown;
     prUrl?: unknown;
@@ -76,6 +77,7 @@ type StageResultShape = {
       blockerCount?: unknown;
       blockingCount?: unknown;
       warningCount?: unknown;
+      dismissedBlockers?: unknown;
       reviewToolError?: unknown;
       findingCount?: unknown;
     };
@@ -232,6 +234,25 @@ function summarizeReviewResult(result: StageResultShape | null | undefined): str
     : typeof review?.warningCount === 'number'
       ? `warnings=${review.warningCount}`
     : '';
+  // Dismissed blockers (HOK-2932): readiness credited through documented
+  // dismissals must be visible in eval records, justification included.
+  const dismissedEntries = Array.isArray(result.artifacts?.dismissedBlockers)
+    ? result.artifacts.dismissedBlockers
+    : Array.isArray(review?.dismissedBlockers)
+      ? review.dismissedBlockers
+      : [];
+  const dismissed = dismissedEntries.length > 0
+    ? `dismissedBlockers=${dismissedEntries.length}`
+    : '';
+  const dismissalJustifications = dismissedEntries
+    .map((entry) => (entry && typeof entry === 'object' && typeof (entry as { justification?: unknown }).justification === 'string'
+      ? (entry as { justification: string }).justification
+      : ''))
+    .filter(Boolean)
+    .join(' | ');
+  const dismissalDetail = dismissalJustifications
+    ? `dismissalJustifications=${truncate(dismissalJustifications, 240)}`
+    : '';
   const toolError = typeof result.artifacts?.reviewToolError === 'string'
     ? `toolError=${truncate(result.artifacts.reviewToolError, 120)}`
     : typeof review?.reviewToolError === 'string'
@@ -245,6 +266,8 @@ function summarizeReviewResult(result: StageResultShape | null | undefined): str
     iterations,
     findings,
     blockers,
+    dismissed,
+    dismissalDetail,
     warnings,
     toolError,
     truncate(result.notes, 120) ? `notes=${truncate(result.notes, 120)}` : '',

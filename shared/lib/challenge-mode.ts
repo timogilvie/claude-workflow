@@ -96,7 +96,8 @@ const NO_VALID_CHALLENGE_DIVERGENCE_REASON = 'no_valid_challenge_divergence';
 export type ChallengeSelectionFailureReason =
   | 'selection_failed'
   | typeof NO_VALID_CHALLENGE_DIVERGENCE_REASON
-  | 'challenge_unavailable';
+  | 'challenge_unavailable'
+  | 'challenge_deferred_selection_health';
 
 export interface ChallengePairSelectionResult<T extends ChallengePairSelection = ChallengePairSelection> {
   pair: T | null;

@@ -8,11 +8,17 @@ import {
   CERTIFICATION_BASE_PATH,
   CERTIFICATION_SCHEMA_VERSION,
   CERTIFICATION_TTL_DAYS,
+  LIVE_CODING_CANARY_SCENARIO_ID,
+  LIVE_CODING_CANARY_TTL_DAYS,
   PHASE_ORDER,
   allScenariosPassed,
+  evaluateLiveCodingCanaryEligibility,
   isCertificationFresh,
+  isLiveCodingCanaryFresh,
+  liveCodingCanaryMatchesSubject,
   phaseSatisfies,
   type CertificationSubject,
+  type LiveCodingCanaryResult,
   type NativeCertificationArtifact,
 } from './schema.ts';
 import {
@@ -729,5 +735,168 @@ describe('fixtures', () => {
     } finally {
       cleanupRepo(repoDir);
     }
+  });
+});
+
+// ─── Live coding canary schema (HOK-2943) ──────────────────────────────────
+
+describe('live coding canary schema', () => {
+  const NOW = new Date('2026-09-01T00:00:00.000Z');
+  const RAN_AT = new Date(NOW.getTime() - 24 * 60 * 60 * 1000).toISOString();
+
+  function makeCanary(overrides: Partial<LiveCodingCanaryResult> = {}): LiveCodingCanaryResult {
+    return {
+      scenarioId: LIVE_CODING_CANARY_SCENARIO_ID,
+      status: 'pass',
+      isLive: true,
+      phase: 'coding',
+      provider: VALID_SUBJECT.providerId,
+      model: VALID_SUBJECT.providerModelId,
+      providerNativeId: VALID_SUBJECT.providerNativeId,
+      identityFingerprint: VALID_SUBJECT.identityFingerprint,
+      catalogHash: VALID_SUBJECT.catalogHash,
+      suiteVersion: 'v1',
+      ranAt: RAN_AT,
+      limits: { maxWallClockMs: 240_000, maxTurns: 6, maxToolCalls: 10, maxTotalTokens: 60_000, maxCostUsd: 0.5 },
+      ...overrides,
+    };
+  }
+
+  it('artifact with liveCanary validates against schema.json', () => {
+    const artifact = makeValidArtifact({
+      liveCanary: makeCanary({
+        usage: { turns: 2, toolCalls: 2, inputTokens: 1000, outputTokens: 100, wallClockMs: 1500, costUsd: 0.01 },
+        evidence: {
+          structuredMutationToolCalls: 2,
+          mutationToolNames: ['apply_patch', 'create_marker'],
+          expectedSentinelHash: 'a'.repeat(64),
+          actualSentinelHash: 'a'.repeat(64),
+          changedPaths: ['src/canary.ts', 'features/live-canary/.coding-complete'],
+          completionArtifactPresent: true,
+          completionArtifactHash: 'b'.repeat(64),
+        },
+        attempts: 1,
+      }),
+    });
+    assert.equal(validateCertificationSchema(artifact), true, JSON.stringify(validateCertificationSchema.errors));
+  });
+
+  it('schema.json rejects unknown liveCanary properties and invalid statuses', () => {
+    const withUnknown = makeValidArtifact({
+      liveCanary: { ...makeCanary(), rogueField: true } as unknown as LiveCodingCanaryResult,
+    });
+    assert.equal(validateCertificationSchema(withUnknown), false);
+
+    const withBadStatus = makeValidArtifact({
+      liveCanary: { ...makeCanary(), status: 'maybe' } as unknown as LiveCodingCanaryResult,
+    });
+    assert.equal(validateCertificationSchema(withBadStatus), false);
+  });
+
+  it('parses artifacts with and without liveCanary (backward compatible)', () => {
+    const repoDir = makeTempRepo();
+    try {
+      writeArtifact(repoDir, 'anthropic', 'legacy', 'v1', makeValidArtifact({ model: 'legacy' }));
+      const legacy = loadCertification(repoDir, 'anthropic', 'legacy', 'v1');
+      assert.equal(legacy.ok, true);
+      assert.equal((legacy as { artifact: NativeCertificationArtifact }).artifact.liveCanary, undefined);
+
+      writeArtifact(repoDir, 'anthropic', 'canaryful', 'v1', makeValidArtifact({
+        model: 'canaryful',
+        liveCanary: makeCanary(),
+      }));
+      const canaryful = loadCertification(repoDir, 'anthropic', 'canaryful', 'v1');
+      assert.equal(canaryful.ok, true);
+      const parsed = (canaryful as { artifact: NativeCertificationArtifact }).artifact.liveCanary;
+      assert.ok(parsed, 'liveCanary must round-trip through the parser');
+      assert.equal(parsed!.status, 'pass');
+      assert.equal(parsed!.isLive, true);
+      assert.deepEqual(parsed!.limits, makeCanary().limits);
+    } finally {
+      cleanupRepo(repoDir);
+    }
+  });
+
+  it('treats a present-but-invalid liveCanary as a malformed artifact (fail closed)', () => {
+    const repoDir = makeTempRepo();
+    try {
+      writeArtifact(repoDir, 'anthropic', 'broken', 'v1', makeValidArtifact({
+        model: 'broken',
+        liveCanary: { status: 'pass' } as unknown as LiveCodingCanaryResult,
+      }));
+      const result = loadCertification(repoDir, 'anthropic', 'broken', 'v1');
+      assert.deepEqual(result, { ok: false, reason: 'malformed' });
+    } finally {
+      cleanupRepo(repoDir);
+    }
+  });
+
+  it('isLiveCodingCanaryFresh honors the derived TTL and explicit expiry boundary', () => {
+    const ttlMs = LIVE_CODING_CANARY_TTL_DAYS * 24 * 60 * 60 * 1000;
+    const canary = makeCanary();
+    const ranAtMs = Date.parse(canary.ranAt);
+    assert.equal(isLiveCodingCanaryFresh(canary, new Date(ranAtMs + ttlMs - 1)), true, 'valid just before TTL');
+    assert.equal(isLiveCodingCanaryFresh(canary, new Date(ranAtMs + ttlMs)), false, 'invalid at TTL');
+
+    const explicit = makeCanary({ expiresAt: NOW.toISOString() });
+    assert.equal(isLiveCodingCanaryFresh(explicit, new Date(NOW.getTime() - 1)), true, 'valid just before expiresAt');
+    assert.equal(isLiveCodingCanaryFresh(explicit, NOW), false, 'invalid at expiresAt');
+    assert.equal(isLiveCodingCanaryFresh(explicit, new Date(NOW.getTime() + 1)), false, 'invalid after expiresAt');
+  });
+
+  it('liveCodingCanaryMatchesSubject rejects each identity field mismatch', () => {
+    const canary = makeCanary();
+    assert.equal(liveCodingCanaryMatchesSubject(canary, VALID_SUBJECT, 'v1'), true);
+    assert.equal(liveCodingCanaryMatchesSubject(canary, VALID_SUBJECT, 'v2'), false);
+    assert.equal(liveCodingCanaryMatchesSubject({ ...canary, provider: 'x' }, VALID_SUBJECT, 'v1'), false);
+    assert.equal(liveCodingCanaryMatchesSubject({ ...canary, model: 'x' }, VALID_SUBJECT, 'v1'), false);
+    assert.equal(liveCodingCanaryMatchesSubject({ ...canary, providerNativeId: 'x' }, VALID_SUBJECT, 'v1'), false);
+    assert.equal(liveCodingCanaryMatchesSubject({ ...canary, identityFingerprint: 'x' }, VALID_SUBJECT, 'v1'), false);
+    assert.equal(liveCodingCanaryMatchesSubject({ ...canary, catalogHash: 'x' }, VALID_SUBJECT, 'v1'), false);
+  });
+
+  it('evaluateLiveCodingCanaryEligibility fails closed for every non-pass shape', () => {
+    const base = makeValidArtifact();
+
+    assert.deepEqual(
+      evaluateLiveCodingCanaryEligibility(base, 'v1', NOW),
+      { eligible: false, reason: 'missing' },
+    );
+
+    const skipped = makeValidArtifact({ liveCanary: makeCanary({ status: 'skipped', reason: 'provider_config_error' }) });
+    assert.equal((evaluateLiveCodingCanaryEligibility(skipped, 'v1', NOW) as { reason: string }).reason, 'missing');
+
+    const failed = makeValidArtifact({ liveCanary: makeCanary({ status: 'fail', reason: 'wrong_mutation' }) });
+    assert.equal((evaluateLiveCodingCanaryEligibility(failed, 'v1', NOW) as { reason: string }).reason, 'failed');
+
+    const inconclusive = makeValidArtifact({ liveCanary: makeCanary({ status: 'inconclusive', reason: 'provider_transient_error' }) });
+    assert.equal((evaluateLiveCodingCanaryEligibility(inconclusive, 'v1', NOW) as { reason: string }).reason, 'inconclusive');
+
+    const nonLive = makeValidArtifact({ liveCanary: makeCanary({ isLive: false }) });
+    assert.equal((evaluateLiveCodingCanaryEligibility(nonLive, 'v1', NOW) as { reason: string }).reason, 'not-live');
+
+    const stale = makeValidArtifact({
+      liveCanary: makeCanary({ ranAt: new Date(NOW.getTime() - (LIVE_CODING_CANARY_TTL_DAYS + 1) * 24 * 60 * 60 * 1000).toISOString() }),
+    });
+    assert.equal((evaluateLiveCodingCanaryEligibility(stale, 'v1', NOW) as { reason: string }).reason, 'stale');
+
+    const mismatch = makeValidArtifact({ liveCanary: makeCanary({ providerNativeId: 'someone-else' }) });
+    assert.equal((evaluateLiveCodingCanaryEligibility(mismatch, 'v1', NOW) as { reason: string }).reason, 'identity-mismatch');
+
+    const good = makeValidArtifact({ liveCanary: makeCanary() });
+    assert.equal(evaluateLiveCodingCanaryEligibility(good, 'v1', NOW).eligible, true);
+  });
+
+  it('historical v2 artifacts never satisfy the live canary requirement', () => {
+    const v2 = {
+      schemaVersion: 2,
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      phase: 'workflow',
+      suiteVersion: 'v1',
+      certifiedAt: RAN_AT,
+      scenarios: [{ scenarioId: 's1', passed: true }],
+    } as unknown as NativeCertificationArtifact;
+    assert.deepEqual(evaluateLiveCodingCanaryEligibility(v2, 'v1', NOW), { eligible: false, reason: 'missing' });
   });
 });

@@ -901,6 +901,42 @@ challenge_stage_for_launch_env() {
   esac
 }
 
+challenge_selection_health_varied_model() {
+  local stage
+  stage="$(challenge_stage_for_launch_env "${1:-implementation}")"
+  case "$stage" in
+    plan) printf '%s\n' "${2:-${3:-}}" ;;
+    review) printf '%s\n' "${4:-${3:-}}" ;;
+    *) printf '%s\n' "${3:-}" ;;
+  esac
+}
+
+challenge_selection_health_ack_launch() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts ack-launch \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_stage_for_launch_env "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
+challenge_selection_health_release() {
+  local pair_id="${1:-}" stage="${2:-}" model="${3:-}"
+  [[ -n "$pair_id" && -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$pair_id" \
+      --stage "$(challenge_stage_for_launch_env "$stage")" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
+}
+
 write_openrouter_warning_cache() {
   local warning_text="${1:-}"
   local warning_file="/tmp/${SESSION}-openrouter-warning.txt"
@@ -1166,6 +1202,33 @@ log_challenge_unavailable_plan() {
   echo "$challenge_plan" | jq -r '.candidateDiagnostics[]? | "  candidate: \(.modelId) reason=\(.reason) provider=\(.provider // "unknown")"' 2>/dev/null | while IFS= read -r line; do
     [[ -n "$line" ]] && log_error "$line"
   done
+}
+
+log_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local reserved circuit reason
+  reserved=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByReservation // []) | length' 2>/dev/null || echo "0")
+  circuit=$(echo "$challenge_plan" | jq -r '(.selectionHealth.excludedByCircuit // []) | length' 2>/dev/null || echo "0")
+  reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+  if [[ "$reserved" != "0" || "$circuit" != "0" || "$reason" == "challenge_deferred_selection_health" ]]; then
+    log "status" "  $issue: challenge selection health filtered candidates (reserved=$reserved, circuit=$circuit, reason=${reason:-selected})"
+  fi
+}
+
+release_challenge_selection_health_plan() {
+  local issue="$1" challenge_plan="$2"
+  local stage model
+  stage=$(echo "$challenge_plan" | jq -r '.challengeStage // empty' 2>/dev/null || echo "")
+  model=$(echo "$challenge_plan" | jq -r '.entries[1].variedModel // .entries[1].model // empty' 2>/dev/null || echo "")
+  [[ -n "$stage" && -n "$model" && -n "${REPO_DIR:-}" ]] || return 0
+  [[ -f "$REPO_DIR/tools/challenge-selection-health.ts" ]] || return 0
+  (
+    cd "$REPO_DIR" && npx tsx tools/challenge-selection-health.ts release \
+      --repo-dir "$REPO_DIR" \
+      --pair-id "$issue" \
+      --stage "$stage" \
+      --model "$model"
+  ) >/dev/null 2>&1 || true
 }
 
 record_planning_launch_route_snapshot() {
@@ -1475,7 +1538,18 @@ challenge_cancel_challenger_arm() {
       local wt_dir="${WORKTREE_ROOT}/${challenger_slug}"
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
       local task_branch="task/${challenger_slug}"
-      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || true
+      local cleanup_rc=0
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || cleanup_rc=$?
+      if [[ "$cleanup_rc" -eq 10 ]]; then
+        set_window_attention_state "$win" "needs-user"
+        log_warn "  $challenger_key cleanup preserved local work during challenge collapse; keeping task state"
+        return 1
+      fi
+      if [[ "$cleanup_rc" -eq 20 ]]; then
+        set_window_attention_state "$win" "needs-user"
+        log_warn "  $challenger_key cleanup failed during challenge collapse; keeping task state"
+        return 1
+      fi
     fi
 
     git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
@@ -1532,10 +1606,12 @@ challenge_assert_arms_diverge() {
 
 update_free_slots_state() {
   local slots="$1"
+  local queue_owned="${queue_owned_count:-0}"
   [[ -r "$STATE_FILE" && -s "$STATE_FILE" ]] || return 0
   if ! state_mutate "$STATE_FILE" \
-     '.freeSlots = $slots | .updated = (now | todate)' \
-     --argjson slots "$slots"; then
+     '.freeSlots = $slots | .queueOwnedTasks = $queueOwned | .updated = (now | todate)' \
+     --argjson slots "$slots" \
+     --argjson queueOwned "$queue_owned"; then
     log_warn "update_free_slots_state: failed to update free slots"
   fi
 }
@@ -2357,6 +2433,244 @@ post_pr_reconciliation_enabled() {
   local recon_json
   recon_json=$(post_pr_reconciliation_config_json "$wt_dir")
   jq -r 'if .enabled == true then "true" else "false" end' <<< "$recon_json" 2>/dev/null || echo "false"
+}
+
+# ── Queue-owned pane release (HOK-2937) ─────────────────────────────────────
+
+PANE_RELEASE_PREREQ_WARNED=false
+
+pane_release_config_json() {
+  local wt_dir="$1"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$wt_dir/.wavemill-config.json"
+  local local_config="$wt_dir/.wavemill-config.local.json"
+  local user_json='{}' repo_json='{}' local_json='{}'
+
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+
+  jq -n -c \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '
+    ({ready:{paneRelease:{enabled:false}}} * $user * $repo * $local).ready.paneRelease
+    ' 2>/dev/null || echo '{"enabled":false}'
+}
+
+pane_release_enabled() {
+  local wt_dir="$1"
+  local release_json
+  release_json=$(pane_release_config_json "$wt_dir")
+  if [[ "$(jq -r 'if .enabled == true then "true" else "false" end' <<< "$release_json" 2>/dev/null || echo "false")" != "true" ]]; then
+    printf '%s\n' "false"
+    return 0
+  fi
+  if [[ "$(post_pr_reconciliation_enabled "$wt_dir")" != "true" ]]; then
+    if [[ "${PANE_RELEASE_PREREQ_WARNED:-false}" != "true" ]]; then
+      log_warn "ready.paneRelease.enabled requires ready.postPrReconciliation.enabled, retaining legacy panes"
+      PANE_RELEASE_PREREQ_WARNED=true
+    fi
+    printf '%s\n' "false"
+    return 0
+  fi
+  printf '%s\n' "true"
+}
+
+pane_release_marker_path() {
+  local state_dir="$1"
+  printf '%s\n' "$state_dir/.pane-release-blocked.json"
+}
+
+pane_release_reason_actionable() {
+  case "$1" in
+    dirty-worktree|unpushed-commits|no-remote-branch|git-error|capsule-invalid:*|capsule-head-mismatch|review-not-passed|review-stale|live-agent-child|liveness-indeterminate|pending-approval|attention-marker-present|reconciliation-lease-held|pr-not-open)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+write_pane_release_blocked_marker() {
+  local state_dir="$1" reason="$2" wt_dir="${3:-}" head_sha=""
+  [[ -n "$state_dir" ]] || return 0
+  if [[ -n "$wt_dir" ]]; then
+    head_sha="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$head_sha" ]] || head_sha="$(git -C "$state_dir" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$head_sha" ]] || return 0
+  marker_write "$(pane_release_marker_path "$state_dir")" --kind pane-release-blocked --head "$head_sha" --reason "$reason"
+}
+
+clear_stale_pane_release_blocked_marker() {
+  local state_dir="$1" wt_dir="${2:-}" marker head_sha=""
+  marker="$(pane_release_marker_path "$state_dir")"
+  [[ -f "$marker" ]] || return 0
+  if [[ -n "$wt_dir" ]]; then
+    head_sha="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [[ -n "$head_sha" ]] || return 0
+  if marker_is_stale "$marker" "$head_sha"; then
+    marker_clear "$marker"
+  fi
+}
+
+fresh_hook_state_for_issue() {
+  local issue="$1" hook_file="/tmp/wavemill-${SESSION}-${issue}.hook"
+  local hook_ts now staleness
+  [[ -f "$hook_file" ]] || return 1
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  [[ "$hook_ts" =~ ^[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  staleness=$((now - hook_ts))
+  (( staleness < 300 )) || return 1
+  jq -r '.state // empty' "$hook_file" 2>/dev/null || true
+}
+
+pane_release_preflight() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5"
+  local branch="${6:-}" base_branch="${7:-${BASE_BRANCH:-main}}" pr_state_value current_head review_status
+  local validate_out validate_reason capsule_review_head safety_reason target pane_pid live_rc hook_state
+
+  if [[ "$(pane_release_enabled "$wt_dir")" != "true" ]]; then
+    printf '%s\n' "flag-off"
+    return 1
+  fi
+  [[ -n "$state_dir" && -d "$state_dir" ]] || { printf '%s\n' "context-missing"; return 1; }
+  [[ -n "$wt_dir" && -d "$wt_dir" ]] || { printf '%s\n' "worktree-missing"; return 1; }
+  [[ -n "$pr_number" ]] || { printf '%s\n' "pr-missing"; return 1; }
+
+  pr_state_value="$(pr_state "$pr_number" 2>/dev/null || echo "")"
+  [[ "$pr_state_value" == "OPEN" ]] || { printf '%s\n' "pr-not-open"; return 1; }
+
+  review_result_passes_ready_gate "$state_dir" || { printf '%s\n' "review-not-passed"; return 1; }
+  review_status="$(jq -r '.status // empty' "$state_dir/.review-result.json" 2>/dev/null || echo "")"
+  [[ "$review_status" != "stale" ]] || { printf '%s\n' "review-stale"; return 1; }
+  if reconciliation_review_invalidated_by_commit "$state_dir" "$wt_dir"; then
+    printf '%s\n' "review-stale"
+    return 1
+  fi
+
+  if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
+    validate_reason="$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")"
+    printf 'capsule-invalid:%s\n' "$validate_reason"
+    return 1
+  fi
+  current_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  [[ -n "$current_head" ]] || { printf '%s\n' "git-error"; return 1; }
+  capsule_review_head="$(jq -r '.review.reviewHeadSha // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || echo "")"
+  [[ "$capsule_review_head" == "$current_head" ]] || { printf '%s\n' "capsule-head-mismatch"; return 1; }
+
+  safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "$base_branch" 2>/dev/null || true)"
+  [[ "$safety_reason" == "ok" ]] || { printf '%s\n' "${safety_reason:-git-error}"; return 1; }
+
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -n "$target" && "$(command -v tmux 2>/dev/null || true)" != "" ]]; then
+    pane_pid="$(tmux list-panes -t "$(_tmux_target_join "$SESSION" "$target")" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
+    mill_pane_has_live_blocking_process "$pane_pid" || live_rc=$?
+    live_rc="${live_rc:-0}"
+    case "$live_rc" in
+      0) printf '%s\n' "live-agent-child"; return 1 ;;
+      2) printf '%s\n' "liveness-indeterminate"; return 1 ;;
+    esac
+  fi
+
+  hook_state="$(fresh_hook_state_for_issue "$issue" 2>/dev/null || true)"
+  case "$hook_state" in
+    working|waiting|approval-needed)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+    blocked)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+    error)
+      printf '%s\n' "pending-approval"
+      return 1
+      ;;
+  esac
+  if [[ -f "$state_dir/.needs-attention" ]] && ! marker_is_stale "$state_dir/.needs-attention" "$current_head"; then
+    printf '%s\n' "attention-marker-present"
+    return 1
+  fi
+  if reconciliation_lease_held "$state_dir"; then
+    printf '%s\n' "reconciliation-lease-held"
+    return 1
+  fi
+
+  printf '%s\n' "ok"
+  return 0
+}
+
+release_task_pane_window_only() {
+  local issue="$1" slug="$2" wt_dir="$3" target
+  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  if [[ -n "$target" ]] && command -v tmux >/dev/null 2>&1; then
+    tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+    if _tmux_window_target_exists "$SESSION" "$target" "$wt_dir"; then
+      return 1
+    fi
+  fi
+  rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
+  return 0
+}
+
+release_task_pane() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5"
+  local current_head capsule_digest=""
+  current_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  capsule_digest="$(jq -r '.foundationDigest // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || true)"
+  set_task_queue_owned "$issue" "$capsule_digest" || return 1
+  release_task_pane_window_only "$issue" "$slug" "$wt_dir" || return 1
+  marker_clear "$(pane_release_marker_path "$state_dir")"
+  log "status" "🪁 $issue → pane released; queue-owned (PR #$pr_number, head ${current_head:0:7})"
+  return 0
+}
+
+prepare_released_task_for_reconciliation() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5" current_head="$6"
+  local validate_out validate_reason capsule_head lease_out
+  if [[ "$(get_task_execution_owner "$issue")" != "queue" || "$(get_task_pane_state "$issue")" != "released" ]]; then
+    return 0
+  fi
+  if ! validate_out=$(npx tsx "$TOOLS_DIR/reconciliation-capsule.ts" validate --feature-dir "$state_dir" 2>/dev/null); then
+    validate_reason="$(jq -r '.reason // "capsule_malformed"' <<< "$validate_out" 2>/dev/null || echo "capsule_malformed")"
+    write_ready_attention_file "$state_dir" "Reconciliation capsule invalid ($validate_reason) for PR #$pr_number - refusing pane rehydration."
+    return 1
+  fi
+  capsule_head="$(jq -r '.incident.headSha // .review.reviewHeadSha // empty' "$state_dir/.reconciliation-context.json" 2>/dev/null || echo "")"
+  if [[ -n "$capsule_head" && -n "$current_head" && "$capsule_head" != "$current_head" ]]; then
+    bounded_retry_clear "$state_dir" "ready-remediation"
+    log "status" "  ⏭ $issue: stale reconciliation request at ${capsule_head:0:7}, current head ${current_head:0:7}"
+    return 1
+  fi
+  lease_out="$(reconciliation_lease_acquire "$state_dir" "$pr_number" "$current_head" 2>/dev/null || true)"
+  if [[ "$lease_out" != "ok" ]]; then
+    log "debug" "  $issue: reconciliation launch skipped ($lease_out)"
+    return 1
+  fi
+  if ! set_task_reconciliation_owned "$issue"; then
+    reconciliation_lease_release "$state_dir"
+    return 1
+  fi
+  return 0
+}
+
+ensure_ready_worker_window() {
+  local issue="$1" slug="$2" state_dir="$3" wt_dir="$4" pr_number="$5" current_head="$6"
+  local win
+  if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
+    prepare_released_task_for_reconciliation "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head" || return 1
+  elif [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]] \
+    && reconciliation_lease_held "$state_dir"; then
+    return 1
+  fi
+  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")" || return 1
+  persist_task_window_id "$issue" "$win"
+  printf '%s\n' "$win"
+  return 0
 }
 
 reconciliation_feature_task_packet() {
@@ -4256,9 +4570,40 @@ native_hook_terminal_failure_detail() {
   printf '%s\n' "$detail"
 }
 
+# Read the typed reason from the coding stage's failure handoff, if present.
+# Prints the reason on stdout; returns non-zero when the file is absent,
+# malformed, fails schema validation, or the tool cannot run — callers treat
+# every non-zero as "no typed evidence" and fall back to substring matching.
+native_coding_failure_handoff_reason() {
+  local feature_dir="${1:-}"
+  local handoff_file="$feature_dir/.coding-failure-handoff.json"
+  [[ -n "$feature_dir" && -f "$handoff_file" ]] || return 1
+  [[ -n "${TOOLS_DIR:-}" ]] || return 1
+  npx tsx "$TOOLS_DIR/read-coding-failure-handoff.ts" "$handoff_file" 2>/dev/null
+}
+
+# Classify a terminal native failure (HOK-2933). Precedence contract:
+#   1. Typed handoff reason (optional 2nd arg, from .coding-failure-handoff.json):
+#      no_completion_artifact / invalid_completion_artifact →
+#      native-completion-protocol. The model violated the coding
+#      completion/tool protocol — never a provider fault, so substring
+#      matching is skipped entirely.
+#   2. Substring matching on the failure detail. A typed provider_error also
+#      runs this so it can refine into transient/credit/config sub-kinds.
+#   3. Default: native-provider-error only when the handoff typed
+#      provider_error; native-unclassified otherwise — never blame the
+#      provider without evidence.
 native_terminal_failure_kind() {
-  local detail="${1:-}"
+  local detail="${1:-}" handoff_reason="${2:-}"
   local lower
+
+  case "$handoff_reason" in
+    no_completion_artifact)
+      printf 'native-completion-protocol\n'; return 0 ;;
+    invalid_completion_artifact)
+      printf 'native-completion-protocol\n'; return 0 ;;
+  esac
+
   lower="$(printf '%s' "$detail" | tr '[:upper:]' '[:lower:]')"
 
   case "$lower" in
@@ -4283,7 +4628,11 @@ native_terminal_failure_kind() {
     *"finish_reason: error"*|*"finish reason"*"error"*|*"idle timeout"*|*"stream ended without"*|*"without finish_reason"*|*"truncated stream"*|*"server error"*|*"bad gateway"*|*"service unavailable"*|*"gateway timeout"*|*"overloaded"*|*"upstream"*)
       printf 'provider-transient-error\n'; return 0 ;;
   esac
-  printf 'native-provider-error\n'
+  if [[ "$handoff_reason" == "provider_error" ]]; then
+    printf 'native-provider-error\n'
+  else
+    printf 'native-unclassified\n'
+  fi
 }
 
 native_terminal_failure_next_action() {
@@ -4304,6 +4653,10 @@ native_terminal_failure_next_action() {
       printf 'relaunch native coding; the runtime exhausted bounded continuation after empty model turns\n' ;;
     tool-use-unsupported)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
+    native-completion-protocol)
+      printf "model ended the phase without a valid completion artifact (protocol violation, not a provider fault) - check the model's structured tool-call compatibility before relaunching\n" ;;
+    native-unclassified)
+      printf 'inspect the terminal failure detail and classify it manually - unrecognized failure signature, extend the classifier when this shape recurs\n' ;;
     *)
       printf 'inspect the native provider error, then relaunch the phase\n' ;;
   esac
@@ -4313,7 +4666,7 @@ native_terminal_failure_next_action() {
 # quarantined pair. Returns 0 when it handled the issue (caller should stop).
 emit_native_terminal_failure_attention() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4" win_target="$5" fallback_agent="${6:-}" fallback_model="${7:-}"
-  local stage_status detail failure_kind next_action agent model notes artifacts_json is_challenge
+  local stage_status detail handoff_reason failure_kind next_action agent model notes artifacts_json is_challenge
 
   stage_status="$(read_stage_status "$feature_dir" "$stage")"
   [[ "$stage_status" == "running" ]] || return 1
@@ -4328,20 +4681,29 @@ emit_native_terminal_failure_attention() {
   agent_or_model_is_native_for_recovery "$agent" "$model" "" || return 1
 
   detail="$(native_hook_terminal_failure_detail "$issue")" || return 1
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # Only the coding stage produces a typed failure handoff; other stages use
+  # the substring/default classification path unchanged.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   if [[ "$failure_kind" == "provider-credit-exhausted" ]]; then
     write_openrouter_warning_cache "OpenRouter credits exhausted: $next_action"
   fi
 
   notes="Native ${stage} failed (${failure_kind}): ${detail} Next: ${next_action}"
+  [[ -z "$handoff_reason" ]] || notes+=" (typed handoff: ${handoff_reason})"
 
   artifacts_json="$(jq -cn \
     --arg paneTarget "$win_target" \
     --arg failureKind "$failure_kind" \
     --arg detail "$detail" \
     --arg nextAction "$next_action" \
-    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction}' \
+    --arg handoffReason "$handoff_reason" \
+    '{type:"nativeTerminalFailure", paneTarget:$paneTarget, failureKind:$failureKind, detail:$detail, nextAction:$nextAction,
+      handoffReason:(if $handoffReason == "" then null else $handoffReason end)}' \
     2>/dev/null || printf '{}')"
 
   # Quarantine first: challenge_abort_pair also writes a stage result, so the
@@ -4383,7 +4745,7 @@ emit_native_terminal_failure_attention() {
 # state on every monitor cycle.
 emit_challenge_stage_failure_quarantine() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4"
-  local is_challenge existing detail failure_kind next_action model
+  local is_challenge existing detail handoff_reason failure_kind next_action model
 
   is_challenge="$(get_task_meta "$issue" "challenge" 2>/dev/null || true)"
   [[ "$is_challenge" == "true" ]] || return 1
@@ -4396,9 +4758,18 @@ emit_challenge_stage_failure_quarantine() {
   [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
   [[ -n "$detail" ]] || detail="${stage} stage reported failed without detail"
 
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # Typed handoff evidence (coding stage only) takes precedence over the
+  # substring heuristics; other stages never produce one.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   next_action="$(native_terminal_failure_next_action "$failure_kind")"
   model="$(stage_result_field "$feature_dir" "$stage" "model")"
+  # Preserve the typed reason in the abort record. Appended only after
+  # classification so the token never perturbs substring matching.
+  [[ -z "$handoff_reason" ]] || detail+=" [typed handoff reason: ${handoff_reason}]"
 
   challenge_abort_pair "$issue" "$feature_dir" "$win" "$stage" "$model" \
     "terminal_stage_failure:${failure_kind}" "$detail" "$next_action" \
@@ -4602,7 +4973,7 @@ record_challenger_transient_retry_contract_failure() {
 #       emit_challenge_stage_failure_quarantine call is then an idempotent no-op.
 maybe_retry_challenger_transient_phase() {
   local issue="$1" feature_dir="$2" stage="$3" win="$4"
-  local is_challenge role existing detail failure_kind retry_file retry_state
+  local is_challenge role existing detail handoff_reason failure_kind retry_file retry_state
   local stored_stage stored_head count last_at now max backoff agent model result_agent
   local slug wt_dir branch title issue_json contract_payload depth review_mode rc=0
   local current_head launch_identity launch_ok launch_reason launch_detail lock_dir lock_acquired=0
@@ -4620,7 +4991,14 @@ maybe_retry_challenger_transient_phase() {
   detail="$(native_hook_terminal_failure_detail "$issue" 2>/dev/null || true)"
   [[ -n "$detail" ]] || detail="$(stage_result_field "$feature_dir" "$stage" "notes")"
   [[ -n "$detail" ]] || return 1
-  failure_kind="$(native_terminal_failure_kind "$detail")"
+  # A typed completion-protocol handoff must never be relaunched as a
+  # transient provider stall, even when the detail contains a transient-looking
+  # word — the typed evidence wins over the substring heuristics.
+  handoff_reason=""
+  if [[ "$stage" == "coding" ]]; then
+    handoff_reason="$(native_coding_failure_handoff_reason "$feature_dir" 2>/dev/null || true)"
+  fi
+  failure_kind="$(native_terminal_failure_kind "$detail" "$handoff_reason")"
   [[ "$failure_kind" == "provider-transient-error" ]] || return 1
 
   slug="$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')"
@@ -5710,6 +6088,26 @@ _restore_inflight_task_window_if_missing() {
   [[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
   local feature_dir="${wt_dir}/features/${slug}"
   _RESTORE_STATE="none"
+
+  if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
+    log "debug" "$issue → queue-owned released task has no pane to restore"
+    return 0
+  fi
+
+  if [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]]; then
+    local pr_number safety_reason release_reason
+    pr_number="$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')"
+    safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+    if [[ "$safety_reason" == "ok" ]]; then
+      reconciliation_lease_release "$feature_dir"
+      release_reason="$(pane_release_preflight "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+      if [[ "$release_reason" == "ok" ]]; then
+        release_task_pane "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" || true
+        return 0
+      fi
+    fi
+    set_task_task_owned "$issue" "active" || true
+  fi
 
   # A prior resume may already have determined that this task has no valid
   # recovery contract.  Its phase remains persisted for diagnosis, but it is
@@ -7418,12 +7816,28 @@ ready_failed_check_summary() {
   ' 2>/dev/null
 }
 
+# Readiness rule shared with shared/lib/stage-result.ts reviewOutcomePassesReadyGate
+# (HOK-2932). Passes on zero *effective* blockers: either the legacy shape
+# (exit 0, ready, zero raw blockers) or every raw blocker auditably dismissed
+# with a non-blank justification. Malformed dismissals or count mismatches fail
+# closed — the raw count is never reduced by an unexplained number.
 review_result_passes_ready_gate() {
   local feature_dir="$1"
   local review_file="$feature_dir/.review-result.json"
   [[ -f "$review_file" ]] || return 1
 
   jq -e '
+    def valid_dismissal_count:
+      (.dismissedBlockers // []) as $d
+      | if ($d | type) != "array" then -1
+        elif ([$d[] | select(
+            (type == "object") and
+            ((.justification? | type) == "string") and
+            (.justification | test("\\S"))
+          )] | length) != ($d | length) then -1
+        else ($d | length)
+        end;
+
     (.status == "completed") and (
       .artifacts as $artifacts
       | if ($artifacts.type // "") == "review" then
@@ -7431,10 +7845,19 @@ review_result_passes_ready_gate() {
         else
           ($artifacts.review // {})
         end
-      | (.exitCode == 0) and
-        (.verdict == "ready") and
-        (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
-        (((.blockerCount // .blockingIssues // .blockingCount) // null) == 0)
+      | (.iterations as $iterations | (($iterations | type) == "number" and $iterations >= 1)) and
+        (((.blockerCount // .blockingIssues // .blockingCount) // null) as $raw
+          | (($raw | type) == "number") and
+            (valid_dismissal_count as $dismissed
+              | (
+                  (.exitCode == 0) and (.verdict == "ready") and
+                  (($raw == 0) or ($dismissed == $raw))
+                ) or (
+                  (.exitCode == 1) and (.verdict == "not_ready") and
+                  ($raw >= 1) and ($dismissed == $raw)
+                )
+            )
+        )
     )
   ' "$review_file" >/dev/null 2>&1
 }
@@ -7578,9 +8001,22 @@ review_result_summary() {
   fi
 
   jq -r '
+    def valid_dismissal_count:
+      (.dismissedBlockers // []) as $d
+      | if ($d | type) != "array" then -1
+        elif ([$d[] | select(
+            (type == "object") and
+            ((.justification? | type) == "string") and
+            (.justification | test("\\S"))
+          )] | length) != ($d | length) then -1
+        else ($d | length)
+        end;
+
     . as $root
     | (.artifacts // {}) as $artifacts
     | (if ($artifacts.type // "") == "review" then $artifacts else ($artifacts.review // {}) end) as $review
+    | ((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null)) as $raw
+    | ($review | valid_dismissal_count) as $dismissed
       | [
         "status=" + ($root.status // "unknown"),
         "verdictState=" + (
@@ -7588,13 +8024,19 @@ review_result_summary() {
             (($review.exitCode | type) == "number") and
             (($review.verdict | type) == "string" and ($review.verdict | length) > 0) and
             (($review.iterations | type) == "number" and $review.iterations >= 1) and
-            (((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) | type) == "number")
+            (($raw | type) == "number")
           ) then
             if (
               ($root.status == "completed") and
-              ($review.exitCode == 0) and
-              ($review.verdict == "ready") and
-              ((($review.blockerCount // $review.blockingIssues // $review.blockingCount) // null) == 0)
+              (
+                (
+                  ($review.exitCode == 0) and ($review.verdict == "ready") and
+                  (($raw == 0) or ($dismissed == $raw))
+                ) or (
+                  ($review.exitCode == 1) and ($review.verdict == "not_ready") and
+                  ($raw >= 1) and ($dismissed == $raw)
+                )
+              )
             ) then "passed" else "failed" end
           else
             "no-verdict-recorded"
@@ -7603,7 +8045,16 @@ review_result_summary() {
         "exitCode=" + (($review.exitCode // "missing") | tostring),
         "verdict=" + (($review.verdict // "missing") | tostring),
         "iterations=" + (($review.iterations // "missing") | tostring),
-        "blockers=" + ((($review.blockerCount // $review.blockingIssues // $review.blockingCount // "missing")) | tostring),
+        "blockers=" + (($raw // "missing") | tostring),
+        (if (($review.dismissedBlockers // []) | length) > 0 then
+          "dismissedBlockers=" + (($review.dismissedBlockers | length) | tostring)
+          + ", effectiveBlockers=" + (
+              if (($raw | type) == "number") and ($dismissed >= 0) and ($dismissed <= $raw)
+              then (($raw - $dismissed) | tostring)
+              else ($raw | tostring)
+              end
+            )
+        else empty end),
         (if ($review.failureCategory // "") != "" then "failureCategory=" + ($review.failureCategory | tostring) else empty end),
         (if ($review.reviewToolError // "") != "" then "error=" + ($review.reviewToolError | tostring) else empty end)
       ]
@@ -7853,9 +8304,13 @@ _launch_ready_remediation_attempt() {
   fi
 
   if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+    reconciliation_lease_release "$state_dir"
+    set_task_task_owned "$issue" "active" || true
     return 2
   fi
 
+  reconciliation_lease_release "$state_dir"
+  set_task_task_owned "$issue" "active" || true
   remediation_failed_artifacts_json=$(merge_queue_enrich_ready_artifacts "$state_dir" \
     "{\"type\":\"ready\",\"verdict\":\"fail\",\"checksRun\":${checks_run:-0},\"checksPassed\":${checks_passed:-0},\"mergeConflict\":\"${merge_status:-UNKNOWN}\",\"prNumber\":${pr_number},\"remediationAttempts\":${remediation_attempt_number},\"remediationFailures\":${failed_check_names_json}}" \
     "candidate-progress")
@@ -7874,8 +8329,6 @@ launch_ready_watchdog_remediation() {
   local ready_status checks_run checks_passed merge_status ready_result_file helper_rc resolved_model
 
   : "${SESSION:=wavemill}"
-  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-  persist_task_window_id "$issue" "$win"
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -7922,6 +8375,12 @@ launch_ready_watchdog_remediation() {
     return 0
   fi
 
+  if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head")"; then
+    jq -cn --arg detail "Ready remediation already has a reconciliation owner or could not acquire ownership for PR #$pr_number." \
+      '{status:"skipped-lease-held", detail:$detail}'
+    return 0
+  fi
+
   _launch_ready_remediation_attempt \
     "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
     "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
@@ -7956,8 +8415,11 @@ launch_ready_phase() {
   local remediation_artifacts_json failed_check_names_json ready_result_file ready_stderr_file
   local prior_ready_status prior_ready_verdict pending_log_level
 
-  win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
-  persist_task_window_id "$issue" "$win"
+  win=""
+  if [[ "$(get_task_pane_state "$issue")" != "released" ]]; then
+    win="$(_ensure_task_window_exists "$SESSION" "$issue" "$slug" "$wt_dir")"
+    persist_task_window_id "$issue" "$win"
+  fi
   state_dir="$(ready_state_dir "$wt_dir" "$slug")"
   status_file="/tmp/${SESSION}-${issue}-status.txt"
   current_agent=$(read_state_value "" --arg i "$issue" '.tasks[$i].agent // ""')
@@ -8116,6 +8578,12 @@ launch_ready_phase() {
       cat "$prompt_file" >> "$prompt_file.capsule"
       mv "$prompt_file.capsule" "$prompt_file"
     fi
+    local conflict_launch_head
+    conflict_launch_head="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || echo "")"
+    if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$conflict_launch_head")"; then
+      log "debug" "  $issue: conflict reconciliation launch skipped because ownership is already held"
+      return 5
+    fi
     _launch_agent_in_pane "$win" "$current_agent" "$current_model" "$prompt_file" "$slug" "$issue" "coding"
     launch_rc=$?
 
@@ -8134,9 +8602,13 @@ launch_ready_phase() {
       return 3
     fi
     if [[ "$launch_rc" -eq 2 ]] && check_stage_aborted "$state_dir"; then
+      reconciliation_lease_release "$state_dir"
+      set_task_task_owned "$issue" "active" || true
       return 2
     fi
 
+    reconciliation_lease_release "$state_dir"
+    set_task_task_owned "$issue" "active" || true
     write_ready_attention_file "$state_dir" "Automatic merge-conflict resolution could not be launched for PR #$pr_number."
     log_error "  Failed to launch conflict-resolution agent for $issue"
     return 1
@@ -8332,6 +8804,10 @@ launch_ready_phase() {
 
     failed_check_summary=$(ready_failed_check_summary "$result")
     [[ -n "$failed_check_summary" ]] || failed_check_summary="${failed_check_names}: checks failing"
+    if ! win="$(ensure_ready_worker_window "$issue" "$slug" "$state_dir" "$wt_dir" "$pr_number" "$current_head")"; then
+      log "debug" "  $issue: ready remediation launch skipped because ownership is already held"
+      return 5
+    fi
     _launch_ready_remediation_attempt \
       "$issue" "$slug" "$wt_dir" "$branch" "$base_branch" "$pr_number" \
       "$state_dir" "$win" "$status_file" "$current_agent" "$current_model" \
@@ -9508,7 +9984,18 @@ cleanup_aborted_challenge_arm() {
     return 0
   fi
 
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || true
+  local cleanup_rc=0
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || cleanup_rc=$?
+  if [[ "$cleanup_rc" -eq 10 ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue aborted challenge cleanup preserved local work; keeping task state"
+    return 1
+  fi
+  if [[ "$cleanup_rc" -eq 20 ]]; then
+    set_window_attention_state "$win" "needs-user"
+    log_warn "  $issue aborted challenge cleanup failed; keeping task state"
+    return 1
+  fi
 
   if [[ -n "$pr" ]]; then
     log "debug" "$issue: retaining remote branch ${state_branch:-task/${slug}} (aborted cleanup does not delete PR branches)"
@@ -11240,11 +11727,13 @@ EOF
       challenge_plan=$(_with_timeout "$API_TIMEOUT" npx tsx "$TOOLS_DIR/resolve-challenge-task.ts" "${challenge_args[@]}" 2>/dev/null || echo "")
       challenge_mode=$(echo "$challenge_plan" | jq -r '.mode // "single"' 2>/dev/null || echo "single")
       challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+      log_challenge_selection_health_plan "$issue" "$challenge_plan"
       if [[ "$challenge_mode" == "challenge_unavailable" ]]; then
         log_challenge_unavailable_plan "$issue" "$challenge_plan"
         return 1
       fi
       if challenge_plan_stage_requires_effective_route "$challenge_plan"; then
+        release_challenge_selection_health_plan "$issue" "$challenge_plan"
         # A plan-stage challenge cannot be formed before the expanded route
         # exists.  Retarget it to the implementation stage rather than dropping
         # to a single-model run: discarding the pair here is how an already
@@ -11257,6 +11746,7 @@ EOF
           challenge_plan="$retargeted_plan"
           challenge_mode="challenge"
           challenge_reason=$(echo "$challenge_plan" | jq -r '.reason // empty' 2>/dev/null || echo "")
+          log_challenge_selection_health_plan "$issue" "$challenge_plan"
           log_warn "  $issue: Planner challenge unavailable before expansion — retargeted to implementation stage"
         else
           challenge_mode="single"
@@ -11389,6 +11879,8 @@ EOF
     if declare -F agent_resolve_models_for_roles >/dev/null 2>&1; then
       if ! agent_resolve_models_for_roles "$challenger_planner" "$challenger_model" "$challenger_reviewer"; then
         log_error "  Selected challenger route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       challenger_planner_agent="$(agent_resolve_batch_agent_for_role "planner")"
@@ -11397,41 +11889,59 @@ EOF
     else
       if [[ -n "$challenger_planner" ]] && ! challenger_planner_agent="$(agent_resolve_from_model "$challenger_planner" "planning")"; then
         log_error "  Selected challenger planner route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       if [[ -n "$challenger_model" ]] && ! challenger_agent="$(agent_resolve_from_model "$challenger_model" "coding")"; then
         log_error "  Selected challenger coder route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
       if [[ -n "$challenger_reviewer" ]] && ! challenger_reviewer_agent="$(agent_resolve_from_model "$challenger_reviewer" "review")"; then
         log_error "  Selected challenger reviewer route is not launchable: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
         return 1
       fi
     fi
 
     if [[ -n "$challenger_planner" && -z "$challenger_planner_agent" ]]; then
       log_error "  Selected challenger planner route is not launchable: agent resolution returned empty for model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_model" && -z "$challenger_agent" ]]; then
       log_error "  Selected challenger coder route is not launchable: agent resolution returned empty for model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer" && -z "$challenger_reviewer_agent" ]]; then
       log_error "  Selected challenger reviewer route is not launchable: agent resolution returned empty for model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
 
     if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
       log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
       log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
       log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
   fi
@@ -11466,14 +11976,20 @@ EOF
 
     if ! agent_validate_phase_launch "$challenger_agent" "coding" "$challenger_model" "$REPO_DIR"; then
       log_error "  Selected challenger coder route is not launchable: agent=$challenger_agent model=$challenger_model"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_planner_agent" ]] && ! agent_validate_phase_launch "$challenger_planner_agent" "planning" "$challenger_planner" "$REPO_DIR"; then
       log_error "  Selected challenger planner route is not launchable: agent=$challenger_planner_agent model=$challenger_planner"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
     if [[ -n "$challenger_reviewer_agent" ]] && ! agent_validate_phase_launch "$challenger_reviewer_agent" "review" "$challenger_reviewer" "$REPO_DIR"; then
       log_error "  Selected challenger reviewer route is not launchable: agent=$challenger_reviewer_agent model=$challenger_reviewer"
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$challenger_planner" "$challenger_model" "$challenger_reviewer")"
       return 1
     fi
   fi
@@ -11769,13 +12285,23 @@ Implement from the issue description plus direct codebase analysis."
   local planner_launch_model resolved_planner_agent
   planner_launch_model="${planner_model:-claude-sonnet-5}"
   if declare -F agent_resolve_model >/dev/null 2>&1; then
-    planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")" || return 1
+    if ! planner_launch_model="$(agent_resolve_model "planner" "${planner_model:-claude-sonnet-5}" "$REPO_DIR")"; then
+      if [[ "$effective_challenge" == "true" ]]; then
+        challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+          "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+      fi
+      return 1
+    fi
   fi
   if ! resolved_planner_agent="$(agent_resolve_from_model "$planner_launch_model" "planning")"; then
     write_stage_result "$feature_dir" "planning" "failed" "" "$planner_launch_model" "${AGENT_RESOLVE_LAST_DIAGNOSTIC:-Planning launch blocked by agent resolution failure.}"
     set_task_phase "$issue" "routing"
     set_window_attention_state "$win" "needs-user"
     log "warn" "⚠ $issue → Planning launch blocked: ${AGENT_RESOLVE_LAST_DIAGNOSTIC:-agent resolution failed}"
+    if [[ "$effective_challenge" == "true" ]]; then
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+    fi
     return 0
   fi
 
@@ -11789,7 +12315,15 @@ Implement from the issue description plus direct codebase analysis."
   local launch_rc=$?
   if ! handle_phase_launch_result "$issue" "$feature_dir" "planning" "routing" "$launch_rc" "$win" \
     "$resolved_planner_agent" "$planner_launch_model"; then
+    if [[ "$effective_challenge" == "true" ]]; then
+      challenge_selection_health_release "$challenge_pair" "$challenge_stage" \
+        "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
+    fi
     return 0
+  fi
+  if [[ "$effective_challenge" == "true" ]]; then
+    challenge_selection_health_ack_launch "$challenge_pair" "$challenge_stage" \
+      "$(challenge_selection_health_varied_model "$challenge_stage" "$planner_model" "$task_model" "$reviewer_model")"
   fi
   log "status" "$issue Routing complete (direct), launched planning with $planner_launch_model"
 
@@ -12708,6 +13242,7 @@ monitor_issue_state() {
   local BRANCH SLUG PR
   local task_status WIN WT_DIR task_branch current_phase eval_agent debug_flag current_agent needs_attention
 
+  : "${queue_owned_count:=0}"
   BRANCH="${BRANCH_BY_ISSUE[$ISSUE]}"
   SLUG="${SLUG_BY_ISSUE[$ISSUE]}"
   PR="${PR_BY_ISSUE[$ISSUE]:-}"
@@ -14365,6 +14900,37 @@ monitor_issue_state() {
         else
           log "debug" "✓ $ISSUE → PR #$PR is a merge candidate (live CI unverified, saved verdict only)"
         fi
+
+        if [[ "$(get_task_execution_owner "$ISSUE")" == "queue" && "$(get_task_pane_state "$ISSUE")" == "released" ]]; then
+          release_task_pane_window_only "$ISSUE" "$SLUG" "${WORKTREE_ROOT}/${SLUG}" || true
+          queue_owned_count=$((queue_owned_count + 1))
+          set_window_attention_state "$WIN" "clear"
+          return 0
+        fi
+
+        if [[ "$(get_task_execution_owner "$ISSUE")" == "reconciliation" && "$(get_task_pane_state "$ISSUE")" == "rehydrating" ]]; then
+          reconciliation_lease_release "$ready_state_dir_path"
+        fi
+
+        local release_reason
+        release_reason="$(pane_release_preflight "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR" "$BRANCH" "$BASE_BRANCH" 2>/dev/null || true)"
+        if [[ "$release_reason" == "ok" ]]; then
+          if release_task_pane "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR"; then
+            queue_owned_count=$((queue_owned_count + 1))
+            set_window_attention_state "$WIN" "clear"
+            return 0
+          fi
+          set_task_task_owned "$ISSUE" "active" || true
+          write_pane_release_blocked_marker "$ready_state_dir_path" "pane-release-failed" "${WORKTREE_ROOT}/${SLUG}"
+        elif pane_release_reason_actionable "$release_reason"; then
+          if [[ "$(get_task_execution_owner "$ISSUE")" == "reconciliation" ]]; then
+            set_task_task_owned "$ISSUE" "active" || true
+          fi
+          write_pane_release_blocked_marker "$ready_state_dir_path" "$release_reason" "${WORKTREE_ROOT}/${SLUG}"
+          log "debug" "  $ISSUE: pane release blocked ($release_reason)"
+        else
+          clear_stale_pane_release_blocked_marker "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}"
+        fi
       fi
       set_window_attention_state "$WIN" "clear"
       active_count=$((active_count + 1))
@@ -15260,6 +15826,7 @@ while :; do
   refresh_ready_merge_queue_tick
   active_count=0
   active_challenger_count=0
+  queue_owned_count=0
 
   for ISSUE in "${!BRANCH_BY_ISSUE[@]}"; do
     [[ -n "${CLEANED[$ISSUE]:-}" ]] && continue

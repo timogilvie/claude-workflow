@@ -477,3 +477,117 @@ describe('scoped certification storage', () => {
     }
   });
 });
+
+// ─── Live coding canary write guards (HOK-2943) ────────────────────────────
+
+describe('validateCertificationForWrite liveCanary guards', () => {
+  function makeCanary(overrides: Record<string, unknown> = {}) {
+    return {
+      scenarioId: 'live.coding.mutation-canary.v1',
+      status: 'pass',
+      isLive: true,
+      phase: 'coding',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      providerNativeId: 'claude-sonnet-4-6',
+      identityFingerprint: 'test-fingerprint',
+      catalogHash: 'registry',
+      suiteVersion: 'v1',
+      ranAt: '2026-06-01T00:00:00.000Z',
+      limits: { maxWallClockMs: 240_000, maxTurns: 6, maxToolCalls: 10, maxTotalTokens: 60_000 },
+      ...overrides,
+    } as NativeCertificationArtifact['liveCanary'];
+  }
+
+  it('accepts a canary whose identity matches the artifact and subject', () => {
+    const artifact = makeValidArtifact({ phase: 'patch', liveCanary: makeCanary() });
+    assert.doesNotThrow(() => validateCertificationForWrite(artifact));
+  });
+
+  it('rejects canaries whose storage or subject identity diverges from the artifact', () => {
+    for (const overrides of [
+      { provider: 'other' },
+      { model: 'other-model' },
+      { suiteVersion: 'v9' },
+      { providerNativeId: 'other-native' },
+      { identityFingerprint: 'other-fingerprint' },
+      { catalogHash: 'other-catalog' },
+    ]) {
+      const artifact = makeValidArtifact({ phase: 'patch', liveCanary: makeCanary(overrides) });
+      assert.throws(
+        () => validateCertificationForWrite(artifact),
+        /liveCanary/,
+        `expected rejection for ${JSON.stringify(overrides)}`,
+      );
+    }
+  });
+
+  it('rejects secret-shaped or local-path content in canary detail and evidence paths', () => {
+    const secretDetail = makeValidArtifact({
+      phase: 'patch',
+      liveCanary: makeCanary({ detail: 'authorization header leaked: Bearer abc' }),
+    });
+    assert.throws(() => validateCertificationForWrite(secretDetail), /must not contain secrets/);
+
+    const absolutePath = makeValidArtifact({
+      phase: 'patch',
+      liveCanary: makeCanary({
+        evidence: {
+          structuredMutationToolCalls: 1,
+          mutationToolNames: ['apply_patch'],
+          expectedSentinelHash: 'a'.repeat(64),
+          changedPaths: ['/etc/passwd'],
+          completionArtifactPresent: true,
+        },
+      }),
+    });
+    assert.throws(() => validateCertificationForWrite(absolutePath), /repo-relative/);
+
+    const traversal = makeValidArtifact({
+      phase: 'patch',
+      liveCanary: makeCanary({
+        evidence: {
+          structuredMutationToolCalls: 1,
+          mutationToolNames: ['apply_patch'],
+          expectedSentinelHash: 'a'.repeat(64),
+          changedPaths: ['src/../../outside.txt'],
+          completionArtifactPresent: true,
+        },
+      }),
+    });
+    assert.throws(() => validateCertificationForWrite(traversal), /repo-relative/);
+  });
+
+  it('rejects implausible canary timestamps', () => {
+    const badRanAt = makeValidArtifact({ phase: 'patch', liveCanary: makeCanary({ ranAt: 'not-a-date' }) });
+    assert.throws(() => validateCertificationForWrite(badRanAt), /ranAt/);
+
+    const inverted = makeValidArtifact({
+      phase: 'patch',
+      liveCanary: makeCanary({ expiresAt: '2026-05-01T00:00:00.000Z' }),
+    });
+    assert.throws(() => validateCertificationForWrite(inverted), /expiresAt/);
+  });
+
+  it('round-trips a canary-bearing artifact through write and read', () => {
+    const previousRoot = process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+    const root = mkdtempSync(join(tmpdir(), 'canary-store-'));
+    process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = root;
+    try {
+      const artifact = makeValidArtifact({ phase: 'patch', liveCanary: makeCanary() });
+      const path = writeScopedCertification(artifact, { scope: 'global' });
+      const read = readCertification(path);
+      assert.equal(read.ok, true, JSON.stringify(read));
+      const loaded = (read as { artifact: NativeCertificationArtifact }).artifact;
+      assert.equal(loaded.liveCanary?.status, 'pass');
+      assert.equal(loaded.liveCanary?.isLive, true);
+    } finally {
+      if (previousRoot === undefined) {
+        delete process.env[GLOBAL_CERTIFICATION_ROOT_ENV];
+      } else {
+        process.env[GLOBAL_CERTIFICATION_ROOT_ENV] = previousRoot;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

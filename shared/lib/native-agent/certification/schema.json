@@ -75,6 +75,9 @@
         },
         "liveSmokeEvidence": {
           "$ref": "#/$defs/LiveSmokeEvidence"
+        },
+        "liveCanary": {
+          "$ref": "#/$defs/LiveCodingCanaryResult"
         }
       }
     },
@@ -205,6 +208,245 @@
         "succeededAt": {
           "type": "string",
           "format": "date-time"
+        }
+      }
+    },
+    "LiveCodingCanaryResult": {
+      "type": "object",
+      "required": [
+        "scenarioId",
+        "status",
+        "isLive",
+        "phase",
+        "provider",
+        "model",
+        "providerNativeId",
+        "identityFingerprint",
+        "catalogHash",
+        "suiteVersion",
+        "ranAt",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "scenarioId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pass", "fail", "inconclusive", "skipped"]
+        },
+        "isLive": {
+          "type": "boolean"
+        },
+        "phase": {
+          "type": "string",
+          "const": "coding"
+        },
+        "provider": {
+          "type": "string",
+          "minLength": 1
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerNativeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "catalogHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "suiteVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ranAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "limits": {
+          "$ref": "#/$defs/LiveCodingCanaryLimits"
+        },
+        "usage": {
+          "$ref": "#/$defs/LiveCodingCanaryUsage"
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "protocol_failure",
+            "missing_completion_artifact",
+            "wrong_mutation",
+            "extra_repository_change",
+            "provider_transient_error",
+            "provider_config_error",
+            "budget_exceeded",
+            "not_live",
+            "identity_mismatch",
+            "internal_error"
+          ]
+        },
+        "limitExceeded": {
+          "type": "string",
+          "enum": ["wall_clock", "turns", "tool_calls", "tokens", "cost"]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "evidence": {
+          "$ref": "#/$defs/LiveCodingCanaryEvidence"
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lastInconclusiveAttempt": {
+          "type": "object",
+          "required": ["ranAt", "status", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "ranAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "status": {
+              "type": "string",
+              "const": "inconclusive"
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "protocol_failure",
+                "missing_completion_artifact",
+                "wrong_mutation",
+                "extra_repository_change",
+                "provider_transient_error",
+                "provider_config_error",
+                "budget_exceeded",
+                "not_live",
+                "identity_mismatch",
+                "internal_error"
+              ]
+            },
+            "detail": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "LiveCodingCanaryLimits": {
+      "type": "object",
+      "required": ["maxWallClockMs", "maxTurns", "maxToolCalls", "maxTotalTokens"],
+      "additionalProperties": false,
+      "properties": {
+        "maxWallClockMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTurns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxTotalTokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxCostUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "LiveCodingCanaryUsage": {
+      "type": "object",
+      "required": ["turns", "toolCalls", "inputTokens", "outputTokens", "wallClockMs"],
+      "additionalProperties": false,
+      "properties": {
+        "turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "toolCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wallClockMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "LiveCodingCanaryEvidence": {
+      "type": "object",
+      "required": [
+        "structuredMutationToolCalls",
+        "mutationToolNames",
+        "expectedSentinelHash",
+        "changedPaths",
+        "completionArtifactPresent"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "structuredMutationToolCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mutationToolNames": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "expectedSentinelHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "actualSentinelHash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "changedPaths": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "completionArtifactPresent": {
+          "type": "boolean"
+        },
+        "completionArtifactHash": {
+          "type": "string",
+          "minLength": 1
         }
       }
     },

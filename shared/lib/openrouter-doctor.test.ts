@@ -12,6 +12,7 @@ import {
   resolveCertificationSubject,
 } from './native-agent/certification/index.ts';
 import { DEFAULT_MODEL_REGISTRY } from './model-registry.ts';
+import { buildLiveCodingCanaryFixture } from './native-agent/certification/canary-fixtures.ts';
 
 function makeRepoDir(): string {
   return mkdtempSync(join(tmpdir(), 'openrouter-doctor-'));
@@ -96,8 +97,15 @@ function writeOpenRouterCert(
     model: identity.storageIdentity.model,
     phase,
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
-    certifiedAt: '2026-07-10T00:00:00.000Z',
+    certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
+    ...(phase !== 'read-only'
+      ? {
+        liveCanary: buildLiveCodingCanaryFixture(identity.subject, DEFAULT_CERTIFICATION_SUITE_VERSION, {
+          ranAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        }),
+      }
+      : {}),
   }));
   return path;
 }

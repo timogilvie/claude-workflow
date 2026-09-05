@@ -130,26 +130,6 @@
       ]
     },
     {
-      "wavemillAlias": "deepseek-coder-v2",
-      "openrouterId": "deepseek/deepseek-coder-v2-instruct",
-      "family": "deepseek",
-      "status": "deprecated",
-      "priorityTier": 2,
-      "roleEligibility": [
-        "coding"
-      ]
-    },
-    {
-      "wavemillAlias": "qwen-2.5-coder-32b",
-      "openrouterId": "qwen/qwen-2.5-coder-32b-instruct",
-      "family": "qwen",
-      "status": "deprecated",
-      "priorityTier": 1,
-      "roleEligibility": [
-        "coding"
-      ]
-    },
-    {
       "wavemillAlias": "qwen-3-coder",
       "openrouterId": "qwen/qwen3-coder",
       "family": "qwen",
@@ -171,16 +151,6 @@
         "planning",
         "coding",
         "review"
-      ]
-    },
-    {
-      "wavemillAlias": "qwen-2.5-72b",
-      "openrouterId": "qwen/qwen-2.5-72b-instruct",
-      "family": "qwen",
-      "status": "deprecated",
-      "priorityTier": 3,
-      "roleEligibility": [
-        "coding"
       ]
     },
     {
@@ -255,27 +225,6 @@
       ]
     },
     {
-      "wavemillAlias": "gemini-2.0-flash",
-      "openrouterId": "google/gemini-2.0-flash-001",
-      "family": "gemini",
-      "status": "deprecated",
-      "priorityTier": 3,
-      "roleEligibility": [
-        "coding"
-      ]
-    },
-    {
-      "wavemillAlias": "llama-3.3-70b",
-      "openrouterId": "meta-llama/llama-3.3-70b-instruct",
-      "family": "llama",
-      "status": "active",
-      "priorityTier": 2,
-      "roleEligibility": [
-        "coding",
-        "review"
-      ]
-    },
-    {
       "wavemillAlias": "llama-4-maverick",
       "openrouterId": "meta-llama/llama-4-maverick",
       "family": "llama",
@@ -287,18 +236,8 @@
       ]
     },
     {
-      "wavemillAlias": "llama-4-scout",
-      "openrouterId": "meta-llama/llama-4-scout",
-      "family": "llama",
-      "status": "watchlist",
-      "priorityTier": 3,
-      "roleEligibility": [
-        "coding"
-      ]
-    },
-    {
       "wavemillAlias": "mistral-large-2",
-      "openrouterId": "mistralai/mistral-large-2407",
+      "openrouterId": "mistralai/mistral-large-2512",
       "family": "mistral",
       "status": "active",
       "priorityTier": 2,
@@ -319,18 +258,8 @@
       ]
     },
     {
-      "wavemillAlias": "devstral-small",
-      "openrouterId": "mistralai/mistral-small-2603",
-      "family": "mistral",
-      "status": "active",
-      "priorityTier": 2,
-      "roleEligibility": [
-        "coding"
-      ]
-    },
-    {
       "wavemillAlias": "devstral-medium",
-      "openrouterId": "mistralai/mistral-medium-3-5",
+      "openrouterId": "mistralai/devstral-2512",
       "family": "mistral",
       "status": "watchlist",
       "priorityTier": 2,
@@ -358,6 +287,65 @@
       "priorityTier": 3,
       "roleEligibility": [
         "coding"
+      ]
+    },
+    {
+      "wavemillAlias": "glm-5.3",
+      "openrouterId": "z-ai/glm-5.3",
+      "family": "glm",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "kimi-k3",
+      "openrouterId": "moonshotai/kimi-k3",
+      "family": "kimi",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "gemini-3.8-flash",
+      "openrouterId": "google/gemini-3.8-flash",
+      "family": "gemini",
+      "status": "active",
+      "priorityTier": 2,
+      "roleEligibility": [
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "deepseek-v4-pro",
+      "openrouterId": "deepseek/deepseek-v4-pro-0813",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
+      ]
+    },
+    {
+      "wavemillAlias": "deepseek-v4-flash",
+      "openrouterId": "deepseek/deepseek-v4-flash-0731",
+      "family": "deepseek",
+      "status": "active",
+      "priorityTier": 1,
+      "roleEligibility": [
+        "planning",
+        "coding",
+        "review"
       ]
     }
   ]

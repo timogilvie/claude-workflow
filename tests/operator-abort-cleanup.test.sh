@@ -38,6 +38,18 @@ cleanup_file="$tmp/operator-abort-cleanup.sh"
 {
   extract_function "$MILL_SCRIPT" "set_task_phase"
   printf '\n'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_DEFAULT=15'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MIN=1'
+  printf '%s\n' 'WAVEMILL_GIT_REMOTE_TIMEOUT_MAX=600'
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_warn"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_timeout_seconds"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_kill_process_tree"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_git_remote_with_timeout"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "wavemill_cleanup_run"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
@@ -60,6 +72,7 @@ run_operator_abort_case() {
   CASE_DIR="$case_dir" CLEANUP_FILE="$cleanup_file" TEST_CASE="$test_case" TEST_PR="$pr" bash -lc '
     set -euo pipefail
     source "$CLEANUP_FILE"
+    wavemill_git_remote_with_timeout() { shift; git "$@"; }
 
     SESSION="wavemill"
     ISSUE="HOK-2878"
@@ -117,12 +130,20 @@ EOF
       case "${1:-} ${2:-}" in
         "status --porcelain") return 0 ;;
         "worktree remove") ORDER+="git-worktree;" ; return 0 ;;
+        "fetch origin") return 0 ;;
         "show-ref --verify") return 0 ;;
-        "rev-parse --verify") return 0 ;;
+        "rev-parse --verify")
+          case "${3:-}" in
+            *operator-abort-demo*) printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+            *auto/integration*) printf "%s\n" "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+            *) printf "%s\n" "cccccccccccccccccccccccccccccccccccccccc" ;;
+          esac
+          return 0
+          ;;
         "merge-base --is-ancestor") return 0 ;;
         "rev-list --count") printf "0\n" ; return 0 ;;
         "rev-list "*) return 0 ;;
-        "branch -D") ORDER+="git-branch;" ; return 0 ;;
+        "branch -D"|"branch -d") ORDER+="git-branch;" ; return 0 ;;
         "worktree prune") return 0 ;;
       esac
       return 0

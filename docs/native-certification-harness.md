@@ -90,6 +90,7 @@ interface CertificationScenario {
 
 ### Does not prove
 
+- Live structured mutation-tool use against the real provider. Coding eligibility therefore requires the separate live coding canary pass (HOK-2943) in addition to a `patch`/`workflow` deterministic artifact — a deterministic artifact alone never admits a model to coder routing or native coding launches.
 - Live workflow orchestration quality, such as whether a model actually produces strong plans or approval flows against real tasks.
 - Real Linear or GitHub API compatibility, because the workflow certification scenarios are deterministic and offline.
 - Production cost or latency behavior under real multi-turn budgets.
@@ -320,12 +321,41 @@ wavemill native-agent certify --all --phase workflow
 | `--phase` | no | `workflow` | `read-only`, `patch`, or `workflow` |
 | `--all` | no | false | Certify every native-capable registry model for the current suite |
 | `--dry-run` | no | false | Run scenarios without writing an artifact |
+| `--live-coding-canary` | no | false | Run the credentialed live coding canary after deterministic success (see below) |
+| `--canary-max-cost-usd` | no | 0.5 | Live canary maximum estimated cost in USD |
+| `--canary-timeout-ms` | no | 240000 | Live canary wall-clock limit |
+| `--canary-max-tokens` | no | 60000 | Live canary total token budget |
+| `--canary-max-tool-calls` | no | 10 | Live canary tool-call budget |
 | `--json` | no | false | Machine-readable JSON output |
 | `--repo` | no | cwd | Repository root |
 
-**Exit codes:** `0` harness passed; `1` harness failed or model unsupported; `2` invalid input.
+**Exit codes:** `0` harness passed (and, with `--live-coding-canary`, the effective canary state grants coding eligibility); `1` harness failed, model unsupported, or the requested canary did not grant coding eligibility; `2` invalid input.
 
-**Dry-run contract:** A dry-run report is never `liveCertifiable`. No artifact is written regardless of scenario outcomes. Use `--dry-run` in CI pipelines to validate harness connectivity without spending quota.
+**Dry-run contract:** A dry-run report is never `liveCertifiable`. No artifact is written regardless of scenario outcomes. Use `--dry-run` in CI pipelines to validate harness connectivity without spending quota. `--live-coding-canary` cannot be combined with `--dry-run` — the canary is a live provider run by definition.
+
+---
+
+### Live coding canary lane (HOK-2943)
+
+The deterministic harness remains **necessary but insufficient for coding**: coder routing and native coding launches additionally require a fresh, live, identity-matching canary pass recorded on the artifact (see the "Live Coding Canary" section of `docs/native-certification-contract.md`).
+
+```bash
+# Opt-in credentialed canary for one known-good, low-cost model
+wavemill native-agent certify --provider openrouter --model qwen-3-coder --phase workflow --live-coding-canary
+
+# Tighter budgets for a cheap validation run
+wavemill native-agent certify --provider openai --model gpt-4o --phase workflow \
+  --live-coding-canary --canary-max-cost-usd 0.25 --canary-timeout-ms 120000
+```
+
+Properties of the lane:
+
+- **One bounded provider invocation** per attempt inside a disposable `mkdtemp` git repository — never the active repo or worktree. The temp repo is removed on pass, failure, provider error, timeout, and process interruption.
+- **Cost bounds**: defaults are ≤ $0.50 estimated cost, 240s wall-clock, 60k tokens, 10 tool calls, 6 turns. A typical pass costs well under $0.05 on low-cost models. When pricing is unknown, the cost budget is skipped but token/wall-clock bounds still cap spend, and `usage.costUsd` is omitted rather than recorded as zero.
+- **Transient errors** (429/5xx/timeout) record `inconclusive` and are retried in a fresh repository (2 attempts by default); an inconclusive attempt never overwrites a still-valid previous pass.
+- **Redaction**: the persisted artifact carries hashes, counts, and repo-relative paths only. Diagnostics are secret-redacted, path-stripped, and length-capped.
+- **CI separation**: unit suites exercise the canary through injected loop runners (always recorded `isLive: false`, never eligible). The credentialed live lane is opt-in via `--live-coding-canary` and is not part of default CI.
+- Certifying **without** `--live-coding-canary` still publishes deterministic evidence and carries forward a still-valid previous canary pass, but a model with no valid pass stays coding-ineligible (`missing_live_canary`).
 
 ---
 

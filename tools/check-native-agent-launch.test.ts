@@ -18,6 +18,7 @@ import {
   resolveCertificationSubject,
 } from '../shared/lib/native-agent/certification/index.ts';
 import { DEFAULT_MODEL_REGISTRY } from '../shared/lib/model-registry.ts';
+import { buildLiveCodingCanaryFixture } from '../shared/lib/native-agent/certification/canary-fixtures.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
 import { checkNativeAgentLaunch } from './check-native-agent-launch.ts';
 
@@ -55,6 +56,13 @@ function writeOpenRouterCert(repoDir: string, provider: string, model: string, p
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2099-01-01T00:00:00.000Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
+    ...(phase !== 'read-only'
+      ? {
+        liveCanary: buildLiveCodingCanaryFixture(identity.subject, DEFAULT_CERTIFICATION_SUITE_VERSION, {
+          ranAt: '2099-01-01T00:00:00.000Z',
+        }),
+      }
+      : {}),
   }, null, 2), 'utf-8');
 }
 

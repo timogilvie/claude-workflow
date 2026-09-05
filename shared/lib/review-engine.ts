@@ -38,6 +38,28 @@ export interface ReviewFinding {
   description: string;
   /** Personas that flagged this finding */
   reviewers?: ReviewerPersona[];
+  /**
+   * The reviewer investigated this finding and proved it invalid (HOK-2932).
+   * The finding is kept for audit but stops counting toward the verdict.
+   * Only honored when `dismissalJustification` is non-blank.
+   */
+  dismissed?: boolean;
+  /** Why the finding is invalid. Required for a dismissal to count. */
+  dismissalJustification?: string;
+  /** Verification the reviewer ran (e.g. a git/test command and its result). */
+  dismissalEvidence?: string;
+}
+
+/** A dismissal only counts with a non-blank justification; anything else stays blocking. */
+export function isDismissedFinding(finding: ReviewFinding): boolean {
+  return finding.dismissed === true
+    && typeof finding.dismissalJustification === 'string'
+    && finding.dismissalJustification.trim() !== '';
+}
+
+/** True when the finding counts toward a `not_ready` verdict. */
+export function isBlockingFinding(finding: ReviewFinding): boolean {
+  return finding.severity === 'blocker' && !isDismissedFinding(finding);
 }
 
 export interface ReviewResult {
@@ -485,6 +507,21 @@ export function parseNativeReviewResponse(
     );
   }
 
+  // Reject dismissals lacking a non-blank justification: the finding stays
+  // blocking rather than being waved through (HOK-2932, fail closed).
+  const rejectUnjustifiedDismissals = (findings: ReviewFinding[]) => {
+    for (const finding of findings) {
+      if (finding.dismissed === true && !isDismissedFinding(finding)) {
+        delete finding.dismissed;
+        delete finding.dismissalJustification;
+      }
+    }
+  };
+  rejectUnjustifiedDismissals(parsed.codeReviewFindings);
+  if (Array.isArray(parsed.uiFindings)) {
+    rejectUnjustifiedDismissals(parsed.uiFindings);
+  }
+
   const result: ReviewResult = {
     verdict: parsed.verdict as 'ready' | 'not_ready',
     codeReviewFindings: parsed.codeReviewFindings,
@@ -726,6 +763,14 @@ function deduplicateFindings(findings: ReviewFinding[]): ReviewFinding[] {
       if (finding.severity === 'blocker') {
         existing.severity = 'blocker';
       }
+
+      // A dismissal only survives merging when every duplicate is dismissed;
+      // one reviewer standing by the finding keeps it blocking.
+      if (!isDismissedFinding(finding) && isDismissedFinding(existing)) {
+        delete existing.dismissed;
+        delete existing.dismissalJustification;
+        delete existing.dismissalEvidence;
+      }
     } else {
       // New finding
       merged.push({ ...finding });
@@ -960,15 +1005,25 @@ export async function runReview(
   sortFindings(deduplicatedCodeFindings);
   sortFindings(deduplicatedUiFindings);
 
-  // Determine overall verdict
+  // Determine overall verdict. Dismissed blockers are kept for audit but do
+  // not count toward the verdict (HOK-2932).
   const hasBlockers =
-    deduplicatedCodeFindings.some(f => f.severity === 'blocker') ||
-    deduplicatedUiFindings.some(f => f.severity === 'blocker');
+    deduplicatedCodeFindings.some(isBlockingFinding) ||
+    deduplicatedUiFindings.some(isBlockingFinding);
+  const rawBlockerCount =
+    deduplicatedCodeFindings.filter(f => f.severity === 'blocker').length +
+    deduplicatedUiFindings.filter(f => f.severity === 'blocker').length;
+  const dismissedBlockerCount =
+    deduplicatedCodeFindings.filter(f => f.severity === 'blocker' && isDismissedFinding(f)).length +
+    deduplicatedUiFindings.filter(f => f.severity === 'blocker' && isDismissedFinding(f)).length;
 
   if (options.verbose) {
     console.error(`\n=== Review Complete ===`);
     console.error(`Total code findings: ${deduplicatedCodeFindings.length} (${deduplicatedCodeFindings.filter(f => f.severity === 'blocker').length} blockers)`);
     console.error(`Total UI findings: ${deduplicatedUiFindings.length} (${deduplicatedUiFindings.filter(f => f.severity === 'blocker').length} blockers)`);
+    if (dismissedBlockerCount > 0) {
+      console.error(`Dismissed blockers: ${dismissedBlockerCount} (with justification; kept for audit)`);
+    }
     console.error(`Verdict: ${hasBlockers ? 'NOT READY' : 'READY'}`);
     console.error('');
   }
@@ -980,9 +1035,8 @@ export async function runReview(
       verdict: hasBlockers ? 'not_ready' : 'ready',
       codeFindings: deduplicatedCodeFindings.length,
       uiFindings: deduplicatedUiFindings.length,
-      blockers:
-        deduplicatedCodeFindings.filter(f => f.severity === 'blocker').length +
-        deduplicatedUiFindings.filter(f => f.severity === 'blocker').length,
+      blockers: rawBlockerCount,
+      dismissedBlockers: dismissedBlockerCount,
     },
   });
 

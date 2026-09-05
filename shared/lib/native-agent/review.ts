@@ -27,6 +27,7 @@ import { createGitTools, gitAfterToolCall, gitToolPolicyConfig } from './tools/g
 import { createToolRegistry } from './tools/registry.ts';
 import { toPiAgentTool } from './tools/pi-adapter.ts';
 import type { ToolDescriptor } from './tools/types.ts';
+import { renderNativePhasePrompt, type NativePhasePromptOptions } from './prompts.ts';
 import type { ReviewContext } from '../review-context-gatherer.ts';
 import { logPromptUsage } from '../prompt-registry.ts';
 import { recordUse } from '../resource-manifest.ts';
@@ -109,10 +110,15 @@ function buildReviewToolRegistry(worktreePath: string) {
   };
 }
 
-function loadNativeReviewPrompt(repoDir: string): { content: string; promptRef: ReturnType<typeof logPromptUsage> } {
-  const content = readFileSync(NATIVE_REVIEW_PHASE_PROMPT_PATH, 'utf-8');
-  const promptRef = logPromptUsage(NATIVE_REVIEW_PHASE_PROMPT_PATH, content, { dir: repoDir });
-  return { content, promptRef };
+function loadNativeReviewPrompt(
+  repoDir: string,
+  options: NativePhasePromptOptions = {},
+): { content: string; promptRef: ReturnType<typeof logPromptUsage> } {
+  const template = readFileSync(NATIVE_REVIEW_PHASE_PROMPT_PATH, 'utf-8');
+  // Log the unrendered template so the prompt hash tracks the template version
+  // rather than the per-phase tool list rendered into it.
+  const promptRef = logPromptUsage(NATIVE_REVIEW_PHASE_PROMPT_PATH, template, { dir: repoDir });
+  return { content: renderNativePhasePrompt(template, options), promptRef };
 }
 
 function makeTranscriptPath(repoDir: string, sessionId: string): string {
@@ -306,8 +312,11 @@ export async function runNativeReview(
   }
 
   const userPrompt = fillReviewPromptTemplate(template, context, true);
-  const { content: systemPrompt, promptRef } = nativeReviewDeps.loadNativeReviewPrompt(repoDir);
   const { phaseTools, phaseMetadata, registry } = buildReviewToolRegistry(repoDir);
+  const { content: systemPrompt, promptRef } = nativeReviewDeps.loadNativeReviewPrompt(repoDir, {
+    tools: phaseMetadata,
+    phase: 'review',
+  });
   nativeReviewDeps.registerNativeReviewRuntime({
     repoDir,
     provider: provider.entry,

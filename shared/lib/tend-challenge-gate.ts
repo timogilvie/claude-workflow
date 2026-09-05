@@ -60,6 +60,7 @@ export interface TaskEvalState {
   prNumber: number | null;
   role: ChallengeRole;
   branch: string | null;
+  challengeStage: string | null;
   model: string | null;
   updatedAt: number | null;
   evalFailed: boolean;
@@ -273,9 +274,10 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
           prNumber,
           role,
           branch,
-          model: typeof task.challengeModel === 'string'
-            ? task.challengeModel
-            : (typeof task.coderModel === 'string' ? task.coderModel : null),
+          challengeStage: typeof task.challengeStage === 'string' && task.challengeStage
+            ? task.challengeStage
+            : null,
+          model: stageVariedModel(task),
           updatedAt,
           evalFailed: task.evalFailed === true,
           evalCompleted: task.evalCompleted === true,
@@ -312,6 +314,20 @@ export function loadWorkflowStateChallengeData(repoDir: string): WorkflowStateCh
       activeJobsByPair: new Map(),
     };
   }
+}
+
+function stageVariedModel(task: Record<string, unknown>): string | null {
+  const stage = typeof task.challengeStage === 'string' ? task.challengeStage : '';
+  if ((stage === 'plan' || stage === 'planning' || stage === 'planner') && typeof task.plannerModel === 'string') {
+    return task.plannerModel;
+  }
+  if ((stage === 'review' || stage === 'reviewer') && typeof task.reviewerModel === 'string') {
+    return task.reviewerModel;
+  }
+  if (typeof task.challengeModel === 'string') {
+    return task.challengeModel;
+  }
+  return typeof task.coderModel === 'string' ? task.coderModel : null;
 }
 
 function parseWorkflowStatePr(value: unknown): number | null {

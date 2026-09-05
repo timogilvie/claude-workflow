@@ -28,6 +28,7 @@ import {
 } from './schema.ts';
 import { buildGlobalCertificationPath } from './loader.ts';
 import { GLOBAL_CERTIFICATION_ROOT_ENV } from './storage.ts';
+import { buildLiveCodingCanaryFixture } from './canary-fixtures.ts';
 import {
   filterNativeModels,
   runScenarios,
@@ -44,6 +45,8 @@ import type {
 
 const NOW = new Date('2026-06-30T00:00:00.000Z');
 const FRESH_CERTIFIED_AT = '2026-06-01T00:00:00.000Z';
+// Within the live-canary TTL (14 days) of NOW.
+const CANARY_RAN_AT = '2026-06-25T00:00:00.000Z';
 const STALE_CERTIFIED_AT = '2026-01-01T00:00:00.000Z';
 const SUITE_VERSION = 'v-rollout';
 const FIXTURE_DIR = new URL('./fixtures', import.meta.url).pathname;
@@ -163,6 +166,12 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: FRESH_CERTIFIED_AT,
     scenarios: [{ scenarioId: 'rollout.synthetic.pass', passed: true }],
+    // Coding-capable phases carry an eligible live canary by default so
+    // coder-positive rollout cases stay valid under the HOK-2943 gate;
+    // negative canary cases override liveCanary explicitly.
+    ...((overrides.phase ?? 'patch') !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(testSubject(provider, model), suiteVersion, { ranAt: CANARY_RAN_AT }) }
+      : {}),
     ...overrides,
   };
   writeFileSync(artifactPath, JSON.stringify(artifact));

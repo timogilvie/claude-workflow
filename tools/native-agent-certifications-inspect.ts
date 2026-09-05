@@ -5,9 +5,12 @@ import {
   CERTIFICATION_TTL_DAYS,
   DEFAULT_CERTIFICATION_SUITE_VERSION,
   evaluateEligibility,
+  evaluateLiveCodingCanaryEligibility,
   loadGlobalCertification,
   resolveCertificationSubject,
   type CertificationPhase,
+  type LiveCodingCanaryIneligibilityReason,
+  type LiveCodingCanaryStatus,
 } from '../shared/lib/native-agent/certification/index.ts';
 import { getEffectiveRegistry, type ModelRegistry } from '../shared/lib/model-registry.ts';
 
@@ -25,6 +28,22 @@ export interface CertificationInspection {
   scenarios: Array<{ scenarioId: string; passed: boolean; failureMessage?: string }>;
   knownLimitations: string[];
   subject?: unknown;
+  /**
+   * Live coding canary readiness (HOK-2943). Populated whenever the artifact
+   * was found; `eligible` here is the coding-specific prerequisite that must
+   * hold in addition to the deterministic eligibility above.
+   */
+  liveCanary?: {
+    eligible: boolean;
+    status?: LiveCodingCanaryStatus;
+    isLive?: boolean;
+    ranAt?: string;
+    expiresAt?: string;
+    reason?: LiveCodingCanaryIneligibilityReason;
+    failureReason?: string;
+  };
+  /** True only when deterministic eligibility for `patch` AND the live canary both hold. */
+  codingEligible?: boolean;
 }
 
 export function inspectGlobalCertification(opts: {
@@ -68,6 +87,13 @@ export function inspectGlobalCertification(opts: {
     opts.now,
     resolved.subject,
   );
+  const canaryEligibility = evaluateLiveCodingCanaryEligibility(
+    loaded.artifact,
+    opts.suiteVersion,
+    opts.now ?? new Date(),
+    resolved.subject,
+  );
+  const canary = 'liveCanary' in loaded.artifact ? loaded.artifact.liveCanary : undefined;
   const expiresAt = loaded.artifact.expiresAt
     ?? new Date(Date.parse(loaded.artifact.certifiedAt) + CERTIFICATION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString();
   return {
@@ -88,6 +114,22 @@ export function inspectGlobalCertification(opts: {
     })),
     knownLimitations: loaded.artifact.knownLimitations ?? [],
     subject: 'subject' in loaded.artifact ? loaded.artifact.subject : undefined,
+    liveCanary: {
+      eligible: canaryEligibility.eligible,
+      ...(canary
+        ? {
+          status: canary.status,
+          isLive: canary.isLive,
+          ranAt: canary.ranAt,
+          ...(canary.expiresAt ? { expiresAt: canary.expiresAt } : {}),
+          ...(canary.reason ? { failureReason: canary.reason } : {}),
+        }
+        : {}),
+      ...(canaryEligibility.eligible ? {} : { reason: canaryEligibility.reason }),
+    },
+    codingEligible: eligibility.eligible
+      && evaluateEligibility(loaded.artifact, opts.suiteVersion, 'patch', opts.now, resolved.subject).eligible
+      && canaryEligibility.eligible,
   };
 }
 
@@ -132,6 +174,14 @@ export function runInspectCommand(argv = process.argv.slice(2)): Promise<void> {
       if (inspection.certifiedAt) console.log(`Certified: ${inspection.certifiedAt}`);
       if (inspection.expiresAt) console.log(`Expires:  ${inspection.expiresAt}`);
       if (inspection.artifactPath) console.log(`Path:     ${inspection.artifactPath}`);
+      if (inspection.liveCanary) {
+        const canary = inspection.liveCanary;
+        const detail = canary.status
+          ? `${canary.status}${canary.isLive === false ? ' (non-live)' : ''}${canary.failureReason ? ` reason=${canary.failureReason}` : ''}${canary.ranAt ? ` ranAt=${canary.ranAt}` : ''}`
+          : 'missing';
+        console.log(`Live coding canary: ${detail}${canary.eligible ? '' : ` — ineligible (${canary.reason ?? 'missing'})`}`);
+        console.log(`Coding eligible: ${inspection.codingEligible === true}`);
+      }
       if (inspection.scenarios.length > 0) {
         console.log('Scenarios:');
         for (const scenario of inspection.scenarios) {

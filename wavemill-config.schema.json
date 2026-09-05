@@ -442,6 +442,12 @@
                             "type": "integer",
                             "minimum": 1,
                             "default": 50
+                        },
+                        "resolutionAfterCycles": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5,
+                            "description": "Consecutive successful observer cycles without a fresh distinct event before an observed/active incident auto-resolves."
                         }
                     },
                     "additionalProperties": false
@@ -1030,6 +1036,62 @@
                         }
                     },
                     "additionalProperties": false
+                },
+                "selectionHealth": {
+                    "type": "object",
+                    "description": "Temporary challenge selection health. Adds TTL-bound in-flight model reservations and provider/model circuit breaking without mutating permanent disabled models. Set enabled=false as the rollback switch.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Whether challenge selection should honor temporary reservations and provider/model circuit state. Disable to restore legacy selector behavior while leaving state files ignored."
+                        },
+                        "reservation": {
+                            "type": "object",
+                            "description": "TTL settings for challenge challenger model reservations.",
+                            "properties": {
+                                "selectionTtlSeconds": {
+                                    "type": "integer",
+                                    "minimum": 60,
+                                    "default": 900,
+                                    "description": "Seconds a selected-but-not-launched challenge reservation excludes the same provider/model/stage from other planners."
+                                },
+                                "inflightTtlSeconds": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "default": 7200,
+                                    "description": "Seconds a launched challenge reservation remains active while waiting for a terminal outcome. Set to 0 to release on launch acknowledgement."
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "circuit": {
+                            "type": "object",
+                            "description": "Temporary provider/model circuit breaker settings for typed transient upstream failures.",
+                            "properties": {
+                                "transientFailureThreshold": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "default": 3,
+                                    "description": "Provider-fault outcomes required inside windowSeconds before opening the provider/model circuit."
+                                },
+                                "windowSeconds": {
+                                    "type": "integer",
+                                    "minimum": 60,
+                                    "default": 1800,
+                                    "description": "Rolling window used to count transient provider failures."
+                                },
+                                "cooldownSeconds": {
+                                    "type": "integer",
+                                    "minimum": 60,
+                                    "default": 900,
+                                    "description": "Seconds an open circuit blocks selection before allowing one half-open probe."
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false
@@ -1576,6 +1638,18 @@
                             "type": "boolean",
                             "default": false,
                             "description": "Gate recovery launches on a validated reconciliation capsule and capsule-projected prompts."
+                        }
+                    },
+                    "additionalProperties": false
+                },
+                "paneRelease": {
+                    "type": "object",
+                    "description": "Queue-owned task pane release (HOK-2937). When enabled with postPrReconciliation, reviewed merge-candidate tasks can release their tmux task pane after a durable capsule handoff and rehydrate only for bounded reconciliation. Default off during rollout.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Release eligible ready-stage task panes after a safe durable queue handoff."
                         }
                     },
                     "additionalProperties": false

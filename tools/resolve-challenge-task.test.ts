@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,12 +13,14 @@ import {
   resolveCertificationSubject,
 } from '../shared/lib/native-agent/certification/index.ts';
 import { DEFAULT_MODEL_REGISTRY } from '../shared/lib/model-registry.ts';
+import { buildLiveCodingCanaryFixture } from '../shared/lib/native-agent/certification/canary-fixtures.ts';
 import {
   PATCH_CODING_CERTIFICATION_SCHEMA_VERSION,
   getPatchCodingCertificationPath,
 } from '../shared/lib/native-agent/coding-certification.ts';
 import { PATCH_CODING_SMOKE_SUITE_REVISION } from '../shared/lib/native-agent/smoke.ts';
 import { listEffectiveModelsForStage } from '../shared/lib/effective-models.ts';
+import { claimReservation } from '../shared/lib/challenge-selection-health.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const resolveChallengeTaskTool = resolve(__dirname, 'resolve-challenge-task.ts');
@@ -66,6 +68,10 @@ function writeCertArtifact(
     suiteVersion,
     certifiedAt: CERT_DATE_FRESH,
     scenarios: [{ scenarioId: 's1', passed: true }],
+    // HOK-2943: coder eligibility additionally requires live canary evidence.
+    ...(phase !== 'read-only'
+      ? { liveCanary: buildLiveCodingCanaryFixture(identity.subject, suiteVersion, { ranAt: CERT_DATE_FRESH }) }
+      : {}),
   }), 'utf-8');
 }
 
@@ -201,7 +207,145 @@ function runResolveChallengeTask(repoDir: string, args: string[]): Record<string
   return JSON.parse(stdout);
 }
 
+function updateRepoConfig(repoDir: string, update: (config: Record<string, unknown>) => void): void {
+  const configPath = join(repoDir, '.wavemill-config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+  update(config);
+  writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
+}
+
 describe('resolve-challenge-task CLI', () => {
+  it('claims reservations so sequential selectors choose distinct zero-record challengers', () => {
+    const aliases = ['qwen-3-coder', 'glm-5.2'];
+    const repoDir = makeRepo([], {
+      aliases,
+      patchCodingEnabled: true,
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certificationPhase: 'patch',
+    });
+    try {
+      const first = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2942-A',
+        '--slug', 'selection-health-a',
+        '--title', 'Reserve first challenger',
+        '--primary-model', 'claude-sonnet-4-6',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+      ]);
+      const second = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2942-B',
+        '--slug', 'selection-health-b',
+        '--title', 'Reserve second challenger',
+        '--primary-model', 'claude-sonnet-4-6',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+      ]);
+
+      assert.equal(first.mode, 'challenge');
+      assert.equal(second.mode, 'challenge');
+      const firstChallenger = (first.entries as Array<Record<string, unknown>>)
+        .find((entry) => entry.role === 'challenger')?.model;
+      const secondChallenger = (second.entries as Array<Record<string, unknown>>)
+        .find((entry) => entry.role === 'challenger')?.model;
+      assert.ok(firstChallenger);
+      assert.ok(secondChallenger);
+      assert.notEqual(firstChallenger, secondChallenger);
+      assert.ok((second.selectionHealth as Record<string, unknown> & {
+        excludedByReservation: unknown[];
+      }).excludedByReservation.length >= 1);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns typed selection-health defer when health filtering exhausts candidates', async () => {
+    const repoDir = makeRepo([], {
+      aliases: ['qwen-3-coder'],
+      patchCodingEnabled: true,
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certificationPhase: 'patch',
+    });
+    try {
+      updateRepoConfig(repoDir, (config) => {
+        config.challenge = {
+          ...(config.challenge as Record<string, unknown>),
+          rate: 0.1,
+          recommendationRate: 1,
+        };
+      });
+      const featureDir = join(repoDir, 'features', 'selection-health-only');
+      mkdirSync(featureDir, { recursive: true });
+      writeFileSync(join(featureDir, '.post-expansion-route.json'), JSON.stringify({
+        coder: 'claude-sonnet-4-6',
+        reviewer: 'claude-sonnet-4-6',
+        codeDepth: 'medium',
+        reviewMode: 'llm',
+        challengeRecommendation: {
+          shouldChallenge: true,
+          reason: 'new-model',
+          challengerModel: 'qwen-3-coder',
+          priority: 200,
+        },
+      }), 'utf-8');
+      const candidates = listEffectiveModelsForStage('coding').models
+        .filter((model) => model !== 'claude-sonnet-4-6');
+      for (const [index, model] of candidates.entries()) {
+        await claimReservation({
+          repoDir,
+          model,
+          stage: 'implementation',
+          owner: { issueId: `HOK-OTHER-${index}`, pairId: `HOK-OTHER-${index}` },
+        });
+      }
+      const args = [
+        '--slug', 'selection-health-only',
+        '--title', 'Reserve only challenger',
+        '--primary-model', 'claude-sonnet-4-6',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+        '--feature-dir', featureDir,
+      ];
+      const result = runResolveChallengeTask(repoDir, ['--issue', 'HOK-2942-D', ...args]);
+      assert.equal(result.mode, 'single');
+      assert.equal(result.reason, 'challenge_deferred_selection_health');
+      assert.ok((result.selectionHealth as Record<string, unknown> & {
+        excludedByReservation: unknown[];
+      }).excludedByReservation.length >= 1);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('honors challenge.selectionHealth.enabled=false without writing health state', () => {
+    const repoDir = makeRepo([], {
+      aliases: ['qwen-3-coder', 'glm-5.2'],
+      patchCodingEnabled: true,
+      suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
+      certificationPhase: 'patch',
+    });
+    try {
+      updateRepoConfig(repoDir, (config) => {
+        config.challenge = {
+          ...(config.challenge as Record<string, unknown>),
+          selectionHealth: { enabled: false },
+        };
+      });
+      const result = runResolveChallengeTask(repoDir, [
+        '--issue', 'HOK-2942-E',
+        '--slug', 'selection-health-disabled',
+        '--title', 'Disabled selection health',
+        '--primary-model', 'claude-sonnet-4-6',
+        '--remaining-slots', '2',
+        '--repo-dir', repoDir,
+      ]);
+      assert.equal(result.mode, 'challenge');
+      assert.equal(result.selectionHealth, undefined);
+      assert.equal(existsSync(join(repoDir, '.wavemill', 'challenge-selection-health.json')), false);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to global challenge candidates when repo-local native challengers are not launchable', () => {
     const repoDir = makeRepo(['glm-5.2']);
     try {
