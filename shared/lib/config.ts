@@ -532,6 +532,8 @@ export interface IncidentConfig {
     dependencyThreshold?: number;
     cooldownMinutes?: number;
     maxEvidencePerRecord?: number;
+    /** Consecutive successful observer cycles without a fresh distinct event before an incident auto-resolves. */
+    resolutionAfterCycles?: number;
   };
   escalation?: {
     severityCutoff?: 'critical' | 'high' | 'medium' | 'low' | 'info';
@@ -1853,6 +1855,7 @@ export function getIncidentConfig(repoDir?: string): Required<Pick<IncidentConfi
       dependencyThreshold: incident.detection?.dependencyThreshold ?? 3,
       cooldownMinutes: incident.detection?.cooldownMinutes ?? 5,
       maxEvidencePerRecord: incident.detection?.maxEvidencePerRecord ?? 50,
+      resolutionAfterCycles: incident.detection?.resolutionAfterCycles ?? 5,
     },
     escalation: {
       severityCutoff: incident.escalation?.severityCutoff ?? 'medium',

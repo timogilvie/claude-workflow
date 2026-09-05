@@ -442,6 +442,12 @@
                             "type": "integer",
                             "minimum": 1,
                             "default": 50
+                        },
+                        "resolutionAfterCycles": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "default": 5,
+                            "description": "Consecutive successful observer cycles without a fresh distinct event before an observed/active incident auto-resolves."
                         }
                     },
                     "additionalProperties": false

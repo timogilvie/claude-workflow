@@ -260,6 +260,7 @@ TESTS=(
   tools/check-cross-pr-reverts.test.ts
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
+  tools/incidents.test.ts
   tools/launch-validation.test.ts
   tools/measure-repo-attribution.test.ts
   tools/observer.test.ts
