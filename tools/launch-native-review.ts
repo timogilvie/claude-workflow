@@ -14,6 +14,7 @@ import { DEFAULT_NETWORK_POLICY, type NetworkPolicy } from '../shared/lib/native
 import { resolveOwnerRepo } from '../shared/lib/github.ts';
 import { getMillConfig } from '../shared/lib/config.ts';
 import { createComment, getIssue, updateComment } from '../shared/lib/linear.ts';
+import { renderPrMetadata } from '../shared/lib/pr-metadata.ts';
 
 function readOption(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -120,7 +121,7 @@ export function buildNativeCodingHandoff(featureDir: string): string {
   return sections.join('\n\n');
 }
 
-function buildPrBody(input: {
+export function buildPrBody(input: {
   issue: string;
   title: string;
   reviewerModel: string;
@@ -151,9 +152,7 @@ function buildPrBody(input: {
     '',
     '- Native review flow ran `review_changes` and attached the structured findings below.',
     '',
-    '<!-- wavemill-meta',
-    `task: ${input.issue}`,
-    '-->',
+    renderPrMetadata({ task: input.issue }),
   ].join('\n');
 }
 

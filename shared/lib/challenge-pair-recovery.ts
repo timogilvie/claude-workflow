@@ -22,6 +22,14 @@
 
 import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { EvalRecord } from './eval-schema.ts';
+import {
+  canonicalChallengePrUrl,
+  selectCurrentChallengeEval,
+  type CurrentChallengeEvalDiagnostics,
+  type CurrentChallengeEvalRefusalReason,
+} from './current-challenge-eval-selector.ts';
+import { resolvePrIdentityMetadata } from './pr-comparison.ts';
 
 export type ChallengeRecoveryVerdict = 'supersedable' | 'quarantine-upheld' | 'pair-not-found';
 
@@ -43,6 +51,12 @@ export interface ChallengeArmEvidence {
   stageResultPath?: string;
   prUrl?: string;
   evalScore?: number;
+  /** Current-head eval evidence selected without relying on a comparison row. */
+  selectedEvalId?: string;
+  evaluatedPrHeadSha?: string;
+  currentPrHeadSha?: string;
+  selectorReason?: CurrentChallengeEvalRefusalReason;
+  selectorDiagnostics?: CurrentChallengeEvalDiagnostics;
   intentCreatedAt?: string;
   intentStage?: string;
   proven: boolean;
@@ -66,6 +80,8 @@ export interface ChallengeRecoveryOptions {
   pairIds: string[];
   apply?: boolean;
   now?: () => string;
+  /** Test seam and adapter for resolving a live PR URL and head identity. */
+  resolvePrIdentity?: (pr: string, repoDir: string) => { url: string; headSha: string };
 }
 
 export interface ChallengeRecoveryResult {
@@ -82,11 +98,18 @@ interface TaskState {
   linearIssueId?: string;
   challengePairId?: string;
   challengeRole?: string;
+  pr?: string;
+  prUrl?: string;
   challengeExecutionIntent?: {
     createdAt?: string;
     selectedStage?: string;
     challengeStage?: string;
   } | null;
+}
+
+function defaultResolvePrIdentity(pr: string, repoDir: string): { url: string; headSha: string } {
+  const metadata = resolvePrIdentityMetadata(pr, repoDir);
+  return { url: metadata.url, headSha: metadata.head_sha };
 }
 
 function readJson<T>(path: string): T | undefined {
@@ -127,10 +150,12 @@ function collectArmEvidence(
   task: TaskState | undefined,
   challengeStage: string | undefined,
   record: Record<string, unknown> | undefined,
-  evals: Record<string, unknown>[],
+  evals: EvalRecord[],
+  resolvePrIdentity: (pr: string, repoDir: string) => { url: string; headSha: string },
 ): ChallengeArmEvidence {
   const gaps: string[] = [];
   const evidence: ChallengeArmEvidence = { side, issueId, proven: false, gaps };
+  const pairId = task?.challengePairId ?? issueId.replace(/_c$/, '');
 
   if (!task) {
     gaps.push(`no task state for ${issueId}`);
@@ -171,23 +196,47 @@ function collectArmEvidence(
     }
   }
 
-  const prUrl = side === 'primary'
+  let prReference = task.prUrl ?? task.pr ?? (side === 'primary'
     ? (record?.primaryPrUrl as string | undefined)
-    : (record?.challengerPrUrl as string | undefined);
-  if (prUrl) evidence.prUrl = prUrl;
-
-  const score = side === 'primary'
-    ? (record?.primaryEvalScore as number | undefined)
-    : (record?.challengerEvalScore as number | undefined);
-  if (typeof score === 'number') {
-    evidence.evalScore = score;
-  } else {
-    gaps.push('no eval score recorded');
+    : (record?.challengerPrUrl as string | undefined));
+  if (!prReference) {
+    const candidateUrls = [...new Set(evals
+      .filter((evalRecord) => evalRecord.challengePairId === pairId && evalRecord.challengeSide === side)
+      .map((evalRecord) => canonicalChallengePrUrl(evalRecord.prUrl))
+      .filter((url): url is string => Boolean(url)))];
+    if (candidateUrls.length === 1) {
+      prReference = candidateUrls[0];
+    } else if (candidateUrls.length > 1) {
+      gaps.push(`ambiguous PR identity in eval evidence (${candidateUrls.join(', ')})`);
+    } else {
+      gaps.push('no PR identity in task state, comparison, or eval evidence');
+    }
   }
-
-  // The arm's own eval record is corroborating evidence that it ran at all.
-  if (prUrl && !evals.some((e) => e.prUrl === prUrl)) {
-    gaps.push(`no eval record referencing ${prUrl}`);
+  if (prReference) {
+    try {
+      const currentPr = resolvePrIdentity(prReference, repoDir);
+      evidence.prUrl = currentPr.url;
+      evidence.currentPrHeadSha = currentPr.headSha;
+      const selection = selectCurrentChallengeEval(evals, {
+        pairId,
+        side,
+        prUrl: currentPr.url,
+        currentHeadSha: currentPr.headSha,
+        requireScore: true,
+      });
+      if (selection.ok === true) {
+        evidence.prUrl = selection.canonicalPrUrl;
+        evidence.evalScore = selection.record.score;
+        evidence.selectedEvalId = selection.evalId;
+        evidence.evaluatedPrHeadSha = selection.evaluatedPrHeadSha;
+      } else {
+        evidence.selectorReason = selection.reason;
+        evidence.selectorDiagnostics = selection.diagnostics;
+        gaps.push(`current-head eval evidence refused (${selection.reason})`);
+      }
+    } catch (error) {
+      gaps.push(`could not resolve current PR identity for ${prReference}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   evidence.proven = gaps.length === 0;
@@ -198,6 +247,7 @@ export function assessChallengePair(
   repoDir: string,
   pairId: string,
   now: () => string = () => new Date().toISOString(),
+  resolvePrIdentity: (pr: string, repoDir: string) => { url: string; headSha: string } = defaultResolvePrIdentity,
 ): ChallengeRecoveryAssessment {
   const statePath = join(repoDir, '.wavemill', 'workflow-state.json');
   const recordsPath = join(repoDir, '.wavemill', 'evals', 'challenge-records.jsonl');
@@ -206,7 +256,7 @@ export function assessChallengePair(
   const state = readJson<{ tasks?: Record<string, TaskState> }>(statePath);
   const tasks = state?.tasks ?? {};
   const records = readJsonl<Record<string, unknown>>(recordsPath);
-  const evals = readJsonl<Record<string, unknown>>(evalsPath);
+  const evals = readJsonl<EvalRecord>(evalsPath);
 
   const assessment: ChallengeRecoveryAssessment = {
     pairId,
@@ -241,8 +291,8 @@ export function assessChallengePair(
   assessment.challengeStage = challengeStage;
 
   assessment.arms = [
-    collectArmEvidence(repoDir, 'primary', pairId, primaryTask, challengeStage, record, evals),
-    collectArmEvidence(repoDir, 'challenger', `${pairId}_c`, challengerTask, challengeStage, record, evals),
+    collectArmEvidence(repoDir, 'primary', pairId, primaryTask, challengeStage, record, evals, resolvePrIdentity),
+    collectArmEvidence(repoDir, 'challenger', `${pairId}_c`, challengerTask, challengeStage, record, evals, resolvePrIdentity),
   ];
 
   // ── Gate 1: an immutable intent shared by both arms ────────────────
@@ -314,6 +364,10 @@ function buildSupersedingRecord(
     challengerPrUrl: challengerArm.prUrl,
     primaryEvalScore: primaryArm.evalScore,
     challengerEvalScore: challengerArm.evalScore,
+    selectedEvalEvidence: {
+      primary: { evalId: primaryArm.selectedEvalId!, evaluatedPrHeadSha: primaryArm.evaluatedPrHeadSha! },
+      challenger: { evalId: challengerArm.selectedEvalId!, evaluatedPrHeadSha: challengerArm.evaluatedPrHeadSha! },
+    },
     // A tie has no decisive winner, so it is reported as inconclusive rather
     // than as a comparison the gate would act on.
     comparisonOutcome: winner ? 'compared' : 'inconclusive',
@@ -340,6 +394,9 @@ function buildSupersedingRecord(
         issueId: arm.issueId,
         stageModel: arm.stageModel,
         stageResultPath: arm.stageResultPath,
+        selectedEvalId: arm.selectedEvalId,
+        evaluatedPrHeadSha: arm.evaluatedPrHeadSha,
+        currentPrHeadSha: arm.currentPrHeadSha,
       })),
     },
   };
@@ -363,7 +420,7 @@ export function runChallengeRecovery(options: ChallengeRecoveryOptions): Challen
   let supersedingRecordsWritten = 0;
 
   for (const pairId of pairIds) {
-    const assessment = assessChallengePair(repoDir, pairId, now);
+    const assessment = assessChallengePair(repoDir, pairId, now, options.resolvePrIdentity ?? defaultResolvePrIdentity);
     assessments.push(assessment);
 
     if (!apply) continue;

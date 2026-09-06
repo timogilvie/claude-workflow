@@ -233,6 +233,11 @@
       "format": "uri",
       "description": "Pull request URL, if the task produced a PR."
     },
+    "evaluatedPrHeadSha": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Immutable pull request head SHA evaluated by this record."
+    },
     "tokenUsage": {
       "type": "object",
       "description": "Token usage from the LLM judge API call.",

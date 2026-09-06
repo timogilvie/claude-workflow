@@ -1,0 +1,24 @@
+{
+  "0409b10faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+    "schemaVersion": "1.0",
+    "id": "incident-active-only",
+    "fingerprint": "0409b10faaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "taskId": "HOK-2893",
+    "session": null,
+    "category": "product_defect",
+    "rootCauseClass": "failed_background_job",
+    "severity": "medium",
+    "confidence": "high",
+    "lifecycle": "active",
+    "createdAt": "2026-08-24T10:00:00.000Z",
+    "firstObservedAt": "2026-08-24T10:00:00.000Z",
+    "lastObservedAt": "2026-09-05T09:00:00.000Z",
+    "occurrenceCount": 30336,
+    "summary": "eval job eval-HOK-2893-primary-1265 ended failed",
+    "operatorAction": "Inspect the failed eval job.",
+    "evidence": [],
+    "metadata": {
+      "thresholdTriggered": true
+    }
+  }
+}

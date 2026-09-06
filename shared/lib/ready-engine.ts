@@ -1,5 +1,5 @@
 import type { ChallengeComparison } from './challenge-comparison.ts';
-import { parsePrMetadata, extractMetadataBlock, type PrMetadata } from './pr-metadata.ts';
+import { validatePrMetadata, type PrMetadata, type MetadataValidation } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import type { IntegrationReadyPolicyConfig } from './config.ts';
 import {
@@ -49,17 +49,6 @@ export interface ReadyEngineContext {
   requiredCheckRead?: CheckReadResult;
 }
 
-const KNOWN_METADATA_FIELDS = new Set([
-  'task',
-  'stack',
-  'depends_on',
-  'depends_on_linear',
-  'requires',
-  'risk',
-  'challenge',
-  'challengePairId',
-]);
-
 function aggregateStatus(results: GuardResult[]): ReadyVerdict['status'] {
   if (results.some((result) => result.status === 'fail')) return 'fail';
   if (results.some((result) => result.status === 'pending')) return 'pending';
@@ -75,49 +64,19 @@ function toFragment(title: string, lines: string[]): string {
   return [`${title}:`, ...lines.map((line) => `- ${line}`)].join('\n');
 }
 
-function parseMetadataForReady(body: string):
-  | { ok: true; metadata: PrMetadata }
-  | { ok: false; errors: string[] } {
-  const { block } = extractMetadataBlock(body);
-  if (block === null) {
-    return { ok: false, errors: ['Missing `wavemill-meta` block in PR body.'] };
-  }
-
-  const parsed = parsePrMetadata(body);
-  if (parsed.ok) {
-    return { ok: true, metadata: parsed.metadata };
-  }
-
-  const actionableErrors = parsed.errors.filter((error) => !error.message.startsWith('Unknown wavemill-meta field:'));
-  if (actionableErrors.length === 0) {
-    const filteredBody = [
-      '<!-- wavemill-meta',
-      ...block.split('\n').filter((line) => {
-        const trimmed = line.trim();
-        if (!trimmed) return true;
-        const [field] = trimmed.split(':', 1);
-        return KNOWN_METADATA_FIELDS.has(field.trim());
-      }),
-      '-->',
-    ].join('\n');
-    const reparsed = parsePrMetadata(filteredBody);
-    if (reparsed.ok) {
-      return { ok: true, metadata: reparsed.metadata };
-    }
-  }
-
-  return {
-    ok: false,
-    errors: actionableErrors.map((error) => error.message),
-  };
+function getValidationForReady(body: string): MetadataValidation {
+  return validatePrMetadata(body);
 }
 
 async function getMetadata(ctx: ReadyEngineContext): Promise<PrMetadata> {
-  const parsed = parseMetadataForReady(ctx.pr.body);
-  if (!parsed.ok) {
-    throw new Error(parsed.errors.join('; '));
+  const validation = getValidationForReady(ctx.pr.body);
+  if (validation.status === 'absent') {
+    throw new Error('Missing `wavemill-meta` block in PR body.');
   }
-  return parsed.metadata;
+  if (validation.status === 'invalid') {
+    throw new Error(validation.errors.map((e) => e.message).join('; '));
+  }
+  return validation.metadata;
 }
 
 export async function checkBaseBranch(ctx: ReadyEngineContext): Promise<GuardResult> {
@@ -135,12 +94,22 @@ export async function checkBaseBranch(ctx: ReadyEngineContext): Promise<GuardRes
 }
 
 export async function checkMetadata(ctx: ReadyEngineContext): Promise<GuardResult> {
-  const parsed = parseMetadataForReady(ctx.pr.body);
-  if (parsed.ok) {
+  const validation = getValidationForReady(ctx.pr.body);
+  if (validation.status === 'valid') {
     return { status: 'pass' };
   }
 
-  const lines = parsed.errors;
+  if (validation.status === 'absent') {
+    const reason = 'Missing `wavemill-meta` block in PR body.';
+    return {
+      status: 'fail',
+      reason,
+      labels: [WM_LABELS.metadataInvalid],
+      commentFragment: toFragment('Invalid Metadata', [reason]),
+    };
+  }
+
+  const lines = validation.errors.map((e) => e.message);
   return {
     status: 'fail',
     reason: lines.join(' '),
