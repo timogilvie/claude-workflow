@@ -19,7 +19,7 @@ import { getIntegrationConfig, getIntegrationReadyPolicy } from './config.ts';
 import { readChallengeComparisons } from './challenge-comparison.ts';
 import { getPullRequest, removeLabelFromPullRequest } from './github.ts';
 import { getIssueCompletionState } from './linear.ts';
-import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-metadata.ts';
+import { extractMetadataBlock, validatePrMetadata, type PrMetadata, type PrMetadataValidationResult } from './pr-metadata.ts';
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execArgvCommand, execShellCommand } from './shell-utils.ts';
@@ -415,11 +415,12 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
   const workItemByNumber = new Map<number, { pr: GhPrListEntry; metadata: PrMetadata | null }>();
 
   for (const pr of wavemillPrs) {
-    const metadataResult = getValidMetadata(pr.body);
-    workItemByNumber.set(pr.number, { pr, metadata: metadataResult.metadata });
+    const metadataResult = getMetadataValidation(pr.body);
+    const metadata = metadataResult.status === 'valid' ? metadataResult.metadata : null;
+    workItemByNumber.set(pr.number, { pr, metadata });
     const reason = await getInitialBlockReason(
       pr,
-      metadataResult.metadata,
+      metadataResult,
       openPrNumbers,
       {
         repoDir: options.repoDir,
@@ -437,7 +438,9 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
       continue;
     }
 
-    eligibleWorkItems.push({ pr, metadata: metadataResult.metadata });
+    if (metadata) {
+      eligibleWorkItems.push({ pr, metadata });
+    }
   }
 
   const dependencyBlocked = removeCandidatesWithBlockedDependencies(eligibleWorkItems);
@@ -2128,29 +2131,20 @@ function validateBranchName(integrationBranch: string, label: string): void {
 }
 
 function isWavemillPr(pr: GhPrListEntry): boolean {
-  return labelSet(pr).has(WM_LABELS.wavemill) || hasValidMetadataBlock(pr.body);
+  return labelSet(pr).has(WM_LABELS.wavemill) || hasMetadataBlock(pr.body);
 }
 
-function hasValidMetadataBlock(body: string): boolean {
-  return extractMetadataBlock(body).block !== null && parsePrMetadata(body).ok;
+function hasMetadataBlock(body: string): boolean {
+  return extractMetadataBlock(body).block !== null;
 }
 
-function getValidMetadata(body: string): { metadata: PrMetadata | null } {
-  if (extractMetadataBlock(body).block === null) {
-    return { metadata: null };
-  }
-
-  const parsed = parsePrMetadata(body);
-  if (!parsed.ok) {
-    return { metadata: null };
-  }
-
-  return { metadata: parsed.metadata };
+function getMetadataValidation(body: string): PrMetadataValidationResult {
+  return validatePrMetadata(body);
 }
 
 async function getInitialBlockReason(
   pr: GhPrListEntry,
-  metadata: PrMetadata | null,
+  metadataResult: PrMetadataValidationResult,
   openPrNumbers: Set<number>,
   options: {
     repoDir: string;
@@ -2163,9 +2157,14 @@ async function getInitialBlockReason(
   },
 ): Promise<string | null> {
   const labels = labelSet(pr);
+  const metadata = metadataResult.status === 'valid' ? metadataResult.metadata : null;
 
   if (pr.isDraft) {
     return 'draft';
+  }
+
+  if (metadataResult.status === 'invalid') {
+    return metadataInvalidReason(metadataResult);
   }
 
   if (labels.has(WM_LABELS.blocked)) {
@@ -2199,6 +2198,11 @@ async function getInitialBlockReason(
   }
 
   return null;
+}
+
+function metadataInvalidReason(result: Extract<PrMetadataValidationResult, { status: 'invalid' }>): string {
+  const field = result.errors[0]?.field || 'metadata';
+  return `metadata-invalid:${field}`;
 }
 
 async function resolveBlockedLabelReason(

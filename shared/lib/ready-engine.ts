@@ -1,5 +1,5 @@
 import type { ChallengeComparison } from './challenge-comparison.ts';
-import { parsePrMetadata, extractMetadataBlock, type PrMetadata } from './pr-metadata.ts';
+import { validatePrMetadata, type PrMetadata } from './pr-metadata.ts';
 import { WM_LABELS } from './pr-state-labels.ts';
 import type { IntegrationReadyPolicyConfig } from './config.ts';
 import {
@@ -49,17 +49,6 @@ export interface ReadyEngineContext {
   requiredCheckRead?: CheckReadResult;
 }
 
-const KNOWN_METADATA_FIELDS = new Set([
-  'task',
-  'stack',
-  'depends_on',
-  'depends_on_linear',
-  'requires',
-  'risk',
-  'challenge',
-  'challengePairId',
-]);
-
 function aggregateStatus(results: GuardResult[]): ReadyVerdict['status'] {
   if (results.some((result) => result.status === 'fail')) return 'fail';
   if (results.some((result) => result.status === 'pending')) return 'pending';
@@ -78,37 +67,18 @@ function toFragment(title: string, lines: string[]): string {
 function parseMetadataForReady(body: string):
   | { ok: true; metadata: PrMetadata }
   | { ok: false; errors: string[] } {
-  const { block } = extractMetadataBlock(body);
-  if (block === null) {
+  const validated = validatePrMetadata(body);
+  if (validated.status === 'absent') {
     return { ok: false, errors: ['Missing `wavemill-meta` block in PR body.'] };
   }
 
-  const parsed = parsePrMetadata(body);
-  if (parsed.ok) {
-    return { ok: true, metadata: parsed.metadata };
-  }
-
-  const actionableErrors = parsed.errors.filter((error) => !error.message.startsWith('Unknown wavemill-meta field:'));
-  if (actionableErrors.length === 0) {
-    const filteredBody = [
-      '<!-- wavemill-meta',
-      ...block.split('\n').filter((line) => {
-        const trimmed = line.trim();
-        if (!trimmed) return true;
-        const [field] = trimmed.split(':', 1);
-        return KNOWN_METADATA_FIELDS.has(field.trim());
-      }),
-      '-->',
-    ].join('\n');
-    const reparsed = parsePrMetadata(filteredBody);
-    if (reparsed.ok) {
-      return { ok: true, metadata: reparsed.metadata };
-    }
+  if (validated.status === 'valid') {
+    return { ok: true, metadata: validated.metadata };
   }
 
   return {
     ok: false,
-    errors: actionableErrors.map((error) => error.message),
+    errors: validated.errors.map((error) => error.message),
   };
 }
 

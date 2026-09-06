@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildNativeCodingHandoff, firstNonEmpty, resolveBaseBranch } from './launch-native-review.ts';
+import { buildNativeCodingHandoff, buildPrBody, firstNonEmpty, resolveBaseBranch } from './launch-native-review.ts';
 
 describe('launch-native-review helpers', () => {
   it('ignores blank launcher context so required defaults remain available', () => {
@@ -67,6 +67,24 @@ describe('launch-native-review helpers', () => {
     } finally {
       rmSync(featureDir, { recursive: true, force: true });
     }
+  });
+
+  it('builds PR body metadata with the shared registered renderer', () => {
+    const body = buildPrBody({
+      issue: 'HOK-2929',
+      title: 'Fix metadata drift',
+      reviewerModel: 'native-reviewer',
+      baseBranch: 'auto/integration',
+      headBranch: 'task/fix-metadata',
+      codingHandoff: 'review-infrastructure-note: native-context-window-exceeded',
+    });
+
+    assert.match(body, /review-infrastructure-note: native-context-window-exceeded/);
+    assert.match(body, /<!-- wavemill-meta\ntask: HOK-2929\n-->/);
+    assert.doesNotMatch(
+      body,
+      /<!-- wavemill-meta[\s\S]*review-infrastructure-note[\s\S]*-->/,
+    );
   });
 
   it('includes blocked-completion handoff details when present', () => {

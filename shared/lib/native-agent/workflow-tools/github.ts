@@ -22,6 +22,7 @@ import {
   type NetworkDeniedDiagnostics,
   type NetworkPolicy,
 } from '../network-policy.ts';
+import { validatePrMetadata } from '../../pr-metadata.ts';
 import {
   isMutationAllowed,
 } from './mutation-policy.ts';
@@ -189,6 +190,15 @@ export async function githubCreatePr(
   const profile = buildProfileFromConfig(() => input.getSecretEnvNames(input.repoDir));
   const safeTitle = redact(request.title, profile);
   const safeBody = redact(request.body, profile);
+  const metadataValidation = validatePrMetadata(safeBody);
+  if (metadataValidation.status === 'invalid') {
+    const fields = [...new Set(metadataValidation.errors.map((error) => error.field))];
+    return createPrError(
+      'invalid_input',
+      `Invalid wavemill-meta fields: ${fields.join(', ')}. Use registered metadata fields only; place review notes outside the managed wavemill-meta block.`,
+      { metadataStatus: 'invalid', fields },
+    );
+  }
 
   const idempotencyKey = githubCreatePrKey({
     repo: request.repo,
@@ -546,7 +556,7 @@ function toLabelRef(repo: string, label: string, target: GitHubToolLabelTarget):
 function createPrError(
   error: 'invalid_input' | 'policy_denied' | 'not_found' | 'external_error' | 'conflict' | 'rate_limited',
   message: string,
-  diagnostics?: NetworkDeniedDiagnostics,
+  diagnostics?: Record<string, unknown>,
 ): GitHubCreatePrResult {
   return {
     ok: false,

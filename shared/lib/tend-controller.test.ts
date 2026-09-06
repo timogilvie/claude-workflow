@@ -623,6 +623,19 @@ describe('selectNextCandidate filtering', () => {
     });
   });
 
+  it('blocks invalid metadata with the invalid field name', async () => {
+    await withDecision([
+      pr({
+        body: metadata([
+          'task: HOK-2929',
+          'review-infrastructure-note: native-context-window-exceeded',
+        ]),
+      }),
+    ], (decision) => {
+      assert.equal(decision.blocked[0]?.reason, 'metadata-invalid:review-infrastructure-note');
+    });
+  });
+
   it('blocks PRs without the ready label', async () => {
     await withDecision([
       pr({ labels: [label(WM_LABELS.wavemill)] }),

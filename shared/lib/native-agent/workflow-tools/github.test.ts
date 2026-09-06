@@ -189,6 +189,33 @@ describe('githubCreatePr', () => {
     assert.match(String(result.idempotency.ref?.url), /pull\/1$/);
   });
 
+  it('rejects invalid wavemill metadata before GitHub calls', async () => {
+    const { deps, state } = createFixtureDeps();
+    const result = await githubCreatePr({
+      repo: 'acme/widgets',
+      head: 'feature/idempotent-pr',
+      base: 'main',
+      headSha: 'abc123',
+      title: 'Implement idempotent PR tool',
+      body: [
+        '<!-- wavemill-meta',
+        'task: HOK-2929',
+        'review-infrastructure-note: native-context-window-exceeded',
+        '-->',
+      ].join('\n'),
+    }, deps);
+
+    assert.equal(result.ok, false);
+    if (result.ok) return;
+    assert.equal(result.error, 'invalid_input');
+    assert.match(result.message, /review-infrastructure-note/);
+    assert.match(result.message, /outside the managed wavemill-meta block/);
+    assert.equal(result.message.includes('native-context-window-exceeded'), false);
+    assert.equal(state.calls.listOpenPullRequests, 0);
+    assert.equal(state.calls.createPullRequest, 0);
+    assert.equal(state.calls.updatePullRequest, 0);
+  });
+
   it('reuses an existing matching pull request', async () => {
     const { deps, state } = createFixtureDeps({
       pullRequests: [{

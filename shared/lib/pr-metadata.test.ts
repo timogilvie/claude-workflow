@@ -5,6 +5,7 @@ import {
   parsePrMetadata,
   renderPrMetadata,
   updatePrMetadata,
+  validatePrMetadata,
   type PrMetadata,
 } from './pr-metadata.ts';
 
@@ -138,43 +139,43 @@ describe('parsePrMetadata', () => {
     assert.deepEqual(parsed.errors, [
       {
         field: 'task',
+        code: 'empty-string',
         message: 'Expected non-empty string for task',
-        rawValue: '',
       },
       {
         field: 'depends_on',
+        code: 'invalid-json',
         message: 'Invalid JSON for depends_on',
-        rawValue: 'not-json',
       },
       {
         field: 'depends_on_linear',
+        code: 'wrong-type',
         message: 'Expected JSON string array for depends_on_linear',
-        rawValue: '[1]',
       },
       {
         field: 'requires',
+        code: 'wrong-type',
         message: 'Expected JSON string array for requires',
-        rawValue: '["ok", 2]',
       },
       {
         field: 'risk',
+        code: 'invalid-enum',
         message: 'Expected one of low, medium, high for risk',
-        rawValue: 'severe',
       },
       {
         field: 'challenge',
+        code: 'invalid-boolean',
         message: 'Expected boolean true/false for challenge',
-        rawValue: 'maybe',
       },
       {
         field: 'extra',
+        code: 'unknown-field',
         message: 'Unknown wavemill-meta field: extra',
-        rawValue: 'surprise',
       },
       {
-        field: 'bad line',
-        message: 'Malformed wavemill-meta line: bad line',
-        rawValue: 'bad line',
+        field: 'line',
+        code: 'malformed-line',
+        message: 'Malformed wavemill-meta line',
       },
     ]);
     assert.equal(parsed.bodyWithoutBlock, '');
@@ -202,6 +203,70 @@ describe('parsePrMetadata', () => {
 
     assert.deepEqual(parsed.metadata, { task: 'HOK-2', challenge: true });
     assert.equal(parsed.bodyWithoutBlock, 'Summary');
+  });
+});
+
+describe('validatePrMetadata', () => {
+  it('distinguishes absent, valid, and invalid metadata blocks', () => {
+    assert.deepEqual(validatePrMetadata('No metadata.'), {
+      status: 'absent',
+      bodyWithoutBlock: 'No metadata.',
+    });
+
+    assert.deepEqual(validatePrMetadata(['<!-- wavemill-meta', 'task: HOK-1432', '-->'].join('\n')), {
+      status: 'valid',
+      metadata: { task: 'HOK-1432' },
+      bodyWithoutBlock: '',
+    });
+
+    assert.deepEqual(validatePrMetadata([
+      '<!-- wavemill-meta',
+      'task: HOK-2929',
+      'review-infrastructure-note: native-context-window-exceeded',
+      '-->',
+    ].join('\n')), {
+      status: 'invalid',
+      errors: [{
+        field: 'review-infrastructure-note',
+        code: 'unknown-field',
+        message: 'Unknown wavemill-meta field: review-infrastructure-note',
+      }],
+      bodyWithoutBlock: '',
+    });
+  });
+
+  it('reports malformed, wrong-type, and future-version fields without raw values', () => {
+    const parsed = validatePrMetadata([
+      '<!-- wavemill-meta',
+      'depends_on: [1]',
+      'wm-schema-version: 999',
+      'bad line with secret-value',
+      '-->',
+    ].join('\n'));
+
+    assert.equal(parsed.status, 'invalid');
+    if (parsed.status !== 'invalid') {
+      return;
+    }
+
+    assert.deepEqual(parsed.errors, [
+      {
+        field: 'depends_on',
+        code: 'wrong-type',
+        message: 'Expected JSON string array for depends_on',
+      },
+      {
+        field: 'wm-schema-version',
+        code: 'unknown-field',
+        message: 'Unknown wavemill-meta field: wm-schema-version',
+      },
+      {
+        field: 'line',
+        code: 'malformed-line',
+        message: 'Malformed wavemill-meta line',
+      },
+    ]);
+    assert.equal(JSON.stringify(parsed.errors).includes('secret-value'), false);
   });
 });
 
@@ -237,6 +302,13 @@ describe('renderPrMetadata', () => {
 
   it('renders an empty block when no fields are set', () => {
     assert.equal(renderPrMetadata({}), '<!-- wavemill-meta\n\n-->');
+  });
+
+  it('rejects unregistered producer fields', () => {
+    assert.throws(
+      () => renderPrMetadata({ task: 'HOK-1432', reviewNote: 'nope' } as unknown as PrMetadata),
+      /Unknown wavemill-meta field: reviewNote/,
+    );
   });
 });
 
@@ -299,7 +371,7 @@ describe('updatePrMetadata', () => {
     );
   });
 
-  it('collapses multiple metadata blocks to one on update', () => {
+  it('removes duplicate metadata blocks without normalizing surrounding markdown', () => {
     const body = [
       'Intro',
       '',
@@ -316,7 +388,38 @@ describe('updatePrMetadata', () => {
 
     assert.equal(
       updatePrMetadata(body, { task: 'HOK-1432' }),
-      ['Intro', '', 'More', '', '<!-- wavemill-meta', 'task: HOK-1432', '-->'].join('\n'),
+      ['Intro', '', '', '', 'More', '', '<!-- wavemill-meta', 'task: HOK-1432', '-->'].join('\n'),
+    );
+  });
+
+  it('preserves non-managed PR body bytes when replacing metadata', () => {
+    const body = [
+      '# Title',
+      '',
+      'Body with two spaces.  ',
+      '',
+      '<!-- wavemill-meta',
+      'task: OLD',
+      '-->',
+      '',
+      'Trailing section.',
+      '',
+    ].join('\n');
+
+    assert.equal(
+      updatePrMetadata(body, { task: 'HOK-1432' }),
+      [
+        '# Title',
+        '',
+        'Body with two spaces.  ',
+        '',
+        '<!-- wavemill-meta',
+        'task: HOK-1432',
+        '-->',
+        '',
+        'Trailing section.',
+        '',
+      ].join('\n'),
     );
   });
 });

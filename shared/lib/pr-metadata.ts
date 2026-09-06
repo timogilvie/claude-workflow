@@ -13,16 +13,29 @@ export interface PrMetadata {
 
 export interface PrMetadataError {
   field: string;
+  code:
+    | 'malformed-line'
+    | 'unknown-field'
+    | 'empty-string'
+    | 'invalid-json'
+    | 'wrong-type'
+    | 'invalid-enum'
+    | 'invalid-boolean';
   message: string;
-  rawValue?: string;
 }
 
 export type ParseResult =
   | { ok: true; metadata: PrMetadata; bodyWithoutBlock: string }
   | { ok: false; errors: PrMetadataError[]; bodyWithoutBlock: string };
 
+export type PrMetadataValidationResult =
+  | { status: 'absent'; bodyWithoutBlock: string }
+  | { status: 'valid'; metadata: PrMetadata; bodyWithoutBlock: string }
+  | { status: 'invalid'; errors: PrMetadataError[]; bodyWithoutBlock: string };
+
 const BLOCK_REGEX = /<!-- wavemill-meta\n([\s\S]*?)\n-->/g;
-const LINE_REGEX = /^([a-zA-Z_]+):\s*(.*)$/;
+const LINE_REGEX = /^([a-zA-Z][a-zA-Z0-9_-]*):\s*(.*)$/;
+const MAX_DIAGNOSTIC_FIELD_LENGTH = 80;
 const ARRAY_FIELDS = new Set<keyof PrMetadata>(['depends_on', 'depends_on_linear', 'requires']);
 const STRING_FIELDS = new Set<keyof PrMetadata>(['task', 'stack', 'challengePairId']);
 const FIELD_ORDER: Array<keyof PrMetadata> = [
@@ -35,6 +48,7 @@ const FIELD_ORDER: Array<keyof PrMetadata> = [
   'challenge',
   'challengePairId',
 ];
+const REGISTERED_FIELDS = new Set<string>(FIELD_ORDER);
 
 function trimBlockAdjacentWhitespace(body: string): string {
   return body
@@ -45,6 +59,16 @@ function trimBlockAdjacentWhitespace(body: string): string {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+function diagnosticField(field: string): string {
+  const trimmed = field.trim();
+  if (!trimmed) {
+    return 'metadata';
+  }
+  return trimmed.length <= MAX_DIAGNOSTIC_FIELD_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, MAX_DIAGNOSTIC_FIELD_LENGTH)}...`;
 }
 
 export function extractMetadataBlock(body: string): { block: string | null; bodyWithoutBlock: string } {
@@ -64,10 +88,27 @@ export function extractMetadataBlock(body: string): { block: string | null; body
 }
 
 export function parsePrMetadata(body: string): ParseResult {
+  const validated = validatePrMetadata(body);
+  if (validated.status === 'invalid') {
+    return {
+      ok: false,
+      errors: validated.errors,
+      bodyWithoutBlock: validated.bodyWithoutBlock,
+    };
+  }
+
+  return {
+    ok: true,
+    metadata: validated.status === 'valid' ? validated.metadata : {},
+    bodyWithoutBlock: validated.bodyWithoutBlock,
+  };
+}
+
+export function validatePrMetadata(body: string): PrMetadataValidationResult {
   const { block, bodyWithoutBlock } = extractMetadataBlock(body);
 
   if (block === null) {
-    return { ok: true, metadata: {}, bodyWithoutBlock };
+    return { status: 'absent', bodyWithoutBlock };
   }
 
   const metadata: PrMetadata = {};
@@ -81,19 +122,20 @@ export function parsePrMetadata(body: string): ParseResult {
     const match = line.match(LINE_REGEX);
     if (!match) {
       errors.push({
-        field: line,
-        message: `Malformed wavemill-meta line: ${line}`,
-        rawValue: line,
+        field: 'line',
+        code: 'malformed-line',
+        message: 'Malformed wavemill-meta line',
       });
       continue;
     }
 
     const [, field, rawValue] = match;
-    if (!FIELD_ORDER.includes(field as keyof PrMetadata)) {
+    if (!REGISTERED_FIELDS.has(field)) {
+      const boundedField = diagnosticField(field);
       errors.push({
-        field,
-        message: `Unknown wavemill-meta field: ${field}`,
-        rawValue,
+        field: boundedField,
+        code: 'unknown-field',
+        message: `Unknown wavemill-meta field: ${boundedField}`,
       });
       continue;
     }
@@ -102,8 +144,8 @@ export function parsePrMetadata(body: string): ParseResult {
       if (!rawValue.trim()) {
         errors.push({
           field,
+          code: 'empty-string',
           message: `Expected non-empty string for ${field}`,
-          rawValue,
         });
         continue;
       }
@@ -118,8 +160,8 @@ export function parsePrMetadata(body: string): ParseResult {
         if (!isStringArray(parsed)) {
           errors.push({
             field,
+            code: 'wrong-type',
             message: `Expected JSON string array for ${field}`,
-            rawValue,
           });
           continue;
         }
@@ -128,8 +170,8 @@ export function parsePrMetadata(body: string): ParseResult {
       } catch {
         errors.push({
           field,
+          code: 'invalid-json',
           message: `Invalid JSON for ${field}`,
-          rawValue,
         });
       }
       continue;
@@ -141,8 +183,8 @@ export function parsePrMetadata(body: string): ParseResult {
       } else {
         errors.push({
           field,
+          code: 'invalid-enum',
           message: `Expected one of low, medium, high for ${field}`,
-          rawValue,
         });
       }
       continue;
@@ -154,21 +196,22 @@ export function parsePrMetadata(body: string): ParseResult {
       } else {
         errors.push({
           field,
+          code: 'invalid-boolean',
           message: `Expected boolean true/false for ${field}`,
-          rawValue,
         });
       }
     }
   }
 
   if (errors.length > 0) {
-    return { ok: false, errors, bodyWithoutBlock };
+    return { status: 'invalid', errors, bodyWithoutBlock };
   }
 
-  return { ok: true, metadata, bodyWithoutBlock };
+  return { status: 'valid', metadata, bodyWithoutBlock };
 }
 
 export function renderPrMetadata(meta: PrMetadata): string {
+  assertRegisteredMetadataObject(meta);
   const lines = FIELD_ORDER.flatMap((field) => {
     const value = meta[field];
     if (value === undefined) {
@@ -192,12 +235,39 @@ export function renderPrMetadata(meta: PrMetadata): string {
 }
 
 export function updatePrMetadata(body: string, meta: PrMetadata): string {
-  const { bodyWithoutBlock } = extractMetadataBlock(body);
   const rendered = renderPrMetadata(meta);
+  const matches = [...body.matchAll(BLOCK_REGEX)];
 
-  if (!bodyWithoutBlock.trim()) {
+  if (matches.length > 0) {
+    let updated = '';
+    let cursor = 0;
+
+    for (let index = 0; index < matches.length; index += 1) {
+      const match = matches[index];
+      const start = match.index ?? 0;
+      const full = match[0];
+      updated += body.slice(cursor, start);
+      if (index === matches.length - 1) {
+        updated += rendered;
+      }
+      cursor = start + full.length;
+    }
+
+    return updated + body.slice(cursor);
+  }
+
+  if (!body.trim()) {
     return rendered;
   }
 
-  return `${bodyWithoutBlock.trimEnd()}\n\n${rendered}`;
+  return `${body}\n\n${rendered}`;
+}
+
+function assertRegisteredMetadataObject(meta: PrMetadata): void {
+  for (const key of Object.keys(meta)) {
+    if (!REGISTERED_FIELDS.has(key)) {
+      const boundedField = diagnosticField(key);
+      throw new Error(`Unknown wavemill-meta field: ${boundedField}`);
+    }
+  }
 }

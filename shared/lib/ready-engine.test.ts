@@ -88,13 +88,30 @@ describe('checkMetadata', () => {
     assert.equal(result.status, 'pass');
   });
 
-  it('ignores unknown metadata keys for forward compatibility', async () => {
+  it('fails closed on unknown metadata keys', async () => {
     const result = await checkMetadata(buildContext({
       pr: {
         body: ['<!-- wavemill-meta', 'task: HOK-1436', 'future_key: enabled', '-->'].join('\n'),
       } as ReadyEngineContext['pr'],
     }));
-    assert.equal(result.status, 'pass');
+    assert.equal(result.status, 'fail');
+    assert.match(result.reason ?? '', /Unknown wavemill-meta field: future_key/);
+    assert.deepEqual(result.labels, [WM_LABELS.metadataInvalid]);
+  });
+
+  it('reports dashed unknown metadata fields explicitly', async () => {
+    const result = await checkMetadata(buildContext({
+      pr: {
+        body: [
+          '<!-- wavemill-meta',
+          'task: HOK-2929',
+          'review-infrastructure-note: native-context-window-exceeded',
+          '-->',
+        ].join('\n'),
+      } as ReadyEngineContext['pr'],
+    }));
+    assert.equal(result.status, 'fail');
+    assert.match(result.reason ?? '', /review-infrastructure-note/);
   });
 });
 
