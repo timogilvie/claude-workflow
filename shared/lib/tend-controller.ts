@@ -19,7 +19,7 @@ import { getIntegrationConfig, getIntegrationReadyPolicy } from './config.ts';
 import { readChallengeComparisons } from './challenge-comparison.ts';
 import { getPullRequest, removeLabelFromPullRequest } from './github.ts';
 import { getIssueCompletionState } from './linear.ts';
-import { extractMetadataBlock, parsePrMetadata, type PrMetadata } from './pr-metadata.ts';
+import { validatePrMetadata, type PrMetadata, type MetadataValidation } from './pr-metadata.ts';
 import { evaluateReady } from './ready-engine.ts';
 import { runReadyStage } from './ready-stage.ts';
 import { escapeShellArg, execArgvCommand, execShellCommand } from './shell-utils.ts';
@@ -420,6 +420,7 @@ export async function selectNextCandidate(options: SelectNextCandidateOptions): 
     const reason = await getInitialBlockReason(
       pr,
       metadataResult.metadata,
+      metadataResult.validation,
       openPrNumbers,
       {
         repoDir: options.repoDir,
@@ -2128,29 +2129,25 @@ function validateBranchName(integrationBranch: string, label: string): void {
 }
 
 function isWavemillPr(pr: GhPrListEntry): boolean {
-  return labelSet(pr).has(WM_LABELS.wavemill) || hasValidMetadataBlock(pr.body);
+  return labelSet(pr).has(WM_LABELS.wavemill) || validatePrMetadata(pr.body).status === 'valid';
 }
 
-function hasValidMetadataBlock(body: string): boolean {
-  return extractMetadataBlock(body).block !== null && parsePrMetadata(body).ok;
+function getMetadataValidation(body: string): MetadataValidation {
+  return validatePrMetadata(body);
 }
 
-function getValidMetadata(body: string): { metadata: PrMetadata | null } {
-  if (extractMetadataBlock(body).block === null) {
-    return { metadata: null };
+function getValidMetadata(body: string): { metadata: PrMetadata | null; validation: MetadataValidation } {
+  const validation = getMetadataValidation(body);
+  if (validation.status === 'valid') {
+    return { metadata: validation.metadata, validation };
   }
-
-  const parsed = parsePrMetadata(body);
-  if (!parsed.ok) {
-    return { metadata: null };
-  }
-
-  return { metadata: parsed.metadata };
+  return { metadata: null, validation };
 }
 
 async function getInitialBlockReason(
   pr: GhPrListEntry,
   metadata: PrMetadata | null,
+  validation: MetadataValidation,
   openPrNumbers: Set<number>,
   options: {
     repoDir: string;
@@ -2176,6 +2173,10 @@ async function getInitialBlockReason(
   }
 
   if (!metadata) {
+    if (validation.status === 'invalid') {
+      const fieldNames = validation.errors.map((e) => e.field).join(',');
+      return `metadata-invalid:${fieldNames}`;
+    }
     return 'missing-metadata';
   }
 
