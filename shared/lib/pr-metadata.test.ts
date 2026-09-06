@@ -3,8 +3,11 @@ import { describe, it } from 'node:test';
 import {
   extractMetadataBlock,
   parsePrMetadata,
+  PR_METADATA_SCHEMA_VERSION,
   renderPrMetadata,
   updatePrMetadata,
+  validatePrMetadata,
+  validateMetadataFields,
   type PrMetadata,
 } from './pr-metadata.ts';
 
@@ -54,6 +57,7 @@ describe('parsePrMetadata', () => {
 
   it('round-trips all supported fields', () => {
     const metadata: PrMetadata = {
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
       task: 'HOK-1432',
       stack: 'integration',
       depends_on: ['HOK-1431'],
@@ -138,43 +142,43 @@ describe('parsePrMetadata', () => {
     assert.deepEqual(parsed.errors, [
       {
         field: 'task',
+        code: 'empty-value',
         message: 'Expected non-empty string for task',
-        rawValue: '',
       },
       {
         field: 'depends_on',
+        code: 'wrong-type',
         message: 'Invalid JSON for depends_on',
-        rawValue: 'not-json',
       },
       {
         field: 'depends_on_linear',
+        code: 'wrong-type',
         message: 'Expected JSON string array for depends_on_linear',
-        rawValue: '[1]',
       },
       {
         field: 'requires',
+        code: 'wrong-type',
         message: 'Expected JSON string array for requires',
-        rawValue: '["ok", 2]',
       },
       {
         field: 'risk',
+        code: 'wrong-type',
         message: 'Expected one of low, medium, high for risk',
-        rawValue: 'severe',
       },
       {
         field: 'challenge',
+        code: 'wrong-type',
         message: 'Expected boolean true/false for challenge',
-        rawValue: 'maybe',
       },
       {
         field: 'extra',
+        code: 'unknown-field',
         message: 'Unknown wavemill-meta field: extra',
-        rawValue: 'surprise',
       },
       {
-        field: 'bad line',
-        message: 'Malformed wavemill-meta line: bad line',
-        rawValue: 'bad line',
+        field: '(malformed)',
+        code: 'malformed-line',
+        message: 'Malformed wavemill-meta line',
       },
     ]);
     assert.equal(parsed.bodyWithoutBlock, '');
@@ -203,11 +207,53 @@ describe('parsePrMetadata', () => {
     assert.deepEqual(parsed.metadata, { task: 'HOK-2', challenge: true });
     assert.equal(parsed.bodyWithoutBlock, 'Summary');
   });
+
+  it('accepts the current metadata schema version', () => {
+    const parsed = parsePrMetadata([
+      '<!-- wavemill-meta',
+      `schema-version: ${PR_METADATA_SCHEMA_VERSION}`,
+      'task: HOK-1432',
+      '-->',
+    ].join('\n'));
+
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    assert.deepEqual(parsed.metadata, {
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
+      task: 'HOK-1432',
+    });
+  });
+
+  it('rejects unsupported future metadata schema versions', () => {
+    const parsed = parsePrMetadata([
+      '<!-- wavemill-meta',
+      'schema-version: 999',
+      'task: HOK-1432',
+      '-->',
+    ].join('\n'));
+
+    assert.equal(parsed.ok, false);
+    if (parsed.ok) {
+      return;
+    }
+
+    assert.deepEqual(parsed.errors, [
+      {
+        field: 'schema-version',
+        code: 'unsupported-version',
+        message: 'Unsupported wavemill-meta schema-version',
+      },
+    ]);
+  });
 });
 
 describe('renderPrMetadata', () => {
   it('renders fields in deterministic order', () => {
     const rendered = renderPrMetadata({
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
       challenge: true,
       challengePairId: 'pair-9',
       risk: 'high',
@@ -222,6 +268,7 @@ describe('renderPrMetadata', () => {
       rendered,
       [
         '<!-- wavemill-meta',
+        `schema-version: ${PR_METADATA_SCHEMA_VERSION}`,
         'task: HOK-1432',
         'stack: integration',
         'depends_on: ["HOK-1431"]',
@@ -237,6 +284,16 @@ describe('renderPrMetadata', () => {
 
   it('renders an empty block when no fields are set', () => {
     assert.equal(renderPrMetadata({}), '<!-- wavemill-meta\n\n-->');
+  });
+
+  it('fails closed when a writer attempts an unknown metadata field', () => {
+    assert.throws(
+      () => renderPrMetadata({
+        task: 'HOK-1',
+        'review-infrastructure-note': 'native-context-window-exceeded',
+      } as PrMetadata & Record<string, string>),
+      /Unknown wavemill-meta field: review-infrastructure-note/,
+    );
   });
 });
 
@@ -318,5 +375,88 @@ describe('updatePrMetadata', () => {
       updatePrMetadata(body, { task: 'HOK-1432' }),
       ['Intro', '', 'More', '', '<!-- wavemill-meta', 'task: HOK-1432', '-->'].join('\n'),
     );
+  });
+});
+
+describe('validatePrMetadata', () => {
+  it('returns absent when no block is present', () => {
+    assert.deepEqual(validatePrMetadata('No metadata here.'), { status: 'absent' });
+  });
+
+  it('returns valid with parsed metadata for a good block', () => {
+    const body = ['<!-- wavemill-meta', 'task: HOK-1432', 'risk: low', '-->'].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'valid');
+    if (result.status === 'valid') {
+      assert.deepEqual(result.metadata, { task: 'HOK-1432', risk: 'low' });
+    }
+  });
+
+  it('returns invalid with errors for unknown fields (#1324 fixture)', () => {
+    const body = [
+      '<!-- wavemill-meta',
+      'task: HOK-2929',
+      'review-infrastructure-note: native-context-window-exceeded',
+      '-->',
+    ].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'invalid');
+    if (result.status === 'invalid') {
+      assert.equal(result.errors.length, 1);
+      assert.equal(result.errors[0].code, 'unknown-field');
+    }
+  });
+
+  it('returns invalid for malformed lines', () => {
+    const body = ['<!-- wavemill-meta', 'not a valid line', '-->'].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'invalid');
+    if (result.status === 'invalid') {
+      assert.equal(result.errors[0].code, 'malformed-line');
+    }
+  });
+
+  it('returns invalid for wrong-type fields', () => {
+    const body = ['<!-- wavemill-meta', 'risk: severe', '-->'].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'invalid');
+    if (result.status === 'invalid') {
+      assert.equal(result.errors[0].code, 'wrong-type');
+      assert.equal(result.errors[0].field, 'risk');
+    }
+  });
+
+  it('returns invalid for unsupported future schema versions', () => {
+    const body = ['<!-- wavemill-meta', 'schema-version: 999', '-->'].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'invalid');
+    if (result.status === 'invalid') {
+      assert.equal(result.errors[0].code, 'unsupported-version');
+      assert.equal(result.errors[0].field, 'schema-version');
+    }
+  });
+});
+
+describe('validateMetadataFields', () => {
+  it('returns no errors for known fields', () => {
+    assert.deepEqual(validateMetadataFields({
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
+      task: 'HOK-1',
+      risk: 'low',
+    }), []);
+  });
+
+  it('rejects unknown fields at write time', () => {
+    const errors = validateMetadataFields({ task: 'HOK-1', unknownField: 'value' } as PrMetadata & Record<string, string>);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'unknown-field');
+    assert.equal(errors[0].field, 'unknownField');
+  });
+
+  it('rejects unsupported schema versions at write time', () => {
+    const errors = validateMetadataFields({ 'schema-version': '999' } as PrMetadata);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'unsupported-version');
+    assert.equal(errors[0].field, 'schema-version');
   });
 });

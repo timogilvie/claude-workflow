@@ -623,6 +623,28 @@ describe('selectNextCandidate filtering', () => {
     });
   });
 
+  it('blocks PRs with invalid metadata as metadata-invalid (not missing-metadata)', async () => {
+    const invalidBody = [
+      '<!-- wavemill-meta',
+      'task: HOK-2929',
+      'review-infrastructure-note: native-context-window-exceeded',
+      '-->',
+    ].join('\n');
+    await withDecision([pr({ body: invalidBody })], (decision) => {
+      assert.ok(decision.blocked[0]?.reason.startsWith('metadata-invalid:'));
+      assert.ok(decision.blocked[0]?.reason.includes('review-infrastructure-note'));
+      assert.notEqual(decision.blocked[0]?.reason, 'missing-metadata');
+    });
+  });
+
+  it('reaches ready-failed:not-ready when metadata is valid but wm:ready absent', async () => {
+    await withDecision([
+      pr({ labels: [label(WM_LABELS.wavemill)] }),
+    ], (decision) => {
+      assert.equal(decision.blocked[0]?.reason, 'ready-failed:not-ready');
+    });
+  });
+
   it('blocks PRs without the ready label', async () => {
     await withDecision([
       pr({ labels: [label(WM_LABELS.wavemill)] }),
