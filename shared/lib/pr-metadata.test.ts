@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   extractMetadataBlock,
   parsePrMetadata,
+  PR_METADATA_SCHEMA_VERSION,
   renderPrMetadata,
   updatePrMetadata,
   validatePrMetadata,
@@ -56,6 +57,7 @@ describe('parsePrMetadata', () => {
 
   it('round-trips all supported fields', () => {
     const metadata: PrMetadata = {
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
       task: 'HOK-1432',
       stack: 'integration',
       depends_on: ['HOK-1431'],
@@ -205,11 +207,53 @@ describe('parsePrMetadata', () => {
     assert.deepEqual(parsed.metadata, { task: 'HOK-2', challenge: true });
     assert.equal(parsed.bodyWithoutBlock, 'Summary');
   });
+
+  it('accepts the current metadata schema version', () => {
+    const parsed = parsePrMetadata([
+      '<!-- wavemill-meta',
+      `schema-version: ${PR_METADATA_SCHEMA_VERSION}`,
+      'task: HOK-1432',
+      '-->',
+    ].join('\n'));
+
+    assert.equal(parsed.ok, true);
+    if (!parsed.ok) {
+      return;
+    }
+
+    assert.deepEqual(parsed.metadata, {
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
+      task: 'HOK-1432',
+    });
+  });
+
+  it('rejects unsupported future metadata schema versions', () => {
+    const parsed = parsePrMetadata([
+      '<!-- wavemill-meta',
+      'schema-version: 999',
+      'task: HOK-1432',
+      '-->',
+    ].join('\n'));
+
+    assert.equal(parsed.ok, false);
+    if (parsed.ok) {
+      return;
+    }
+
+    assert.deepEqual(parsed.errors, [
+      {
+        field: 'schema-version',
+        code: 'unsupported-version',
+        message: 'Unsupported wavemill-meta schema-version',
+      },
+    ]);
+  });
 });
 
 describe('renderPrMetadata', () => {
   it('renders fields in deterministic order', () => {
     const rendered = renderPrMetadata({
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
       challenge: true,
       challengePairId: 'pair-9',
       risk: 'high',
@@ -224,6 +268,7 @@ describe('renderPrMetadata', () => {
       rendered,
       [
         '<!-- wavemill-meta',
+        `schema-version: ${PR_METADATA_SCHEMA_VERSION}`,
         'task: HOK-1432',
         'stack: integration',
         'depends_on: ["HOK-1431"]',
@@ -239,6 +284,16 @@ describe('renderPrMetadata', () => {
 
   it('renders an empty block when no fields are set', () => {
     assert.equal(renderPrMetadata({}), '<!-- wavemill-meta\n\n-->');
+  });
+
+  it('fails closed when a writer attempts an unknown metadata field', () => {
+    assert.throws(
+      () => renderPrMetadata({
+        task: 'HOK-1',
+        'review-infrastructure-note': 'native-context-window-exceeded',
+      } as PrMetadata & Record<string, string>),
+      /Unknown wavemill-meta field: review-infrastructure-note/,
+    );
   });
 });
 
@@ -370,11 +425,25 @@ describe('validatePrMetadata', () => {
       assert.equal(result.errors[0].field, 'risk');
     }
   });
+
+  it('returns invalid for unsupported future schema versions', () => {
+    const body = ['<!-- wavemill-meta', 'schema-version: 999', '-->'].join('\n');
+    const result = validatePrMetadata(body);
+    assert.equal(result.status, 'invalid');
+    if (result.status === 'invalid') {
+      assert.equal(result.errors[0].code, 'unsupported-version');
+      assert.equal(result.errors[0].field, 'schema-version');
+    }
+  });
 });
 
 describe('validateMetadataFields', () => {
   it('returns no errors for known fields', () => {
-    assert.deepEqual(validateMetadataFields({ task: 'HOK-1', risk: 'low' }), []);
+    assert.deepEqual(validateMetadataFields({
+      'schema-version': PR_METADATA_SCHEMA_VERSION,
+      task: 'HOK-1',
+      risk: 'low',
+    }), []);
   });
 
   it('rejects unknown fields at write time', () => {
@@ -382,5 +451,12 @@ describe('validateMetadataFields', () => {
     assert.equal(errors.length, 1);
     assert.equal(errors[0].code, 'unknown-field');
     assert.equal(errors[0].field, 'unknownField');
+  });
+
+  it('rejects unsupported schema versions at write time', () => {
+    const errors = validateMetadataFields({ 'schema-version': '999' } as PrMetadata);
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0].code, 'unsupported-version');
+    assert.equal(errors[0].field, 'schema-version');
   });
 });

@@ -1,6 +1,9 @@
 export type RiskLevel = 'low' | 'medium' | 'high';
 
+export const PR_METADATA_SCHEMA_VERSION = '1';
+
 export interface PrMetadata {
+  'schema-version'?: typeof PR_METADATA_SCHEMA_VERSION;
   task?: string;
   stack?: string;
   depends_on?: string[];
@@ -13,7 +16,7 @@ export interface PrMetadata {
 
 export interface PrMetadataError {
   field: string;
-  code: 'unknown-field' | 'malformed-line' | 'wrong-type' | 'empty-value';
+  code: 'unknown-field' | 'malformed-line' | 'wrong-type' | 'empty-value' | 'unsupported-version';
   message: string;
 }
 
@@ -31,6 +34,7 @@ const LINE_REGEX = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/;
 const ARRAY_FIELDS = new Set<keyof PrMetadata>(['depends_on', 'depends_on_linear', 'requires']);
 const STRING_FIELDS = new Set<keyof PrMetadata>(['task', 'stack', 'challengePairId']);
 const FIELD_ORDER: Array<keyof PrMetadata> = [
+  'schema-version',
   'task',
   'stack',
   'depends_on',
@@ -100,6 +104,29 @@ export function parsePrMetadata(body: string): ParseResult {
         code: 'unknown-field',
         message: `Unknown wavemill-meta field: ${field}`,
       });
+      continue;
+    }
+
+    if (field === 'schema-version') {
+      if (!rawValue.trim()) {
+        errors.push({
+          field,
+          code: 'empty-value',
+          message: `Expected non-empty string for ${field}`,
+        });
+        continue;
+      }
+
+      if (rawValue.trim() !== PR_METADATA_SCHEMA_VERSION) {
+        errors.push({
+          field,
+          code: 'unsupported-version',
+          message: 'Unsupported wavemill-meta schema-version',
+        });
+        continue;
+      }
+
+      metadata['schema-version'] = PR_METADATA_SCHEMA_VERSION;
       continue;
     }
 
@@ -198,10 +225,25 @@ export function validateMetadataFields(meta: PrMetadata): PrMetadataError[] {
       });
     }
   }
+  if (
+    meta['schema-version'] !== undefined
+    && meta['schema-version'] !== PR_METADATA_SCHEMA_VERSION
+  ) {
+    errors.push({
+      field: 'schema-version',
+      code: 'unsupported-version',
+      message: 'Unsupported wavemill-meta schema-version',
+    });
+  }
   return errors;
 }
 
 export function renderPrMetadata(meta: PrMetadata): string {
+  const fieldErrors = validateMetadataFields(meta);
+  if (fieldErrors.length > 0) {
+    throw new Error(fieldErrors.map((error) => error.message).join('; '));
+  }
+
   const lines = FIELD_ORDER.flatMap((field) => {
     const value = meta[field];
     if (value === undefined) {

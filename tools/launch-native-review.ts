@@ -121,7 +121,7 @@ export function buildNativeCodingHandoff(featureDir: string): string {
   return sections.join('\n\n');
 }
 
-function buildPrBody(input: {
+export function buildPrBody(input: {
   issue: string;
   title: string;
   reviewerModel: string;

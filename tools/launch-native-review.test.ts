@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 
-import { buildNativeCodingHandoff, firstNonEmpty, resolveBaseBranch } from './launch-native-review.ts';
+import { parsePrMetadata, renderPrMetadata, validatePrMetadata, type PrMetadata } from '../shared/lib/pr-metadata.ts';
+import { buildNativeCodingHandoff, buildPrBody, firstNonEmpty, resolveBaseBranch } from './launch-native-review.ts';
 
 describe('launch-native-review helpers', () => {
   it('ignores blank launcher context so required defaults remain available', () => {
@@ -86,5 +87,38 @@ describe('launch-native-review helpers', () => {
     } finally {
       rmSync(featureDir, { recursive: true, force: true });
     }
+  });
+
+  it('builds PR body metadata using only registered fields', () => {
+    const body = buildPrBody({
+      issue: 'HOK-2948_c',
+      title: 'Ready and Tend disagree on invalid wavemill-meta',
+      reviewerModel: 'gpt-5.5',
+      baseBranch: 'auto/integration',
+      headBranch: 'task/hok-2948-c',
+    });
+
+    const validation = validatePrMetadata(body);
+    assert.equal(validation.status, 'valid');
+    if (validation.status !== 'valid') {
+      return;
+    }
+
+    assert.deepEqual(validation.metadata, { task: 'HOK-2948_c' });
+    const parsed = parsePrMetadata(body);
+    assert.equal(parsed.ok, true);
+    if (parsed.ok) {
+      assert.equal(parsed.bodyWithoutBlock.includes('review-infrastructure-note:'), false);
+    }
+  });
+
+  it('fails before PR body emission when unknown metadata writer input is attempted', () => {
+    assert.throws(
+      () => renderPrMetadata({
+        task: 'HOK-2948_c',
+        'review-infrastructure-note': 'native-context-window-exceeded',
+      } as PrMetadata & Record<string, string>),
+      /Unknown wavemill-meta field: review-infrastructure-note/,
+    );
   });
 });
