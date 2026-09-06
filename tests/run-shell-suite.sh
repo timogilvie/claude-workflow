@@ -67,6 +67,7 @@ TESTS=(
   planning-validation.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh
+  dashboard-incidents-section.test.sh
   backstage-tend-watchdog.test.sh
   backstage-observer-watchdog.test.sh
   backstage-observer-pane-promotion.test.sh

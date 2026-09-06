@@ -1,6 +1,9 @@
 export type RiskLevel = 'low' | 'medium' | 'high';
 
+export const PR_METADATA_SCHEMA_VERSION = '1';
+
 export interface PrMetadata {
+  'schema-version'?: typeof PR_METADATA_SCHEMA_VERSION;
   task?: string;
   stack?: string;
   depends_on?: string[];
@@ -13,19 +16,25 @@ export interface PrMetadata {
 
 export interface PrMetadataError {
   field: string;
+  code: 'unknown-field' | 'malformed-line' | 'wrong-type' | 'empty-value' | 'unsupported-version';
   message: string;
-  rawValue?: string;
 }
 
 export type ParseResult =
   | { ok: true; metadata: PrMetadata; bodyWithoutBlock: string }
   | { ok: false; errors: PrMetadataError[]; bodyWithoutBlock: string };
 
+export type MetadataValidation =
+  | { status: 'absent' }
+  | { status: 'valid'; metadata: PrMetadata }
+  | { status: 'invalid'; errors: PrMetadataError[] };
+
 const BLOCK_REGEX = /<!-- wavemill-meta\n([\s\S]*?)\n-->/g;
-const LINE_REGEX = /^([a-zA-Z_]+):\s*(.*)$/;
+const LINE_REGEX = /^([a-zA-Z_][a-zA-Z0-9_-]*):\s*(.*)$/;
 const ARRAY_FIELDS = new Set<keyof PrMetadata>(['depends_on', 'depends_on_linear', 'requires']);
 const STRING_FIELDS = new Set<keyof PrMetadata>(['task', 'stack', 'challengePairId']);
 const FIELD_ORDER: Array<keyof PrMetadata> = [
+  'schema-version',
   'task',
   'stack',
   'depends_on',
@@ -81,9 +90,9 @@ export function parsePrMetadata(body: string): ParseResult {
     const match = line.match(LINE_REGEX);
     if (!match) {
       errors.push({
-        field: line,
-        message: `Malformed wavemill-meta line: ${line}`,
-        rawValue: line,
+        field: '(malformed)',
+        code: 'malformed-line',
+        message: 'Malformed wavemill-meta line',
       });
       continue;
     }
@@ -92,9 +101,32 @@ export function parsePrMetadata(body: string): ParseResult {
     if (!FIELD_ORDER.includes(field as keyof PrMetadata)) {
       errors.push({
         field,
+        code: 'unknown-field',
         message: `Unknown wavemill-meta field: ${field}`,
-        rawValue,
       });
+      continue;
+    }
+
+    if (field === 'schema-version') {
+      if (!rawValue.trim()) {
+        errors.push({
+          field,
+          code: 'empty-value',
+          message: `Expected non-empty string for ${field}`,
+        });
+        continue;
+      }
+
+      if (rawValue.trim() !== PR_METADATA_SCHEMA_VERSION) {
+        errors.push({
+          field,
+          code: 'unsupported-version',
+          message: 'Unsupported wavemill-meta schema-version',
+        });
+        continue;
+      }
+
+      metadata['schema-version'] = PR_METADATA_SCHEMA_VERSION;
       continue;
     }
 
@@ -102,8 +134,8 @@ export function parsePrMetadata(body: string): ParseResult {
       if (!rawValue.trim()) {
         errors.push({
           field,
+          code: 'empty-value',
           message: `Expected non-empty string for ${field}`,
-          rawValue,
         });
         continue;
       }
@@ -118,8 +150,8 @@ export function parsePrMetadata(body: string): ParseResult {
         if (!isStringArray(parsed)) {
           errors.push({
             field,
+            code: 'wrong-type',
             message: `Expected JSON string array for ${field}`,
-            rawValue,
           });
           continue;
         }
@@ -128,8 +160,8 @@ export function parsePrMetadata(body: string): ParseResult {
       } catch {
         errors.push({
           field,
+          code: 'wrong-type',
           message: `Invalid JSON for ${field}`,
-          rawValue,
         });
       }
       continue;
@@ -141,8 +173,8 @@ export function parsePrMetadata(body: string): ParseResult {
       } else {
         errors.push({
           field,
+          code: 'wrong-type',
           message: `Expected one of low, medium, high for ${field}`,
-          rawValue,
         });
       }
       continue;
@@ -154,8 +186,8 @@ export function parsePrMetadata(body: string): ParseResult {
       } else {
         errors.push({
           field,
+          code: 'wrong-type',
           message: `Expected boolean true/false for ${field}`,
-          rawValue,
         });
       }
     }
@@ -168,7 +200,50 @@ export function parsePrMetadata(body: string): ParseResult {
   return { ok: true, metadata, bodyWithoutBlock };
 }
 
+export function validatePrMetadata(body: string): MetadataValidation {
+  const { block } = extractMetadataBlock(body);
+  if (block === null) {
+    return { status: 'absent' };
+  }
+
+  const parsed = parsePrMetadata(body);
+  if (!parsed.ok) {
+    return { status: 'invalid', errors: parsed.errors };
+  }
+
+  return { status: 'valid', metadata: parsed.metadata };
+}
+
+export function validateMetadataFields(meta: PrMetadata): PrMetadataError[] {
+  const errors: PrMetadataError[] = [];
+  for (const key of Object.keys(meta)) {
+    if (!FIELD_ORDER.includes(key as keyof PrMetadata)) {
+      errors.push({
+        field: key,
+        code: 'unknown-field',
+        message: `Unknown wavemill-meta field: ${key}`,
+      });
+    }
+  }
+  if (
+    meta['schema-version'] !== undefined
+    && meta['schema-version'] !== PR_METADATA_SCHEMA_VERSION
+  ) {
+    errors.push({
+      field: 'schema-version',
+      code: 'unsupported-version',
+      message: 'Unsupported wavemill-meta schema-version',
+    });
+  }
+  return errors;
+}
+
 export function renderPrMetadata(meta: PrMetadata): string {
+  const fieldErrors = validateMetadataFields(meta);
+  if (fieldErrors.length > 0) {
+    throw new Error(fieldErrors.map((error) => error.message).join('; '));
+  }
+
   const lines = FIELD_ORDER.flatMap((field) => {
     const value = meta[field];
     if (value === undefined) {

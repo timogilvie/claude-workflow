@@ -3,7 +3,9 @@
 import { join } from 'node:path';
 import { runTool } from '../shared/lib/tool-runner.ts';
 import { fetchIssueData, formatIssueAsPrompt, fetchPrContext } from '../shared/lib/eval-context-gatherer.ts';
-import { hasChallengeEvalRecordPair, readEvalRecords } from '../shared/lib/eval-persistence.ts';
+import { readEvalRecords } from '../shared/lib/eval-persistence.ts';
+import { type CurrentChallengeEvalResult } from '../shared/lib/current-challenge-eval-selector.ts';
+import { selectChallengeComparisonEvalEvidence } from '../shared/lib/challenge-comparison-eval-evidence.ts';
 import {
   appendChallengeComparison,
   buildDiffUnavailableComparison,
@@ -34,8 +36,8 @@ import {
   buildChallengeCommentBody,
   formatRoutingSummary,
   prNumberFromValue,
-  prUrlFromNumber,
   resolvePrDiffIdentity,
+  resolvePrIdentityMetadata,
   resolvePresentationOrder,
   retainLoserPatch,
   runBlindJudge,
@@ -131,6 +133,23 @@ function costUsdFromWorkflowCost(workflowCost: unknown): number | null {
   return typeof workflowCost === 'number' && Number.isFinite(workflowCost) ? workflowCost : null;
 }
 
+function selectorFailureMessage(pairId: string, selections: {
+  primary: CurrentChallengeEvalResult;
+  challenger: CurrentChallengeEvalResult;
+}): string {
+  return `Current-head challenge eval evidence refused for ${pairId}: ${JSON.stringify({
+    primary: selections.primary.ok === true ? undefined : { reason: selections.primary.reason, ...selections.primary.diagnostics },
+    challenger: selections.challenger.ok === true ? undefined : { reason: selections.challenger.reason, ...selections.challenger.diagnostics },
+  })}`;
+}
+
+function selectedEvalEvidence(primary: Extract<CurrentChallengeEvalResult, { ok: true }>, challenger: Extract<CurrentChallengeEvalResult, { ok: true }>) {
+  return {
+    primary: { evalId: primary.evalId, evaluatedPrHeadSha: primary.evaluatedPrHeadSha },
+    challenger: { evalId: challenger.evalId, evaluatedPrHeadSha: challenger.evaluatedPrHeadSha },
+  };
+}
+
 runTool({
   name: 'compare-prs',
   description: 'Compare two challenge-mode PRs and persist a structured recommendation.',
@@ -182,42 +201,54 @@ runTool({
       const issuePrompt = formatIssueAsPrompt(fetchIssueData(issueId, repoDir), issueId);
       const primaryNumber = prNumberFromValue(primaryPr);
       const challengerNumber = prNumberFromValue(challengerPr);
-      const primaryPrUrl = prUrlFromNumber(primaryPr, repoDir);
-      const challengerPrUrl = prUrlFromNumber(challengerPr, repoDir);
-      // The comparison prompt needs each implementation diff.  Keep this
-      // retrieval next to the PR normalization so a failed or retried
-      // comparison never reaches the judge with undefined diff variables.
-      const primaryPrContext = fetchPrContext(primaryNumber, repoDir);
-      const challengerPrContext = fetchPrContext(challengerNumber, repoDir);
+      // Resolve the current PR identity before any evidence lookup. The diff
+      // identity below is a separate comparison artifact, not eval evidence.
+      const primaryPrIdentity = resolvePrIdentityMetadata(primaryPr, repoDir);
+      const challengerPrIdentity = resolvePrIdentityMetadata(challengerPr, repoDir);
+      const primaryPrUrl = primaryPrIdentity.url;
+      const challengerPrUrl = challengerPrIdentity.url;
       const evalsDir = resolveEvalsDir(undefined, repoDir).dir;
-      const hasRequiredEvalRecords = hasChallengeEvalRecordPair(
+      const evals = readEvalRecords({ dir: evalsDir });
+      const comparisonEvidence = selectChallengeComparisonEvalEvidence({
+        records: evals,
         pairId,
-        primaryPrUrl,
-        challengerPrUrl,
-        { dir: evalsDir },
-      );
-      if (!hasRequiredEvalRecords) {
-        throw new Error(`Missing eval records for challenge pair ${pairId}`);
-      }
+        primary: { prUrl: primaryPrUrl, prNumber: primaryNumber, headSha: primaryPrIdentity.head_sha },
+        challenger: { prUrl: challengerPrUrl, prNumber: challengerNumber, headSha: challengerPrIdentity.head_sha },
+      });
+      const { primary: primarySelection, challenger: challengerSelection, hasRequiredEvalRecords } = comparisonEvidence;
       if (args['check-only']) {
         console.log(JSON.stringify({
           pairId,
           primaryPrUrl,
           challengerPrUrl,
           hasRequiredEvalRecords,
+          primary: primarySelection.ok === true
+            ? { evalId: primarySelection.evalId, evaluatedPrHeadSha: primarySelection.evaluatedPrHeadSha }
+            : { reason: primarySelection.reason, ...primarySelection.diagnostics },
+          challenger: challengerSelection.ok === true
+            ? { evalId: challengerSelection.evalId, evaluatedPrHeadSha: challengerSelection.evaluatedPrHeadSha }
+            : { reason: challengerSelection.reason, ...challengerSelection.diagnostics },
         }, null, 2));
+        if (!hasRequiredEvalRecords) {
+          throw new Error(selectorFailureMessage(pairId, { primary: primarySelection, challenger: challengerSelection }));
+        }
         return;
       }
-
-      const evals = readEvalRecords({ dir: evalsDir });
-      const primaryEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === primaryPrUrl);
-      const challengerEval = evals.find((record) => record.challengePairId === pairId && record.prUrl === challengerPrUrl);
-      if (!primaryEval || !challengerEval) {
-        throw new Error(`Missing eval records for challenge pair ${pairId}`);
+      if (primarySelection.ok !== true || challengerSelection.ok !== true) {
+        throw new Error(selectorFailureMessage(pairId, { primary: primarySelection, challenger: challengerSelection }));
       }
+      const primaryEval = primarySelection.record;
+      const challengerEval = challengerSelection.record;
+      const evalEvidence = selectedEvalEvidence(primarySelection, challengerSelection);
       if (typeof primaryEval.score !== 'number' || typeof challengerEval.score !== 'number') {
         throw new Error(`Invalid eval scores for challenge pair ${pairId}`);
       }
+
+      // Do not retrieve potentially large diffs for readiness checks or
+      // current-head evidence refusals. The judge path receives them only
+      // after both selectors have proven their matching eval rows.
+      const primaryPrContext = fetchPrContext(primaryNumber, repoDir);
+      const challengerPrContext = fetchPrContext(challengerNumber, repoDir);
 
       const forkDescriptor = resolveComparisonForkDescriptor(
         primaryEval.challengeIntent,
@@ -289,6 +320,7 @@ runTool({
           primaryDiffIdentity,
           challengerDiffIdentity,
         });
+        invalidRecord.selectedEvalEvidence = evalEvidence;
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
         console.log(JSON.stringify(invalidRecord, null, 2));
@@ -357,6 +389,7 @@ runTool({
           primaryDiffIdentity,
           challengerDiffIdentity,
         });
+        invalidRecord.selectedEvalEvidence = evalEvidence;
         recordForResult = invalidRecord;
         appendChallengeComparison(invalidRecord, evalsDir);
 
@@ -420,6 +453,7 @@ runTool({
           primaryDiffIdentity,
           challengerDiffIdentity,
         });
+        skippedRecord.selectedEvalEvidence = evalEvidence;
         skippedRecord.primaryExecution = primaryExecution;
         skippedRecord.challengerExecution = challengerExecution;
         skippedRecord.provenanceValidation = provenanceValidation;
@@ -534,6 +568,7 @@ runTool({
           primaryDiffIdentity,
           challengerDiffIdentity,
         });
+        record.selectedEvalEvidence = evalEvidence;
         recordForResult = record;
         appendChallengeComparison(record, evalsDir);
         console.log(JSON.stringify(record, null, 2));
@@ -576,6 +611,7 @@ runTool({
           primaryDiffIdentity,
           challengerDiffIdentity,
         });
+        record.selectedEvalEvidence = evalEvidence;
         recordForResult = record;
         appendChallengeComparison(record, evalsDir);
         console.log(JSON.stringify(record, null, 2));
@@ -717,6 +753,7 @@ runTool({
         ...(dataQualityWarnings.length > 0 ? { dataQualityWarnings } : {}),
         diffAvailability,
         comparisonOutcome: 'compared',
+        selectedEvalEvidence: evalEvidence,
         ...forkDescriptor,
         primaryDiffIdentity,
         challengerDiffIdentity,

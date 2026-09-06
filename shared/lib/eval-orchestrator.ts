@@ -57,6 +57,7 @@ import {
 import { loadFeatureOutcomeDiagnostics } from './feature-outcome-consumer.ts';
 import { loadTraceContext, appendTraceEvent } from './trace-event.ts';
 import { appendEvalRecord } from './eval-persistence.ts';
+import { resolvePrIdentityMetadata } from './pr-comparison.ts';
 import { buildTaskDescriptor } from './task-descriptor-builder.ts';
 import {
   attestEvalRecordChallengeExecution,
@@ -591,6 +592,20 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     issueId,
     challengePairId,
   });
+  // Persist the live head observed at evaluation time.  A later reader must
+  // never substitute the PR's then-current head for this immutable fact.
+  let evaluatedPrHeadSha: string | undefined;
+  if (prNumber || prUrl) {
+    try {
+      evaluatedPrHeadSha = resolvePrIdentityMetadata(prNumber || prUrl, repoDir).head_sha;
+    } catch (error) {
+      console.warn(`Warning: could not resolve evaluated PR head: ${errorMessage(error)}`);
+    }
+  }
+  // Some programmatic eval callers already attached pre-PR verification
+  // telemetry before orchestration. It is immutable evidence, unlike a later
+  // live PR lookup, so it is the only permitted fallback.
+  evaluatedPrHeadSha ??= record.verificationTelemetry?.checked_shas?.head;
   try {
     // Derive feature slug from branch or issue ID
     // Fetch raw routing data
@@ -691,6 +706,7 @@ export async function runEvaluation(options: EvalOptions): Promise<EvalRecord> {
     endpoint: providerMetadata?.endpoint,
     challengePairId,
     challengeSide: challengeSide.side,
+    evaluatedPrHeadSha,
     challengeIntent,
     routeProvenance: deriveRouteProvenance(repoDir, branch, issueId, worktreePath),
     executedPlanning: stageArtifacts.executedPlanning,
