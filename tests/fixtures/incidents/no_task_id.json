@@ -1,0 +1,24 @@
+{
+  "abcd1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+    "schemaVersion": "1.0",
+    "id": "incident-null-task",
+    "fingerprint": "abcd1234aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "taskId": null,
+    "session": null,
+    "category": "external_transient_dependency",
+    "rootCauseClass": "remote_dependency_failure",
+    "severity": "low",
+    "confidence": "medium",
+    "lifecycle": "active",
+    "createdAt": "2026-08-25T10:00:00.000Z",
+    "firstObservedAt": "2026-08-25T10:00:00.000Z",
+    "lastObservedAt": "2026-09-05T09:00:00.000Z",
+    "occurrenceCount": 10,
+    "summary": "remote dependency probe failure",
+    "operatorAction": "Inspect remote dependency.",
+    "evidence": [],
+    "metadata": {
+      "thresholdTriggered": true
+    }
+  }
+}

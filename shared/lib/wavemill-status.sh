@@ -1587,6 +1587,99 @@ render_inbox_section() {
   done
 }
 
+wavemill_incident_index_path() {
+  printf '%s\n' "${WAVEMILL_INCIDENT_INDEX_OVERRIDE:-$WAVEMILL_REPO_DIR/.wavemill/incidents/index.json}"
+}
+
+format_incident_since() {
+  local observed_at="$1"
+  if [[ "$observed_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2} ]]; then
+    printf '%s-%s\n' "${observed_at:5:2}" "${observed_at:8:2}"
+    return 0
+  fi
+  printf '??-??\n'
+}
+
+incident_severity_color() {
+  case "$1" in
+    critical|high) printf '%s\n' "$R" ;;
+    medium) printf '%s\n' "$Y" ;;
+    low|info) printf '%s\n' "$D" ;;
+    *) printf '%s\n' "$D" ;;
+  esac
+}
+
+render_incidents_section() {
+  local index incident_lines jq_status had_errexit=0 cap=5
+  index="$(wavemill_incident_index_path)"
+  [[ -r "$index" && -s "$index" ]] || return 0
+
+  [[ $- == *e* ]] && had_errexit=1
+  set +e
+  incident_lines="$(jq -r --argjson cap "$cap" '
+    def sev: {critical:0, high:1, medium:2, low:3, info:4}[.severity] // 9;
+    def occ: if (.occurrenceCount | type) == "number" then .occurrenceCount else 0 end;
+
+    (if type == "array" then . elif type == "object" then [.[]] else [] end)
+    | [ .[] | select(.lifecycle == "active") ]
+    | sort_by([sev, -occ]) as $active
+    | ($active | length) as $total
+    | if $total == 0 then
+        empty
+      else
+        "__TOTAL__\t\($total)",
+        ($active[:$cap][] | [
+          (.fingerprint // ""),
+          (.category // "unknown"),
+          (.severity // "unknown"),
+          (occ | tostring),
+          (.summary // ""),
+          (.firstObservedAt // .createdAt // "")
+        ] | @tsv),
+        (if $total > $cap then "__MORE__\t\($total - $cap)" else empty end)
+      end
+  ' "$index")"
+  jq_status=$?
+  if (( had_errexit == 1 )); then
+    set -e
+  fi
+  (( jq_status == 0 )) || return 0
+  [[ -n "$incident_lines" ]] || return 0
+
+  local line fp category severity occ summary first total_count more_count
+  local since severity_label severity_color short_fp rendered_count=0
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    IFS=$'\t' read -r fp category severity occ summary first <<<"$line"
+    if [[ "$fp" == "__TOTAL__" ]]; then
+      total_count="$category"
+      printf "${EL}\n${B}%s${N} ${D}(%s)${N}${EL}\n" "🔥 INCIDENTS" "$total_count" >> "$FRAME"
+      continue
+    fi
+    if [[ "$fp" == "__MORE__" ]]; then
+      more_count="$category"
+      printf "    ${D}…and %s more incidents${N}${EL}\n" "$more_count" >> "$FRAME"
+      continue
+    fi
+
+    if (( rendered_count > 0 )); then
+      printf "${EL}\n" >> "$FRAME"
+    fi
+    rendered_count=$((rendered_count + 1))
+    severity_label="$category / $severity"
+    severity_color="$(incident_severity_color "$severity")"
+    since="$(format_incident_since "$first")"
+    short_fp="${fp:0:8}"
+    [[ -n "$short_fp" ]] || short_fp="????????"
+
+    printf "%b🔥  %-30s%b  occ=%s  since %s${EL}\n" \
+      "$severity_color" "$severity_label" "$N" "$occ" "$since" >> "$FRAME"
+    printf "    %s${EL}\n" "$summary" >> "$FRAME"
+    printf "    ${D}└─ fingerprint %s…  (wavemill observer --once --json to inspect)${N}${EL}\n" \
+      "$short_fp" >> "$FRAME"
+  done <<<"$incident_lines"
+}
+
 render_active_section() {
   local count="${#active_tasks[@]}"
   local task_data issue slug branch worktree task_status task_phase state_pr agent_state
@@ -2000,6 +2093,9 @@ render_dashboard() {
 
   fi
 
+  if declare -f render_incidents_section >/dev/null 2>&1; then
+    render_incidents_section
+  fi
   render_inbox_section
   render_active_section
   render_project_context_suggestion
