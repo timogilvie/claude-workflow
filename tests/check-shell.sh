@@ -117,6 +117,7 @@ for f in \
   "$REPO_DIR"/tests/notification-waiting.test.sh \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/hook-write-context-guard.test.sh \
+  "$REPO_DIR"/tests/claude-tmux-server-guard.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/challenge-intent-roundtrip.test.sh \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
