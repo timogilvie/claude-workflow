@@ -104,7 +104,7 @@ EOF
 
 create_test_repo() {
   local repo_dir="$1"
-  mkdir -p "$repo_dir/shared/lib" "$repo_dir/tools/prompts" "$repo_dir/worktrees" "$repo_dir/.claude"
+  mkdir -p "$repo_dir/shared/lib" "$repo_dir/shared/agent-bin" "$repo_dir/tools/prompts" "$repo_dir/worktrees" "$repo_dir/.claude"
   cp "$REPO_DIR/shared/lib/wavemill-startup-runner.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/startup-progress.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-common.sh" "$repo_dir/shared/lib/"
@@ -117,6 +117,7 @@ create_test_repo() {
   cp "$REPO_DIR/shared/lib/model-validator.ts" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-status.sh" "$repo_dir/shared/lib/"
   cp "$REPO_DIR/shared/lib/wavemill-window-titles.sh" "$repo_dir/shared/lib/"
+  cp "$REPO_DIR/shared/agent-bin/tmux" "$repo_dir/shared/agent-bin/"
 }
 
 write_plan() {
