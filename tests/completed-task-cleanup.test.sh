@@ -94,6 +94,20 @@ CLEANUP_FILE="$TEST_TMP/cleanup_completed_task.sh"
 } > "$CLEANUP_FILE"
 REMOTE_CLEANUP_FILE="$TEST_TMP/cleanup_remote_task_branch.sh"
 extract_function "$COMMON_SCRIPT" "cleanup_remote_task_branch" > "$REMOTE_CLEANUP_FILE"
+# HOK-2952: cleanup_completed_task releases the pane through the shared
+# terminal release primitive; extract the real one so the pane/git decoupling
+# is exercised rather than stubbed.
+RECONCILER_SCRIPT="$REPO_DIR/shared/lib/terminal-reconciler.sh"
+RELEASE_FILE="$TEST_TMP/release_terminal_pane.sh"
+{
+  extract_function "$RECONCILER_SCRIPT" "wavemill_terminal_fresh_hook_state"
+  printf '\n'
+  extract_function "$RECONCILER_SCRIPT" "wavemill_release_terminal_pane"
+} > "$RELEASE_FILE"
+if ! bash -n "$RELEASE_FILE" || ! grep -q 'wavemill_release_terminal_pane()' "$RELEASE_FILE"; then
+  echo "Could not extract wavemill_release_terminal_pane"
+  exit 1
+fi
 EXECUTE_FILE="$TEST_TMP/execute.sh"
 extract_function "$MILL_SCRIPT" "execute" > "$EXECUTE_FILE"
 
@@ -154,12 +168,31 @@ run_cleanup_case() {
   local case_dir="$TEST_TMP/cleanup-$test_case"
   mkdir -p "$case_dir/repo" "$case_dir/worktrees/task-slug"
 
-  CASE_DIR="$case_dir" HELPERS_FILE="$HELPERS_FILE" CLEANUP_FILE="$CLEANUP_FILE" REMOTE_CLEANUP_FILE="$REMOTE_CLEANUP_FILE" TEST_CASE="$test_case" bash -lc '
+  CASE_DIR="$case_dir" HELPERS_FILE="$HELPERS_FILE" CLEANUP_FILE="$CLEANUP_FILE" REMOTE_CLEANUP_FILE="$REMOTE_CLEANUP_FILE" RELEASE_FILE="$RELEASE_FILE" TEST_CASE="$test_case" bash -lc '
     set -euo pipefail
     source "$HELPERS_FILE"
     source "$REMOTE_CLEANUP_FILE"
+    source "$RELEASE_FILE"
     source "$CLEANUP_FILE"
     wavemill_git_remote_with_timeout() { shift; git "$@"; }
+    mill_pane_has_live_blocking_process() {
+      [[ "$TEST_CASE" == "live-agent-blocks" ]] && return 0
+      return 1
+    }
+    # Lock-free stand-in mirroring state_mutate arg order (path, filter, jq args).
+    state_mutate() {
+      local f="$1" filter="$2" tmp
+      shift 2
+      tmp="$(mktemp)"
+      if jq "$@" "$filter" "$f" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "$f"
+      else
+        rm -f "$tmp"
+        return 1
+      fi
+    }
+    DISPOSITIONS=""
+    set_task_lifecycle_disposition() { DISPOSITIONS+="${3:-}:${4:-};"; }
 
     SESSION="wavemill"
     ISSUE="HOK-2348"
@@ -337,6 +370,8 @@ EOF
     printf "reset_retry_calls=%s\n" "$RESET_RETRY_CALLS"
     printf "cleaned=%s\n" "${CLEANED[$ISSUE]:-}"
     printf "attention=%s\n" "$ATTENTION"
+    printf "record=%s\n" "$([[ -f "$REPO_DIR/.wavemill/evals/artifacts/$ISSUE/terminal-record.json" ]] && echo present || echo absent)"
+    printf "dispositions=%s\n" "$DISPOSITIONS"
     printf "git_calls=%s\n" "$GIT_CALLS"
     printf "order=%s\n" "$ORDER"
     printf "logs=%s\n" "$(printf "%s" "$LOG_OUTPUT" | tr "\n" ";")"
@@ -505,6 +540,9 @@ check_contains "preserved local work preserves retry state" "$output" "reset_ret
 check_contains "preserved local work requests attention" "$output" "attention=needs-user"
 check_contains "preserved local work logs retention" "$output" "cleanup preserved local work"
 check_not_contains "preserved local work skips remote cleanup" "$output" "push origin --delete"
+check_contains "preserved local work still released the pane" "$output" "order=archive;tmux-kill;"
+check_contains "preserved local work keeps terminal record for recovery" "$output" "record=present"
+check_contains "preserved local work records verification-required disposition" "$output" "verification-required:local-work-preserved;"
 
 output="$(run_cleanup_case archive-fails)"
 check_contains "archive failure returns non-zero" "$output" "rc=1"
@@ -518,6 +556,9 @@ check_contains "worktree failure preserves state" "$output" "remove_state_calls=
 check_contains "worktree failure preserves retry state" "$output" "reset_retry_calls=0"
 check_not_contains "worktree failure skips branch deletion" "$output" "branch -D"
 check_not_contains "worktree failure skips dynamic branch deletion" "$output" "branch -d"
+check_contains "worktree failure still released the pane first" "$output" "order=archive;tmux-kill;worktree-remove;"
+check_contains "worktree failure keeps terminal record" "$output" "record=present"
+check_contains "worktree failure records retained disposition" "$output" "retained:worktree-or-local-branch-cleanup-failed;"
 
 output="$(run_cleanup_case local-branch-fails)"
 check_contains "local branch failure returns non-zero" "$output" "rc=1"
@@ -530,11 +571,16 @@ check_contains "push failure returns non-zero" "$output" "rc=1"
 check_contains "push failure warns" "$output" "Remote branch cleanup failed (retained): task/task-slug"
 check_contains "push failure preserves state" "$output" "remove_state_calls=0"
 check_contains "push failure preserves retry state" "$output" "reset_retry_calls=0"
+check_contains "push failure keeps pane released" "$output" "order=archive;tmux-kill;"
+check_contains "push failure keeps terminal record" "$output" "record=present"
+check_contains "push failure records verification-required disposition" "$output" "verification-required:remote-branch-cleanup-unverified;"
 
 output="$(run_cleanup_case ls-remote-fails)"
 check_contains "ls-remote failure returns non-zero" "$output" "rc=1"
 check_contains "ls-remote failure warns" "$output" "Remote branch cleanup could not verify branch (retained): task/task-slug"
 check_contains "ls-remote failure preserves state" "$output" "remove_state_calls=0"
+check_contains "ls-remote failure keeps pane released" "$output" "order=archive;tmux-kill;"
+check_contains "ls-remote failure keeps terminal record" "$output" "record=present"
 
 output="$(run_protected_helper_case main)"
 check_contains "helper refuses protected branch" "$output" "Refusing to delete protected branch: main"
@@ -553,6 +599,17 @@ check_contains "cleanup failure preserves task state" "$output" "remove_state_ca
 check_contains "cleanup failure does not mark issue cleaned" "$output" "cleaned="
 check_contains "cleanup failure requests attention" "$output" "attention=needs-user"
 check_contains "cleanup failure warns about persistent window" "$output" "keeping task state"
+check_contains "cleanup failure wrote terminal record before kill attempt" "$output" "record=present"
+check_contains "cleanup failure records truthful retention reason" "$output" "retained:tmux-window-close-failed;"
+check_not_contains "cleanup failure never touches git work" "$output" "worktree-remove"
+
+output="$(run_cleanup_case live-agent-blocks)"
+check_contains "live agent blocks cleanup with non-zero rc" "$output" "rc=1"
+check_not_contains "live agent block never kills the window" "$output" "tmux-kill"
+check_not_contains "live agent block never touches git work" "$output" "worktree-remove"
+check_contains "live agent block skips terminal record" "$output" "record=absent"
+check_contains "live agent block records truthful reason" "$output" "retained:live-agent-process;"
+check_contains "live agent block requests attention" "$output" "attention=needs-user"
 
 echo
 if [[ "$FAIL" -eq 0 ]]; then

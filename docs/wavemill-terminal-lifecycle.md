@@ -42,11 +42,11 @@ Invalid combinations:
 | `review_complete` | `active` | PR/review evidence may be recorded; resources remain `allocated` unless queue handoff releases the pane. |
 | `ready_complete` | `active` | Ready evidence may be recorded; resources remain `allocated` until queue handoff or cleanup. |
 | `pr_opened` | `active` | PR evidence is recorded; no pane release is implied. |
-| `pr_merged` | `merged` | Reconciler records outcome/evidence only. Cleanup moves resources through `reaping` to `reaped` or fail-safe retention. |
-| `pr_closed_unmerged` | `closed` | No branch deletion authority is implied. Cleanup must retain or verify resources before removal. |
-| `challenge_resolved_winner` | `closed` | Losing side may be cleaned by existing challenge cleanup authority; retained state needs an explicit reason. |
-| `challenge_invalid` | `closed` | Resources are retained or verification-required unless cleanup completes. |
-| `challenge_no_comparison` | `closed` | Resources are retained or verification-required unless cleanup completes. |
+| `pr_merged` | `merged` | Pane policy `release` (unless `REQUIRE_CONFIRM` holds the window open): transcript is archived, a terminal record is written, and the pane is killed. Cleanup separately moves git resources through `reaping` to `reaped` or fail-safe retention. |
+| `pr_closed_unmerged` | `closed` | Pane policy `release`. No branch deletion authority is implied; cleanup must retain or verify git resources before removal, and the pane is released either way. |
+| `challenge_resolved_winner` | `closed` | Pane policy `release`. Losing side may be cleaned by existing challenge cleanup authority; retained state needs an explicit reason. |
+| `challenge_invalid` | `closed` | Pane policy `release`. Git resources are retained or verification-required unless cleanup completes. |
+| `challenge_no_comparison` | `closed` | Pane policy `release`. Git resources are retained or verification-required unless cleanup completes. |
 | `operator_abort` | `aborted` | Cleanup authority is unchanged; remote PR branches are retained. |
 | `recovery_failure` | `error` | Resources require manual verification unless cleanup can prove they were reaped. |
 
@@ -58,6 +58,46 @@ Invalid combinations:
 - Hooks: terminal reconciliation may terminalize hook state, but that is not proof of pane release.
 - Retries and incidents: cleanup failures retain task state and write retry/incident evidence rather than deleting uncertain resources.
 - Task-state entries: removed only after cleanup has reached `reaped`, or by pre-existing explicit state-removal paths whose safety contracts already own that decision.
+
+## Pane Release vs Git Retention (HOK-2952)
+
+Terminal pane release is deterministic, truthful, idempotent, and independent of git worktree/branch cleanup. Killing the tmux window never deletes or modifies git work, and preserving git work never keeps a dead pane allocated.
+
+### Policy table
+
+`wavemill_terminal_pane_policy_for_reason` (shared/lib/terminal-reconciler.sh) maps every terminal reason to one pane action:
+
+| Terminal reason | Pane policy |
+| --- | --- |
+| `pr_merged`, `pr_closed_unmerged`, `challenge_resolved_winner`, `challenge_invalid`, `challenge_no_comparison` | `release` |
+| `review_complete`, `ready_complete`, `pr_opened` | `metadata-only` (workflow still active; HOK-2937 queue handoff owns any release) |
+| `operator_abort`, `recovery_failure` | `retain` (the pane is the operator's diagnostic surface) |
+
+Overrides, applied in order: the feature gate off downgrades `release` to `metadata-only`; `REQUIRE_CONFIRM=true` on `pr_merged` downgrades to `metadata-only` (the "window stays open for review" operator hold).
+
+For a closed, unmerged PR, `closed_pr_resource_policy` (shared/lib/wavemill-monitor.sh) decides the git side: a challenger whose challenge comparison is still pending under auto-merge gets `pane-release-only` (git work must survive for the comparison; the challenge loser-cleanup path keeps deletion authority), and every other role — non-challenge tasks, tasks with missing/drifted `challengeRole`, and manual-review challengers — gets `full-cleanup` through `cleanup_completed_task`, whose fail-safe guards retain unproven git work while the pane is still released.
+
+### Release sequence and fault boundaries
+
+`wavemill_release_terminal_pane` runs a fault-ordered sequence: ownership guard → archive diagnostics → durable terminal record → verified `kill-window` → truthful state write. Each step is idempotent, so an interruption at any boundary converges on the next monitor pass with no duplicate errors:
+
+1. **Ownership guard**: a live agent process in the pane (`mill_pane_has_live_blocking_process`), indeterminate liveness, or a fresh hook in `working`/`waiting`/`approval-needed`/`blocked` blocks release. A missing or already-dead window with ownership proven is treated as success and still completes the remaining steps.
+2. **Archive**: full pane scrollback is captured to `.wavemill/evals/artifacts/<issue>/pane-transcript-<reason>.txt` and the current hook snapshot is appended to the feature dir's `.terminal-history.jsonl`. Archive failures never block release.
+3. **Terminal record**: `.wavemill/evals/artifacts/<issue>/terminal-record.json` (atomic tmp+mv, survives worktree deletion) records issue, reason, PR, branch, worktree, head SHA, window target, whether the transcript was archived, and a `recovery` block telling an operator how to recover retained work without a live pane.
+4. **Kill**: `tmux kill-window` is verified; the hook file is removed only after the window is gone.
+5. **State**: `paneState=released`, `paneReleased=true`, `paneReleasedAt`, `terminalRecordWritten=true`. `resourceDisposition` stays owned by git truth — it becomes `released` only for an `active`+`allocated` task; `retained`/`verification-required`/`reaping`/`reaped` from cleanup are never overwritten, so fields describe the real state of tmux and git, not an attempted action.
+
+`cleanup_completed_task` uses the same primitive before its git steps, so a worktree-removal failure, preserved unpushed work, or unverified remote-branch cleanup keeps the git-side retention *without* re-allocating the pane. Retained and verification-required tasks do not consume a mill slot (see Slot Accounting), so a retained dirty worktree never blocks new launches.
+
+### Feature gate and rollback
+
+`terminal.paneRelease.enabled` (default **true**; user → repo → local config layering) and the `WAVEMILL_TERMINAL_PANE_RELEASE=0` env kill-switch disable automated release. Rollback keeps the truthful state fields, archived transcripts, and terminal records — only the kill step stops happening.
+
+### Recovering retained work after pane release
+
+1. Read `.wavemill/evals/artifacts/<issue>/terminal-record.json` — its `recovery.howToRecover` names the branch and (if it still existed at release time) the worktree.
+2. `pane-transcript-<reason>.txt` beside it holds the final pane scrollback; the feature dir's `.terminal-history.jsonl` holds hook-state history.
+3. If the worktree was retained, it is still on disk at the recorded path; otherwise re-create one with `git worktree add <dir> <branch>`.
 
 ## Legacy Migration
 

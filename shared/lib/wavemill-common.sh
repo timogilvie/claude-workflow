@@ -641,7 +641,7 @@ cleanup_completed_task() {
   local completion_reason="${3:-}"
   local win="$issue-$slug"
   local target=""
-  local target_gone="false"
+  local release_rc=0
   local pr=""
 
   pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
@@ -657,18 +657,28 @@ cleanup_completed_task() {
     return 1
   fi
 
-  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
-  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
-    target_gone="true"
+  # HOK-2952: pane release is a shared primitive (archive -> durable record
+  # -> verified kill -> truthful state) and is decoupled from the git steps
+  # below - a later git failure or preservation never re-couples the pane.
+  if declare -F wavemill_release_terminal_pane >/dev/null 2>&1; then
+    wavemill_release_terminal_pane "$SESSION" "$issue" "$slug" "${completion_reason:-completed}" "$pr" || release_rc=$?
   else
-    wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
-    if ! _tmux_window_target_exists "$SESSION" "$target"; then
-      target_gone="true"
+    # Legacy fallback for contexts that source wavemill-common.sh without
+    # terminal-reconciler.sh (no archive/record support).
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+    if [[ -n "$target" ]] && command -v tmux >/dev/null 2>&1; then
+      wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+      if _tmux_window_target_exists "$SESSION" "$target"; then
+        release_rc=1
+      fi
+    fi
+    if [[ "$release_rc" -eq 0 ]]; then
+      rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
     fi
   fi
 
-  if [[ "$target_gone" != "true" ]]; then
-    set_task_lifecycle_disposition "$issue" "" "retained" "tmux-window-close-failed" "cleanup_completed_task" 2>/dev/null || true
+  if [[ "$release_rc" -ne 0 ]]; then
+    set_task_lifecycle_disposition "$issue" "" "retained" "${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-tmux-window-close-failed}" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup could not close tmux window; keeping task state"
     return 1
