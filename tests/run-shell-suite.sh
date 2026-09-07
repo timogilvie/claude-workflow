@@ -101,6 +101,8 @@ TESTS=(
   monitor-script-byte-identical.test.sh
   transient-marker.test.sh
   run-custom-tests-shard.test.sh
+  incident-fixtures-terminal-panes.test.sh
+  incident-fixtures-safety-controls.test.sh
 )
 
 SHARD_INDEX=1
