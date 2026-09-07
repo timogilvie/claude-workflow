@@ -140,6 +140,47 @@ else
   fail "direct forced cleanup remains outside shared helper"
 fi
 
+# HOK-2953: cleanup publishes a structured classification and callers consume
+# it instead of bare scalar return codes.
+for outcome in safe_ancestor safe_exact_remote safe_terminal_pr_head \
+  retain_dirty retain_unpublished retain_closed_unmerged retain_unverifiable operation_failed; do
+  if grep -Fq "$outcome" <<< "$safe_cleanup"; then
+    pass "cleanup helper classifies: $outcome"
+  else
+    fail "cleanup helper missing structured classification: $outcome"
+  fi
+done
+
+if grep -Fq 'WAVEMILL_CLEANUP_OUTCOME=' <<< "$safe_cleanup" \
+  && grep -c '^cleanup_outcome_is_safe()' "$COMMON_SCRIPT" >/dev/null \
+  && grep -Fq 'cleanup_outcome_is_retain' "$COMMON_SCRIPT" \
+  && grep -Fq 'cleanup_outcome_is_failed' "$COMMON_SCRIPT"; then
+  pass "cleanup publishes WAVEMILL_CLEANUP_OUTCOME with predicate helpers"
+else
+  fail "structured outcome publication or predicates missing"
+fi
+
+if grep -Fq '"$pr_head_oid" == "$local_head_sha"' <<< "$safe_cleanup" \
+  && grep -Fq 'wavemill_fetch_pr_terminal_evidence "$pr"' <<< "$safe_cleanup"; then
+  pass "PR deletion authority requires exact headRefOid equality"
+else
+  fail "PR deletion authority is missing exact headRefOid equality"
+fi
+
+if grep -Fq 'wavemill_pr_aware_cleanup_enabled' <<< "$safe_cleanup"; then
+  pass "PR-aware deletion authority is separately gated for rollback"
+else
+  fail "PR-aware deletion authority rollback gate missing"
+fi
+
+if grep -Fq 'safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" "$issue" "$pr"' <<< "$common_cleanup" \
+  && grep -Fq 'cleanup_outcome_is_retain "$cleanup_outcome"' <<< "$common_cleanup" \
+  && grep -Fq 'cleanup_outcome_is_failed "$cleanup_outcome"' <<< "$common_cleanup"; then
+  pass "cleanup_completed_task passes issue/PR and consumes structured outcomes"
+else
+  fail "cleanup_completed_task does not consume structured outcomes"
+fi
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 

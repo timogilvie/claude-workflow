@@ -1539,15 +1539,14 @@ challenge_cancel_challenger_arm() {
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
       local task_branch="task/${challenger_slug}"
       local cleanup_rc=0
-      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || cleanup_rc=$?
-      if [[ "$cleanup_rc" -eq 10 ]]; then
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" "$challenger_key" "" || cleanup_rc=$?
+      if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
         set_window_attention_state "$win" "needs-user"
-        log_warn "  $challenger_key cleanup preserved local work during challenge collapse; keeping task state"
+        log_warn "  $challenger_key cleanup preserved local work during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
         return 1
-      fi
-      if [[ "$cleanup_rc" -eq 20 ]]; then
+      elif [[ "$cleanup_rc" -ne 0 ]]; then
         set_window_attention_state "$win" "needs-user"
-        log_warn "  $challenger_key cleanup failed during challenge collapse; keeping task state"
+        log_warn "  $challenger_key cleanup failed during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
         return 1
       fi
     fi
@@ -10000,15 +9999,14 @@ cleanup_aborted_challenge_arm() {
   fi
 
   local cleanup_rc=0
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || cleanup_rc=$?
-  if [[ "$cleanup_rc" -eq 10 ]]; then
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" "$issue" "" || cleanup_rc=$?
+  if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
     set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue aborted challenge cleanup preserved local work; keeping task state"
+    log_warn "  $issue aborted challenge cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
     return 1
-  fi
-  if [[ "$cleanup_rc" -eq 20 ]]; then
+  elif [[ "$cleanup_rc" -ne 0 ]]; then
     set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue aborted challenge cleanup failed; keeping task state"
+    log_warn "  $issue aborted challenge cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
     return 1
   fi
 

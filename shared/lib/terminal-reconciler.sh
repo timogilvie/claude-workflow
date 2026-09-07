@@ -38,8 +38,8 @@ wavemill_pr_live_state() {
   local pr_number="${1:-}"
   [[ -n "$pr_number" ]] || return 1
   command -v gh >/dev/null 2>&1 || return 1
-  gh pr view "$pr_number" --json number,state,mergedAt --jq \
-    '{number, state, mergedAt, terminalState: (if .mergedAt != null then "MERGED" elif .state == "CLOSED" then "CLOSED" else .state end)}' 2>/dev/null
+  gh pr view "$pr_number" --json number,state,mergedAt,headRefOid,headRefName,baseRefName,mergeCommit --jq \
+    '{number, state, mergedAt, headRefOid, headRefName, baseRefName, mergeCommit, terminalState: (if .mergedAt != null then "MERGED" elif .state == "CLOSED" then "CLOSED" else .state end)}' 2>/dev/null
 }
 
 wavemill_terminal_effective_reason() {
@@ -189,6 +189,7 @@ wavemill_terminal_apply_state() {
     | if ($prJson | type) == "object" then
         .tasks[$issue].lifecycle.deliveryEvidence.prState = ($prJson.terminalState // $prJson.state // .tasks[$issue].lifecycle.deliveryEvidence.prState // "")
         | .tasks[$issue].lifecycle.deliveryEvidence.prBaseBranch = ($prJson.baseRefName // .tasks[$issue].lifecycle.deliveryEvidence.prBaseBranch // "")
+        | .tasks[$issue].lifecycle.deliveryEvidence.prHeadSha = ($prJson.headRefOid // .tasks[$issue].lifecycle.deliveryEvidence.prHeadSha // "")
         | .tasks[$issue].lifecycle.deliveryEvidence.mergeSha = ($prJson.mergeCommit.oid // $prJson.mergeCommitOid // .tasks[$issue].lifecycle.deliveryEvidence.mergeSha // "")
       else .
       end
