@@ -113,7 +113,7 @@ Aggregates across repositories:
 - **Micro** — pooled over all sampled PRs
 - **Macro** — unweighted mean of eligible repos' coverages
 - **Feasibility gate** — count of eligible repos clearing ≥60% agentOrHarness coverage
-- **Precision** (optional) — audited-and-confirmed / audited for each dimension; explicit `audited: false` if no audit file
+- **Precision** (optional) — confirmed audited predictions / audited non-unknown predictions for each dimension; explicit `audited: false` if no audit file
 
 ## Section Gating
 

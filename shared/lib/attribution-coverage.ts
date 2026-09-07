@@ -323,7 +323,9 @@ export function computeAggregates(
   if (auditData) {
     precision.audited = true;
 
-    // Count confirmed vs audited for each dimension
+    // Precision is measured over audited non-unknown assertions only:
+    // confirmed predictions / audited predictions. Audited negatives with an
+    // unknown prediction are correct abstentions, not precision denominator.
     let agentAuthoredConfirmed = 0;
     let agentAuthoredAudited = 0;
     let harnessConfirmed = 0;
@@ -338,23 +340,29 @@ export function computeAggregates(
         if (!audit) continue;
 
         if ('agentAuthored' in audit) {
-          agentAuthoredAudited += 1;
-          if (audit.agentAuthored && pr.agentAuthored.value === 'agent') {
-            agentAuthoredConfirmed += 1;
+          if (pr.agentAuthored.value === 'agent') {
+            agentAuthoredAudited += 1;
+            if (audit.agentAuthored === true) {
+              agentAuthoredConfirmed += 1;
+            }
           }
         }
 
         if ('harness' in audit) {
-          harnessAudited += 1;
-          if (audit.harness && pr.harness.value === audit.harness) {
-            harnessConfirmed += 1;
+          if (pr.harness.value !== 'unknown') {
+            harnessAudited += 1;
+            if (audit.harness && pr.harness.value === audit.harness) {
+              harnessConfirmed += 1;
+            }
           }
         }
 
         if ('model' in audit) {
-          modelAudited += 1;
-          if (audit.model && pr.model.value === audit.model) {
-            modelConfirmed += 1;
+          if (pr.model.value !== 'unknown') {
+            modelAudited += 1;
+            if (audit.model && pr.model.value === audit.model) {
+              modelConfirmed += 1;
+            }
           }
         }
       }

@@ -353,7 +353,13 @@ describe('attribution-coverage module', () => {
               agentAuthored: { value: 'unknown', confidence: null, conflict: false, evidence: [] },
               signals: [],
             }),
-            makePrAttribution(3),
+            makePrAttribution(3, {
+              agentAuthored: { value: 'agent', confidence: 'weak', conflict: false, evidence: [] },
+              harness: { value: 'github-copilot', confidence: 'weak', conflict: false, evidence: [] },
+              model: { value: 'gpt-4.1', confidence: 'weak', conflict: false, evidence: [] },
+              signals: [],
+            }),
+            makePrAttribution(4),
           ],
           DEFAULT_ATTRIBUTION_CONFIG,
         ),
@@ -362,19 +368,19 @@ describe('attribution-coverage module', () => {
       const auditData = {
         'owner/repo': {
           '1': { agentAuthored: true, harness: 'claude-code', model: 'claude-opus-5' },
-          '2': { agentAuthored: true }, // audit says agent, but PR says unknown -> not confirmed
+          '2': { agentAuthored: false }, // correct abstention is not a precision denominator
+          '3': { agentAuthored: false, harness: 'claude-code', model: 'claude-opus-5' },
         },
       };
 
       const aggregate = computeAggregates(repos, auditData);
 
       assert.equal(aggregate.precision.audited, true);
-      // agentAuthored: 1 confirmed out of 2 audited
+      // agentAuthored: PR #1 true positive, PR #3 false positive; PR #2 is an abstention
       assert.deepEqual(aggregate.precision.agentAuthored, { confirmed: 1, audited: 2 });
-      // harness: 1 confirmed out of 1 audited
-      assert.deepEqual(aggregate.precision.harness, { confirmed: 1, audited: 1 });
-      // model: 1 confirmed out of 1 audited
-      assert.deepEqual(aggregate.precision.model, { confirmed: 1, audited: 1 });
+      // harness/model: PR #1 matches, PR #3 predicts the wrong value
+      assert.deepEqual(aggregate.precision.harness, { confirmed: 1, audited: 2 });
+      assert.deepEqual(aggregate.precision.model, { confirmed: 1, audited: 2 });
     });
   });
 });
