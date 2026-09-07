@@ -25,9 +25,12 @@ INCIDENT_QUEUE_HEALTH_SCRIPT="$INCIDENT_REPO_DIR/shared/lib/queue-health.sh"
 INCIDENT_AGENT_ADAPTERS_SCRIPT="$INCIDENT_REPO_DIR/shared/lib/agent-adapters.sh"
 INCIDENT_STATUS_SCRIPT="$INCIDENT_REPO_DIR/shared/lib/wavemill-status.sh"
 
-# One cached extraction of the real controller functions, shared by every
-# scenario in a test run (extraction is pure and slow-ish over a 16k line
-# file; scenarios only differ in the fixture topology they feed it).
+# Would-be cache slot for the extracted controller functions. In practice
+# every caller (run_monitor_tick) is invoked through a `$(...)` command
+# substitution, so a fork-local write here never survives back to this
+# variable in the parent shell - each tick rebuilds the library fresh. See
+# the cleanup at the end of run_monitor_tick, which relies on that same fact
+# to avoid leaking one temp directory per tick.
 INCIDENT_MONITOR_LIB_CACHE=""
 
 # Portable millisecond clock: prefers bash 5's $EPOCHREALTIME (seconds with
@@ -150,13 +153,13 @@ extract_all_functions() {
   ' "$source_file"
 }
 
-# Builds the sourceable controller library once per process and caches its
-# path in INCIDENT_MONITOR_LIB_CACHE. Callers source common.sh etc. for real
-# (already proven sourceable standalone by tests/terminal-reconciler.test.sh)
-# and append every function defined in wavemill-monitor.sh, so whichever
-# branch monitor_issue_state actually takes at runtime has real callees
-# available - no hand-picked closure list to keep in sync with the 16k-line
-# source file.
+# Builds the sourceable controller library into a fresh temp directory
+# (see run_monitor_tick's cleanup for why this is rebuilt, not cached, per
+# call). Callers source common.sh etc. for real (already proven sourceable
+# standalone by tests/terminal-reconciler.test.sh) and append every function
+# defined in wavemill-monitor.sh, so whichever branch monitor_issue_state
+# actually takes at runtime has real callees available - no hand-picked
+# closure list to keep in sync with the 16k-line source file.
 incident_build_monitor_lib() {
   if [[ -n "$INCIDENT_MONITOR_LIB_CACHE" && -f "$INCIDENT_MONITOR_LIB_CACHE" ]]; then
     printf '%s\n' "$INCIDENT_MONITOR_LIB_CACHE"
@@ -675,6 +678,15 @@ run_monitor_tick() {
     printf 'remote_call_delta=%s\n' "$((after_remote_calls - before_remote_calls))"
   }
   rm -f "$record_file"
+  # incident_build_monitor_lib's in-process cache (INCIDENT_MONITOR_LIB_CACHE)
+  # never actually hits: run_monitor_tick is always invoked through a
+  # `$(...)` command substitution by every driver ("tick1=\"$(run_monitor_tick
+  # ...)\""), so any variable it sets is a fork-local write that vanishes with
+  # the subshell - each call rebuilds the library fresh. Removing it here
+  # (rather than relying on cache reuse or a would-be top-level EXIT trap that
+  # can never see it either) is what actually keeps this from leaking one
+  # `wavemill-incident-monitor-lib.XXXXXX` temp directory per tick.
+  rm -rf "$(dirname "$lib_file")" 2>/dev/null || true
 }
 
 tick_field() {
