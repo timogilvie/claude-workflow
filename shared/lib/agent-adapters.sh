@@ -32,6 +32,46 @@ agent_hydrate_repo_env_in_pane() {
   tmux send-keys -t "$target" "$bootstrap_cmd" C-m
 }
 
+# Print shell exports that place Wavemill's execution-time tmux guard ahead of
+# PATH for an agent process and every nested script it launches.
+agent_tmux_guard_export_command() {
+  local target="$1" session="$2" issue="$3" agent_cmd="$4"
+  local adapter_dir guard_dir real_tmux control_socket
+  local guard_dir_q real_tmux_q control_socket_q session_q issue_q agent_q
+
+  adapter_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  guard_dir="${adapter_dir%/lib}/agent-bin"
+  [[ -x "$guard_dir/tmux" ]] || {
+    echo "Error: Wavemill tmux guard is not executable: $guard_dir/tmux" >&2
+    return 1
+  }
+  real_tmux="$(type -P tmux 2>/dev/null || true)"
+  [[ -n "$real_tmux" ]] || {
+    echo "Error: real tmux executable not found" >&2
+    return 1
+  }
+  control_socket="$(tmux display-message -p -t "$target" '#{socket_path}' 2>/dev/null || true)"
+  if [[ -z "$control_socket" ]]; then
+    control_socket="${TMUX:-}"
+    control_socket="${control_socket%%,*}"
+  fi
+
+  printf -v guard_dir_q '%q' "$guard_dir"
+  printf -v real_tmux_q '%q' "$real_tmux"
+  printf -v control_socket_q '%q' "$control_socket"
+  printf -v session_q '%q' "$session"
+  printf -v issue_q '%q' "$issue"
+  printf -v agent_q '%q' "$agent_cmd"
+  printf 'export WAVEMILL_REAL_TMUX=%s WAVEMILL_CONTROL_TMUX_SOCKET=%s WAVEMILL_SESSION=%s WAVEMILL_ISSUE=%s WAVEMILL_AGENT=%s; export PATH=%s:"$PATH";' \
+    "$real_tmux_q" "$control_socket_q" "$session_q" "$issue_q" "$agent_q" "$guard_dir_q"
+}
+
+agent_send_tmux_guarded_command() {
+  local target="$1" command_text="$2" guard_exports="$3"
+  tmux send-keys -t "$target" -l -- "$guard_exports $command_text"
+  tmux send-keys -t "$target" C-m
+}
+
 agent_normalize_linear_issue_id() {
   local issue="${1:-}" candidate="${2:-}"
   candidate="${candidate#"${candidate%%[![:space:]]*}"}"
@@ -1911,6 +1951,8 @@ agent_launch_autonomous() {
 
   local target
   target="$(agent_tmux_target "$session" "$window")" || return 1
+  local tmux_guard_exports
+  tmux_guard_exports="$(agent_tmux_guard_export_command "$target" "$session" "$issue" "$agent_cmd")" || return 1
 
   agent_write_initial_status "$session" "$issue"
   agent_supersede_terminal_hook "$session" "$issue" "$feature_dir"
@@ -2030,8 +2072,9 @@ LAUNCHEOF
           ;;
       esac
       chmod +x "$launcher"
-      tmux send-keys -t "$target" -l -- "$launcher"
-      tmux send-keys -t "$target" C-m
+      local launcher_cmd
+      printf -v launcher_cmd '%q' "$launcher"
+      agent_send_tmux_guarded_command "$target" "$launcher_cmd" "$tmux_guard_exports"
       ;;
     claude-deepseek)
       local tools_dir="${TOOLS_DIR:-$(agent_wavemill_tools_dir)}"
@@ -2085,8 +2128,9 @@ cat '$instr_file' | claude${effective_model_flag} --dangerously-skip-permissions
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
       chmod +x "$launcher"
-      tmux send-keys -t "$target" -l -- "$launcher"
-      tmux send-keys -t "$target" C-m
+      local launcher_cmd
+      printf -v launcher_cmd '%q' "$launcher"
+      agent_send_tmux_guarded_command "$target" "$launcher_cmd" "$tmux_guard_exports"
       ;;
     claude-openrouter)
       agent_openrouter_direct_disabled_message
@@ -2144,10 +2188,11 @@ cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions
 echo "[wavemill] Agent exited (\$?)"
 LAUNCHEOF
         chmod +x "$launcher"
-        tmux send-keys -t "$target" -l -- "$launcher"
-        tmux send-keys -t "$target" C-m
+        local launcher_cmd
+        printf -v launcher_cmd '%q' "$launcher"
+        agent_send_tmux_guarded_command "$target" "$launcher_cmd" "$tmux_guard_exports"
       else
-        tmux send-keys -t "$target" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$phase_env' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" C-m
+        agent_send_tmux_guarded_command "$target" "export WAVEMILL_SESSION='$session' WAVEMILL_ISSUE='$issue' WAVEMILL_DASHBOARD_PID='$dashboard_pid' WAVEMILL_PHASE='$phase_env' WAVEMILL_RESOLVED_MODEL='$model'; cat '$instr_file' | claude${model_flag} --dangerously-skip-permissions; echo '[wavemill] Agent exited (\$?)'" "$tmux_guard_exports"
       fi
       ;;
     codex)
@@ -2180,8 +2225,7 @@ echo "[wavemill] Agent exited (codex=\${codex_rc})"
 LAUNCHEOF
       chmod +x "$launcher"
       printf -v launcher_cmd '%q' "$launcher"
-      tmux send-keys -t "$target" -l -- "$launcher_cmd"
-      tmux send-keys -t "$target" C-m
+      agent_send_tmux_guarded_command "$target" "$launcher_cmd" "$tmux_guard_exports"
       ;;
     *)
       # Generic fallback: start the agent, then paste instructions via tmux buffer.
@@ -2191,9 +2235,9 @@ LAUNCHEOF
         rm -f "$exit_file" 2>/dev/null || true
       fi
       if [[ -n "$exit_file" ]]; then
-        tmux send-keys -t "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" C-m
+        agent_send_tmux_guarded_command "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}; rc=\$?; printf '%s\n' \"\$rc\" > '$exit_file'" "$tmux_guard_exports"
       else
-        tmux send-keys -t "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" C-m
+        agent_send_tmux_guarded_command "$target" "export WAVEMILL_RESOLVED_MODEL='$model'; $agent_cmd${model_flag}" "$tmux_guard_exports"
       fi
       sleep 0.3
       local pane_pid=""
@@ -2427,6 +2471,8 @@ agent_launch_interactive() {
 
   local target
   target="$(agent_tmux_target "$session" "$window")" || return 1
+  local tmux_guard_exports
+  tmux_guard_exports="$(agent_tmux_guard_export_command "$target" "$session" "$issue" "$agent_cmd")" || return 1
 
   agent_prepare_pane_for_launch "$session" "$window" 15 3 "$abort_check_cmd"
   local prepare_rc=$?
@@ -2746,9 +2792,8 @@ LAUNCHEOF
     local baseline_command baseline_children
     baseline_command=$(_pane_current_command "$target")
     baseline_children=$(_pane_child_count "$target")
-    tmux send-keys -t "$target" -l -- "$launcher_cmd"
+    agent_send_tmux_guarded_command "$target" "$launcher_cmd" "$tmux_guard_exports"
     sleep "$enter_delay"
-    tmux send-keys -t "$target" C-m
 
     if agent_verify_launch "$session" "$window" "$verify_wait" "$verify_poll" "$baseline_command" "$baseline_children"; then
       return 0
