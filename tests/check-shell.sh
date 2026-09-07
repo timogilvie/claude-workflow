@@ -161,6 +161,17 @@ for f in \
   "$REPO_DIR"/tests/fixtures/lifecycle/monitor_consumes_command_file.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/parent_pr_triggers_child_launch.sh \
   "$REPO_DIR"/tests/fixtures/lifecycle/parent_branch_missing_fails_clearly.sh \
+  "$REPO_DIR"/tests/incident-fixtures-terminal-panes.test.sh \
+  "$REPO_DIR"/tests/incident-fixtures-safety-controls.test.sh \
+  "$REPO_DIR"/tests/lib/incident-fixture-harness.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/hok2595_closed_non_challenge.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/hok2913c_superseded_challenger.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/squash_delivery_deleted_remote_head.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/control_dirty_worktree.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/control_local_head_changed.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/control_divergent_local_ahead.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/control_missing_network.sh \
+  "$REPO_DIR"/tests/fixtures/incidents/control_never_pushed.sh \
   "$REPO_DIR/wavemill" \
 ; do
   if [[ ! -f "$f" ]]; then

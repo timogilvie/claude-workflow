@@ -112,6 +112,7 @@ TESTS=(
   shared/lib/swap-test/swap-test.test.ts
   shared/lib/pr-diff-provider.test.ts
   shared/lib/pr-metadata.test.ts
+  shared/lib/pr-attribution.test.ts
   shared/lib/pr-ci-status.test.ts
   shared/lib/ready-engine.test.ts
   shared/lib/ready-stage.test.ts
@@ -235,6 +236,7 @@ TESTS=(
   shared/lib/seam-artifacts.test.ts
   shared/lib/blocked-completion.test.ts
   shared/lib/task-contract.test.ts
+  shared/lib/task-lifecycle.test.ts
   shared/lib/feature-state.test.ts
   shared/lib/soft-gates.test.ts
   shared/lib/openrouter-provider.test.ts
@@ -263,6 +265,7 @@ TESTS=(
   tools/hok2423-verify-native-provider-gate.test.ts
   tools/hok2424-verify-native-expansion.test.ts
   tools/incidents.test.ts
+  tools/attribute-prs.test.ts
   tools/launch-validation.test.ts
   tools/measure-repo-attribution.test.ts
   tools/observer.test.ts
