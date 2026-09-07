@@ -29,6 +29,10 @@ check_file_exists() {
   [[ -f "$path" ]] && pass "$name" || { echo "    missing: $path"; fail "$name"; }
 }
 
+# GNU stat first: on GNU, `stat -f` means --file-system and would dump
+# filesystem counters (free blocks/inodes) into the captured value.
+file_mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+
 FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$FAKE_BIN"
 PATH="$FAKE_BIN:$PATH"
@@ -253,10 +257,10 @@ check_eq "state paneReleased is truthful" "true" "$(jq -r '.tasks["HOK-2610"].pa
 check_eq "state paneState released" "released" "$(jq -r '.tasks["HOK-2610"].paneState' "$STATE_FILE")"
 check_eq "window really gone" "absent" "$([[ -f "$FAKE_TMUX_STATE/alive" ]] && echo present || echo absent)"
 # Second pass is a no-op: no second kill, no duplicate record write.
-record_mtime_1="$(stat -f %m "$(record_for HOK-2610)" 2>/dev/null || stat -c %Y "$(record_for HOK-2610)")"
+record_mtime_1="$(file_mtime "$(record_for HOK-2610)")"
 wavemill_reconcile_terminal "$SESSION" "HOK-2610" "pr_closed_unmerged" "110"
 check_eq "second pass does not kill again" "1" "$(kill_count)"
-check_eq "second pass leaves record untouched" "$record_mtime_1" "$(stat -f %m "$(record_for HOK-2610)" 2>/dev/null || stat -c %Y "$(record_for HOK-2610)")"
+check_eq "second pass leaves record untouched" "$record_mtime_1" "$(file_mtime "$(record_for HOK-2610)")"
 check_eq "record stays a single JSON object" "1" "$(wc -l < "$(record_for HOK-2610)" | tr -d ' ')"
 
 # Missing window + proven ownership: idempotent success, record still written.
@@ -329,11 +333,11 @@ wavemill_reconcile_terminal "$SESSION" "HOK-2616" "pr_closed_unmerged" "116"
 check_file_exists "fault pass 1 still wrote record before kill" "$(record_for HOK-2616)"
 check_eq "fault pass 1 leaves paneReleased unset" "false" "$(jq -r '.tasks["HOK-2616"].paneReleased // false' "$STATE_FILE")"
 check_eq "fault pass 1 window survives failed kill" "present" "$([[ -f "$FAKE_TMUX_STATE/alive" ]] && echo present || echo absent)"
-fault_record_mtime="$(stat -f %m "$(record_for HOK-2616)" 2>/dev/null || stat -c %Y "$(record_for HOK-2616)")"
+fault_record_mtime="$(file_mtime "$(record_for HOK-2616)")"
 wavemill_reconcile_terminal "$SESSION" "HOK-2616" "pr_closed_unmerged" "116"
 check_eq "fault pass 2 converges (paneReleased)" "true" "$(jq -r '.tasks["HOK-2616"].paneReleased' "$STATE_FILE")"
 check_eq "fault pass 2 window gone" "absent" "$([[ -f "$FAKE_TMUX_STATE/alive" ]] && echo present || echo absent)"
-check_eq "fault pass 2 does not rewrite record" "$fault_record_mtime" "$(stat -f %m "$(record_for HOK-2616)" 2>/dev/null || stat -c %Y "$(record_for HOK-2616)")"
+check_eq "fault pass 2 does not rewrite record" "$fault_record_mtime" "$(file_mtime "$(record_for HOK-2616)")"
 check_eq "record still a single JSON object after retry" "1" "$(wc -l < "$(record_for HOK-2616)" | tr -d ' ')"
 
 # Disposition reflects git truth: a retained worktree stays retained.
