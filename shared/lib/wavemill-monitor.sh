@@ -1544,8 +1544,7 @@ challenge_cancel_challenger_arm() {
         set_window_attention_state "$win" "needs-user"
         log_warn "  $challenger_key cleanup preserved local work during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
         return 1
-      fi
-      if [[ "$cleanup_rc" -ne 0 ]]; then
+      elif [[ "$cleanup_rc" -ne 0 ]]; then
         set_window_attention_state "$win" "needs-user"
         log_warn "  $challenger_key cleanup failed during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
         return 1
@@ -9990,8 +9989,7 @@ cleanup_aborted_challenge_arm() {
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue aborted challenge cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
     return 1
-  fi
-  if [[ "$cleanup_rc" -ne 0 ]]; then
+  elif [[ "$cleanup_rc" -ne 0 ]]; then
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue aborted challenge cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
     return 1

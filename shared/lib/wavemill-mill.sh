@@ -1481,8 +1481,7 @@ cleanup_stale_tasks() {
         if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed; then
           log_warn "  $issue cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
           continue
-        fi
-        if [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain; then
+        elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain; then
           set_window_attention_state "$issue-$slug" "needs-user"
           log_warn "  $issue cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
           continue

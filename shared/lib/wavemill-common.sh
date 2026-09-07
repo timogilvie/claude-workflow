@@ -1016,8 +1016,7 @@ cleanup_completed_task() {
   if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed "$cleanup_outcome"; then
     set_task_lifecycle_disposition "$issue" "" "retained" "worktree-or-local-branch-cleanup-failed" "cleanup_completed_task" 2>/dev/null || true
     return 1
-  fi
-  if [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
+  elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
     set_task_lifecycle_disposition "$issue" "" "verification-required" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup preserved local work (${cleanup_outcome:-unclassified}); keeping task state"
