@@ -88,6 +88,7 @@ for f in \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
+  "$REPO_DIR"/shared/agent-bin/tmux \
   "$REPO_DIR"/tests/dashboard-refresh.test.sh \
   "$REPO_DIR"/tests/state-mutex.test.sh \
   "$REPO_DIR"/tests/task-id-log-prefix.test.sh \
@@ -118,6 +119,7 @@ for f in \
   "$REPO_DIR"/tests/hook-osc-emit.test.sh \
   "$REPO_DIR"/tests/hook-write-context-guard.test.sh \
   "$REPO_DIR"/tests/claude-tmux-server-guard.test.sh \
+  "$REPO_DIR"/tests/agent-tmux-runtime-guard.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/challenge-intent-roundtrip.test.sh \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
@@ -1819,11 +1821,11 @@ tmux() {
     shift
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        -t|--)
+        -t)
+          shift 2
+          ;;
+        --)
           shift
-          if [[ "${1:-}" == *:* ]]; then
-            shift
-          fi
           ;;
         -l|C-m)
           shift
@@ -1853,6 +1855,7 @@ agent_launch_interactive "wavemill-test" "planning" "$CODEX_PROMPT_FILE" "codex"
 
 CODEX_LAUNCHER_PATH=""
 for captured in "${TMUX_CAPTURE[@]}"; do
+  captured="${captured##* }"
   if [[ "$captured" == */*-launcher.sh ]]; then
     printf -v CODEX_LAUNCHER_PATH '%b' "${captured//\\/\\\\}"
     break
