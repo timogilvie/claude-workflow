@@ -88,6 +88,22 @@ CLEANUP_FILE="$TEST_TMP/cleanup_completed_task.sh"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
   printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_safe"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_retain"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_failed"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_cleanup_operator_guidance"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_pr_aware_cleanup_enabled"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_fetch_pr_terminal_evidence"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_record_pr_delivery_evidence"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_record_cleanup_decision"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "cleanup_completed_task"
@@ -169,6 +185,7 @@ run_cleanup_case() {
     STATE_FILE="$CASE_DIR/state.json"
     MILL_LOG_FILE="$CASE_DIR/mill.log"
     API_TIMEOUT=5
+    BASE_BRANCH="auto/integration"
 
     state_pr_json=",\"pr\":4242"
     if [[ "$TEST_CASE" == "no-pr" ]]; then
@@ -204,6 +221,19 @@ EOF
       case "$TEST_CASE" in
         closed-unmerged) printf "%s\n" "CLOSED" ;;
         *) printf "%s\n" "MERGED" ;;
+      esac
+    }
+    gh() {
+      case "$TEST_CASE" in
+        preserved-local-work)
+          printf "%s\n" "{\"number\":4242,\"state\":\"MERGED\",\"mergedAt\":\"2026-09-04T12:00:00Z\",\"headRefOid\":\"dddddddddddddddddddddddddddddddddddddddd\",\"headRefName\":\"task/task-slug\",\"baseRefName\":\"auto/integration\",\"mergeCommit\":null}"
+          ;;
+        closed-unmerged-retained)
+          printf "%s\n" "{\"number\":4242,\"state\":\"CLOSED\",\"mergedAt\":null,\"headRefOid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headRefName\":\"task/task-slug\",\"baseRefName\":\"auto/integration\",\"mergeCommit\":null}"
+          ;;
+        *)
+          return 1
+          ;;
       esac
     }
 
@@ -246,14 +276,14 @@ EOF
           return 0
           ;;
         "merge-base --is-ancestor")
-          [[ "$TEST_CASE" != "preserved-local-work" ]]
+          [[ "$TEST_CASE" != "preserved-local-work" && "$TEST_CASE" != "closed-unmerged-retained" ]]
           return $?
           ;;
         "cat-file -e")
           return 0
           ;;
         "rev-list --count")
-          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+          if [[ "$TEST_CASE" == "preserved-local-work" || "$TEST_CASE" == "closed-unmerged-retained" ]]; then
             printf "1\n"
             return 0
           fi
@@ -261,7 +291,7 @@ EOF
           return 0
           ;;
         "rev-list "*)
-          if [[ "$TEST_CASE" == "preserved-local-work" ]]; then
+          if [[ "$TEST_CASE" == "preserved-local-work" || "$TEST_CASE" == "closed-unmerged-retained" ]]; then
             printf "%s\n" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
           fi
           return 0
@@ -333,6 +363,7 @@ EOF
     set -e
 
     printf "rc=%s\n" "$rc"
+    printf "outcome=%s\n" "${WAVEMILL_CLEANUP_OUTCOME:-}"
     printf "remove_state_calls=%s\n" "$REMOVE_STATE_CALLS"
     printf "reset_retry_calls=%s\n" "$RESET_RETRY_CALLS"
     printf "cleaned=%s\n" "${CLEANED[$ISSUE]:-}"
@@ -462,6 +493,7 @@ check_contains "renamed title resolves current window id" "$output" "target=@31"
 
 output="$(run_cleanup_case dead-pane-success)"
 check_contains "cleanup success returns zero" "$output" "rc=0"
+check_contains "cleanup success reports safe structured outcome" "$output" "outcome=safe_ancestor"
 check_contains "cleanup archives before destructive cleanup" "$output" "order=archive;tmux-kill;worktree-remove;branch-delete;ls-remote;push-delete;prune;reset;remove-state;"
 check_contains "cleanup success resets retry state" "$output" "reset_retry_calls=1"
 check_contains "cleanup success removes task state" "$output" "remove_state_calls=1"
@@ -500,11 +532,22 @@ check_contains "legacy state logs lifecycle deletion-policy retention" "$output"
 
 output="$(run_cleanup_case preserved-local-work)"
 check_contains "preserved local work returns non-zero" "$output" "rc=1"
+check_contains "preserved local work classifies changed-after-PR-head as retained" "$output" "outcome=retain_unpublished"
+check_contains "preserved local work records changed_after_pr_head evidence" "$output" "changed_after_pr_head"
 check_contains "preserved local work keeps state" "$output" "remove_state_calls=0"
 check_contains "preserved local work preserves retry state" "$output" "reset_retry_calls=0"
 check_contains "preserved local work requests attention" "$output" "attention=needs-user"
 check_contains "preserved local work logs retention" "$output" "cleanup preserved local work"
 check_not_contains "preserved local work skips remote cleanup" "$output" "push origin --delete"
+
+output="$(run_cleanup_case closed-unmerged-retained)"
+check_contains "closed unmerged work returns non-zero" "$output" "rc=1"
+check_contains "closed unmerged work is classified retain_closed_unmerged" "$output" "outcome=retain_closed_unmerged"
+check_contains "closed unmerged work keeps state" "$output" "remove_state_calls=0"
+check_contains "closed unmerged work requests attention" "$output" "attention=needs-user"
+check_contains "closed unmerged work guidance is scenario-specific" "$output" "closed without merging"
+check_not_contains "closed unmerged work guidance does not suggest blind push" "$output" "Recover with: git"
+check_not_contains "closed unmerged work skips remote cleanup" "$output" "push origin --delete"
 
 output="$(run_cleanup_case archive-fails)"
 check_contains "archive failure returns non-zero" "$output" "rc=1"

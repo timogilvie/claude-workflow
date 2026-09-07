@@ -1477,14 +1477,14 @@ cleanup_stale_tasks() {
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
         local cleanup_rc=0
-        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" || cleanup_rc=$?
-        if [[ "$cleanup_rc" -eq 20 ]]; then
-          log_warn "  $issue cleanup failed; keeping task state"
+        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" "$issue" "$pr" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed; then
+          log_warn "  $issue cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
           continue
         fi
-        if [[ "$cleanup_rc" -eq 10 ]]; then
+        if [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain; then
           set_window_attention_state "$issue-$slug" "needs-user"
-          log_warn "  $issue cleanup preserved local work; keeping task state"
+          log_warn "  $issue cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
           continue
         fi
         if [[ "$cleanup_rc" -eq 0 && "$reason" != "branch deleted" && "$branch" != "main" && "$branch" != "master" ]]; then
