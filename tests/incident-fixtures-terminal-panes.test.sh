@@ -58,6 +58,12 @@ expect_true() {
 
 preservation_marker_count() {
   local repo_dir="$1"
+  # The directory legitimately does not exist when no branch was ever
+  # preserved; a bare find would fail the pipefail-ed driver in that case.
+  if [[ ! -d "$repo_dir/.wavemill/incidents/preserved-branches" ]]; then
+    printf '0\n'
+    return 0
+  fi
   find "$repo_dir/.wavemill/incidents/preserved-branches" -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' '
 }
 
@@ -187,31 +193,91 @@ squash_rc1="$(tick_field "$squash_tick1" rc)"
 squash_iteration1="$(tick_field "$squash_tick1" iteration_ms)"
 marker_count_1="$(preservation_marker_count "$SCENARIO_DIR/repo")"
 
-# Pre-fix reproduction: safe_remove_task_worktree_and_branch's merged_to_base
-# check relies solely on `git merge-base --is-ancestor`, which is never true
-# for a squash-merged branch, even though the PR's headRefOid proves it was
-# delivered. This preserves the branch and writes a marker on EVERY tick.
-expect_eq "$(preservation_marker_count "$SCENARIO_DIR/repo")" "1" \
-  "squash tick1: a PRESERVED_UNPUSHED_WORK marker is written despite the PR being provably merged (headRefOid matches)"
-expect_eq "$(jq -r '.tasks["HOK-3000"] != null' "$STATE_FILE")" "true" \
-  "squash tick1: task entry is retained (cleanup did not complete)"
+# HOK-2953: the merged PR's headRefOid exactly equals the local head, so the
+# structured safe_terminal_pr_head authority must clean the branch up on the
+# first tick even though ancestry is false and the remote head is deleted.
+expect_eq "$marker_count_1" "0" \
+  "squash tick1: no preservation marker is written (exact PR-head proof authorizes cleanup)"
+expect_eq "$(jq -r '.tasks["HOK-3000"] != null' "$STATE_FILE")" "false" \
+  "squash tick1: task entry is removed (cleanup completed)"
+expect_true "squash tick1: worktree directory removed" \
+  bash -c "[[ ! -d '$WORKTREE_ROOT/$SQUASH_SLUG' ]]"
+if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/task/$SQUASH_SLUG"; then
+  report_fail "squash tick1: local branch task/$SQUASH_SLUG still exists after PR-head-proven cleanup"
+else
+  report_pass "squash tick1: local branch task/$SQUASH_SLUG deleted"
+fi
+
+# The deletion authority must be durably recorded for operator audit, with
+# the exact evidence (classification, PR head OID, final head check) used.
+squash_decision="$SCENARIO_DIR/repo/.wavemill/incidents/cleanup-decisions/task__${SQUASH_SLUG}.json"
+if [[ -f "$squash_decision" ]]; then
+  report_pass "squash tick1: cleanup decision evidence recorded at $squash_decision"
+  expect_eq "$(jq -r '.classification // ""' "$squash_decision")" "safe_terminal_pr_head" \
+    "squash tick1: decision classification is safe_terminal_pr_head"
+  expect_eq "$(jq -r '.prHeadOid // ""' "$squash_decision")" "$SQUASH_LOCAL_HEAD" \
+    "squash tick1: decision records the exact PR headRefOid"
+  expect_eq "$(jq -r '.localHeadSha // ""' "$squash_decision")" "$SQUASH_LOCAL_HEAD" \
+    "squash tick1: decision records the matching local head"
+  expect_eq "$(jq -r '.prState // ""' "$squash_decision")" "MERGED" \
+    "squash tick1: decision records the terminal PR state"
+  expect_eq "$(jq -r '.finalCheckPassed // ""' "$squash_decision")" "true" \
+    "squash tick1: decision records the final pre-deletion head check"
+else
+  report_fail "squash tick1: no cleanup decision evidence at $squash_decision"
+fi
+
+# Automatic cleanup must never recreate the deleted remote branch.
+if git -C "$ORIGIN_DIR" show-ref --verify --quiet "refs/heads/task/$SQUASH_SLUG"; then
+  report_fail "squash tick1: cleanup recreated the deleted remote branch"
+else
+  report_pass "squash tick1: deleted remote branch was not recreated"
+fi
 
 squash_tick2="$(run_monitor_tick "$SQUASH_ISSUE" "$SQUASH_SLUG" "$SQUASH_PR")"
 squash_remote_delta2="$(tick_field "$squash_tick2" remote_call_delta)"
 squash_iteration2="$(tick_field "$squash_tick2" iteration_ms)"
 marker_count_2="$(preservation_marker_count "$SCENARIO_DIR/repo")"
 
-# The task packet explicitly calls out duplicate cleanup attempts on
-# unchanged evidence: a fixed implementation must not re-attempt (and
-# re-mark) an already-preserved branch every tick.
-if [[ "$marker_count_2" -gt "$marker_count_1" ]]; then
-  report_fail "squash tick2: preservation marker was rewritten again on unchanged evidence (repeated-cleanup-retry loop reproduced: $marker_count_1 -> $marker_count_2)"
+# Restart-replay resource invariants. Driving monitor_issue_state directly
+# for an already-reaped issue makes the terminal reconciler upsert a fresh
+# (branch/worktree-less) task entry and recreate the feature dir - a harness
+# artifact of the forced re-invocation, retained conservatively as
+# retain_dirty. What must hold is that no deleted git resource reappears and
+# nothing new is deleted: the local branch stays gone, the remote branch is
+# never recreated, and the recorded deletion authority survives.
+if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/task/$SQUASH_SLUG"; then
+  report_fail "squash tick2: local branch was resurrected"
 else
-  report_pass "squash tick2: preservation marker count did not grow further ($marker_count_1 -> $marker_count_2)"
+  report_pass "squash tick2: local branch stays deleted"
+fi
+if git -C "$ORIGIN_DIR" show-ref --verify --quiet "refs/heads/task/$SQUASH_SLUG"; then
+  report_fail "squash tick2: deleted remote branch was recreated on replay"
+else
+  report_pass "squash tick2: deleted remote branch still not recreated"
+fi
+if git -C "$REPO_DIR" worktree list 2>/dev/null | grep -q "$SQUASH_SLUG"; then
+  report_fail "squash tick2: git-registered worktree reappeared"
+else
+  report_pass "squash tick2: no git-registered worktree reappears"
+fi
+expect_true "squash tick2: deletion authority record survives replay" \
+  bash -c "[[ -f '$squash_decision' ]]"
+# Any replay-tick marker must be a conservative retention, never a record
+# that authorized deleting something on unchanged evidence.
+if [[ "$marker_count_2" -gt 0 ]]; then
+  replay_marker="$SCENARIO_DIR/repo/.wavemill/incidents/preserved-branches/task__${SQUASH_SLUG}.json"
+  expect_eq "$(jq -r '.safeToDelete // false' "$replay_marker" 2>/dev/null)" "false" \
+    "squash tick2: replay marker is a retention record, not deletion authority"
 fi
 
 restart_squash="$(run_monitor_tick "$SQUASH_ISSUE" "$SQUASH_SLUG" "$SQUASH_PR")"
 marker_count_restart="$(preservation_marker_count "$SCENARIO_DIR/repo")"
+if git -C "$ORIGIN_DIR" show-ref --verify --quiet "refs/heads/task/$SQUASH_SLUG"; then
+  report_fail "squash restart replay: deleted remote branch was recreated"
+else
+  report_pass "squash restart replay: deleted remote branch still not recreated"
+fi
 
 timing_multiplier="${WAVEMILL_INCIDENT_FIXTURE_TIMING_TOLERANCE_MULTIPLIER:-1}"
 tick1_budget_ms=$((10000 * timing_multiplier))
@@ -228,7 +294,7 @@ echo "  scenario 3 diagnostics: rc1=$squash_rc1 markers=${marker_count_1}/${mark
 # ============================================================================
 echo ""
 if [[ "$FAILURES" -eq 0 ]]; then
-  echo "incident-fixtures-terminal-panes: all assertions passed (pre-fix reproductions confirmed)"
+  echo "incident-fixtures-terminal-panes: all assertions passed (scenarios 1-2 pre-fix reproductions, scenario 3 squash cleanup fixed by HOK-2953)"
   exit 0
 else
   echo "incident-fixtures-terminal-panes: $FAILURES assertion(s) failed" >&2
