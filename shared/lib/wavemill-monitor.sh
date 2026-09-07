@@ -14595,20 +14595,14 @@ monitor_issue_state() {
           ;;
       esac
     fi
-    if [[ -n "$linear_status" ]]; then
-      if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-        wavemill_reconcile_terminal "$SESSION" "$ISSUE" "pr_closed_unmerged" "$PR" || true
-      elif should_update_linear_state "$ISSUE"; then
-        linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
-      fi
+    if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
+      wavemill_reconcile_terminal "$SESSION" "$ISSUE" "pr_closed_unmerged" "$PR" || true
+    elif [[ -n "$linear_status" ]] && should_update_linear_state "$ISSUE"; then
+      linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
     fi
-    if should_cleanup_closed_pr "$ISSUE"; then
-      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
-      set_window_attention_state "$WIN" "clear"
-      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
-    else
-      CLEANED["$ISSUE"]=1
-    fi
+    log "debug" "  ↳ Auto-cleaning closed PR pane/worktree"
+    set_window_attention_state "$WIN" "clear"
+    cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
     return 0
   fi
 

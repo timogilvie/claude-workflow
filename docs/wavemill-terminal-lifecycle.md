@@ -49,6 +49,7 @@ Invalid combinations:
 | `challenge_no_comparison` | `closed` | Resources are retained or verification-required unless cleanup completes. |
 | `operator_abort` | `aborted` | Cleanup authority is unchanged; remote PR branches are retained. |
 | `recovery_failure` | `error` | Resources require manual verification unless cleanup can prove they were reaped. |
+| `phase_launch_exhausted` | `error` | Phase launch retries exhausted; resources require manual verification. |
 
 ## Ownership
 
@@ -58,6 +59,34 @@ Invalid combinations:
 - Hooks: terminal reconciliation may terminalize hook state, but that is not proof of pane release.
 - Retries and incidents: cleanup failures retain task state and write retry/incident evidence rather than deleting uncertain resources.
 - Task-state entries: removed only after cleanup has reached `reaped`, or by pre-existing explicit state-removal paths whose safety contracts already own that decision.
+
+## Pane Release vs Git Retention (HOK-2952)
+
+Terminal pane release is independent of Git worktree/branch deletion. The release primitive (`wavemill_release_terminal_pane`) follows this sequence:
+
+1. Idempotency short-circuit (already released + window absent → success).
+2. Archive pane transcript to `.wavemill/evals/artifacts/<issue>/pane-transcript.txt`.
+3. Write durable terminal record to `.wavemill/evals/artifacts/<issue>/terminal-record.json`.
+4. Kill tmux window and verify it is gone; remove hook file.
+5. Mark `paneState=released`, `paneReleasedAt`, and update `resourceDisposition`.
+
+The pane policy is derived from `workflowOutcome`:
+
+| Outcome | Pane policy |
+| --- | --- |
+| `merged`, `closed` | **auto-release**: archive → record → kill → truthful state |
+| `aborted`, `error` | **retain-manual**: archive + record, pane kept for operator inspection |
+| `active` | **no release**: pane stays allocated (queue handoff under HOK-2937 is the only active-outcome release) |
+
+Retained worktrees/branches remain discoverable through `terminal-record.json` after pane release. The terminal record includes the worktree path, branch name, and a recovery hint.
+
+### Kill-switch
+
+Set `cleanup.terminalPaneRelease.enabled: false` in `.wavemill-config.json` or `WAVEMILL_TERMINAL_PANE_RELEASE=0` in the environment. Disabling the kill-switch stops the tmux kill; truthful state fields, transcripts, and terminal records are still written.
+
+### Slot accounting after release
+
+A released pane with a retained worktree has `resourceDisposition=retained`, which does not consume a mill slot. The task entry remains in workflow-state until Git cleanup completes.
 
 ## Legacy Migration
 

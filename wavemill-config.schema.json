@@ -1713,6 +1713,25 @@
             },
             "additionalProperties": false
         },
+        "cleanup": {
+            "type": "object",
+            "description": "Settings for terminal task cleanup and pane release.",
+            "properties": {
+                "terminalPaneRelease": {
+                    "type": "object",
+                    "description": "Terminal pane release for completed/closed tasks (HOK-2952). When enabled, panes are released deterministically after archiving diagnostics, independent of Git worktree/branch deletion. Env override: WAVEMILL_TERMINAL_PANE_RELEASE=0 to disable.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Release terminal panes for merged/closed tasks. Disabling retains truthful state fields and archived diagnostics but skips the actual pane kill."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "mergeQueue": {
             "type": "object",
             "description": "Queue settings for stale-main refresh and final merge-candidate promotion in mill ready flow.",

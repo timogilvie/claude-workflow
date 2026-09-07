@@ -632,7 +632,8 @@ safe_remove_task_worktree_and_branch() {
 }
 
 # Canonical completed-task cleanup order:
-# 1. archive artifacts, 2. close pane/window, 3. remove worktree,
+# 1. archive artifacts, 2. close pane/window (+ transcript/record via
+#    wavemill_release_terminal_pane when available), 3. remove worktree,
 # 4. remove local branch, 5. remove eligible remote branch,
 # 6. prune hooks/worktrees, 7. reset retry state and remove task state.
 cleanup_completed_task() {
@@ -657,21 +658,37 @@ cleanup_completed_task() {
     return 1
   fi
 
-  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
-  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
+  if declare -F wavemill_release_terminal_pane >/dev/null 2>&1; then
+    local terminal_reason="pr_merged"
+    case "$completion_reason" in
+      *closed*) terminal_reason="pr_closed_unmerged" ;;
+      *abort*) terminal_reason="operator_abort" ;;
+    esac
+    local release_rc=0
+    wavemill_release_terminal_pane "$SESSION" "$issue" "$terminal_reason" "$pr" || release_rc=$?
+    if [[ "$release_rc" -ne 0 ]]; then
+      set_window_attention_state "$win" "needs-user"
+      log_warn "  $issue cleanup could not close tmux window; keeping task state"
+      return 1
+    fi
     target_gone="true"
   else
-    wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
-    if ! _tmux_window_target_exists "$SESSION" "$target"; then
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+    if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
       target_gone="true"
+    else
+      wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+      if ! _tmux_window_target_exists "$SESSION" "$target"; then
+        target_gone="true"
+      fi
     fi
-  fi
 
-  if [[ "$target_gone" != "true" ]]; then
-    set_task_lifecycle_disposition "$issue" "" "retained" "tmux-window-close-failed" "cleanup_completed_task" 2>/dev/null || true
-    set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue cleanup could not close tmux window; keeping task state"
-    return 1
+    if [[ "$target_gone" != "true" ]]; then
+      set_task_lifecycle_disposition "$issue" "" "retained" "tmux-window-close-failed" "cleanup_completed_task" 2>/dev/null || true
+      set_window_attention_state "$win" "needs-user"
+      log_warn "  $issue cleanup could not close tmux window; keeping task state"
+      return 1
+    fi
   fi
 
   log "debug" "Closed window: $win"

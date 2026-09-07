@@ -5,7 +5,7 @@ WAVEMILL_TERMINAL_RECONCILER_LOADED=1
 
 wavemill_terminal_reason_valid() {
   case "${1:-}" in
-    review_complete|ready_complete|pr_opened|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|operator_abort|recovery_failure) return 0 ;;
+    review_complete|ready_complete|pr_opened|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|operator_abort|recovery_failure|phase_launch_exhausted) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -54,7 +54,7 @@ wavemill_terminal_effective_reason() {
 
 wavemill_terminal_hook_state() {
   case "$1" in
-    recovery_failure|challenge_invalid) printf 'error\n' ;;
+    recovery_failure|challenge_invalid|phase_launch_exhausted) printf 'error\n' ;;
     *) printf 'idle\n' ;;
   esac
 }
@@ -71,6 +71,7 @@ wavemill_terminal_detail() {
     challenge_no_comparison) printf 'Challenge closed without comparison' ;;
     operator_abort) printf 'Workflow aborted by operator' ;;
     recovery_failure) printf 'Recovery failed' ;;
+    phase_launch_exhausted) printf 'Phase launch retries exhausted' ;;
     *) printf '%s' "$reason" ;;
   esac
 }
@@ -81,7 +82,7 @@ wavemill_terminal_phase_for_reason() {
     pr_merged) printf 'done\n' ;;
     pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
     operator_abort) printf 'aborted\n' ;;
-    recovery_failure) printf 'error\n' ;;
+    recovery_failure|phase_launch_exhausted) printf 'error\n' ;;
   esac
 }
 
@@ -90,7 +91,7 @@ wavemill_terminal_status_for_reason() {
     pr_merged) printf 'merged\n' ;;
     pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
     operator_abort) printf 'aborted\n' ;;
-    recovery_failure) printf 'error\n' ;;
+    recovery_failure|phase_launch_exhausted) printf 'error\n' ;;
     *) printf '' ;;
   esac
 }
@@ -100,7 +101,7 @@ wavemill_terminal_workflow_outcome_for_reason() {
     pr_merged) printf 'merged\n' ;;
     pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
     operator_abort) printf 'aborted\n' ;;
-    recovery_failure) printf 'error\n' ;;
+    recovery_failure|phase_launch_exhausted) printf 'error\n' ;;
     *) printf 'active\n' ;;
   esac
 }
@@ -109,14 +110,14 @@ wavemill_terminal_stage_for_reason() {
   case "$1" in
     review_complete|pr_opened) printf 'review\n' ;;
     ready_complete|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'ready\n' ;;
-    operator_abort|recovery_failure) printf '%s\n' "${CURRENT_PHASE:-${WAVEMILL_PHASE:-coding}}" ;;
+    operator_abort|recovery_failure|phase_launch_exhausted) printf '%s\n' "${CURRENT_PHASE:-${WAVEMILL_PHASE:-coding}}" ;;
   esac
 }
 
 wavemill_terminal_stage_status_for_reason() {
   case "$1" in
     operator_abort) printf 'aborted\n' ;;
-    recovery_failure|challenge_invalid) printf 'failed\n' ;;
+    recovery_failure|challenge_invalid|phase_launch_exhausted) printf 'failed\n' ;;
     *) printf 'completed\n' ;;
   esac
 }
@@ -125,7 +126,7 @@ wavemill_terminal_marker_value() {
   local issue="$1" reason="$2" pr_number="${3:-}" pr_json="${4:-null}" now
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   jq -cn --arg issue "$issue" --arg reason "$reason" --arg pr "$pr_number" --arg appliedAt "$now" --argjson prJson "$pr_json" \
-    '{issue:$issue, reason:$reason, prNumber:(if $pr == "" then null else $pr end), appliedAt:$appliedAt, stateApplied:true, stageApplied:false, hookApplied:false, paneMetadataApplied:false, paneApplied:false, linearApplied:false, pr:$prJson}'
+    '{issue:$issue, reason:$reason, prNumber:(if $pr == "" then null else $pr end), appliedAt:$appliedAt, stateApplied:true, stageApplied:false, hookApplied:false, paneMetadataApplied:false, paneApplied:false, paneReleased:false, linearApplied:false, pr:$prJson}'
 }
 
 wavemill_terminal_marker_field() {
@@ -240,7 +241,7 @@ wavemill_terminal_linear_status() {
       fi
       printf 'Backlog\n'
       ;;
-    challenge_invalid|challenge_no_comparison|operator_abort|recovery_failure) printf 'Backlog\n' ;;
+    challenge_invalid|challenge_no_comparison|operator_abort|recovery_failure|phase_launch_exhausted) printf 'Backlog\n' ;;
     challenge_resolved_winner) printf 'Done\n' ;;
     *) return 1 ;;
   esac
@@ -316,4 +317,224 @@ wavemill_reconcile_terminal() {
       return "$linear_rc"
     fi
   fi
+
+  if [[ "$(wavemill_terminal_marker_field "$issue" "$key" "paneReleased")" != "true" ]]; then
+    local pane_policy release_rc=0
+    pane_policy="$(wavemill_terminal_pane_policy "$effective_reason")"
+    case "$pane_policy" in
+      release)
+        wavemill_release_terminal_pane "$session" "$issue" "$effective_reason" "$pr_number" || release_rc=$?
+        if [[ "$release_rc" -eq 0 ]]; then
+          wavemill_terminal_mark_field "$issue" "$key" "paneReleased" true
+        else
+          wavemill_terminal_mark_field "$issue" "$key" "paneReleaseDeferredReason" "\"release-failed-rc-${release_rc}\""
+        fi
+        ;;
+      retain-manual)
+        wavemill_archive_pane_transcript "$issue" "$session" || true
+        wavemill_write_terminal_record "$session" "$issue" "$effective_reason" "$pr_number" || true
+        wavemill_terminal_mark_field "$issue" "$key" "paneReleaseDeferredReason" "\"retain-manual\""
+        ;;
+    esac
+  fi
+}
+
+wavemill_terminal_pane_policy() {
+  local reason="$1"
+  local outcome
+  outcome="$(wavemill_terminal_workflow_outcome_for_reason "$reason")"
+  case "$outcome" in
+    merged|closed) printf 'release\n' ;;
+    aborted|error) printf 'retain-manual\n' ;;
+    *) printf 'none\n' ;;
+  esac
+}
+
+wavemill_terminal_pane_release_enabled() {
+  local wt_dir="${1:-${WT_DIR:-${WORKTREE_ROOT:+$WORKTREE_ROOT/}}}"
+  if [[ "${WAVEMILL_TERMINAL_PANE_RELEASE:-}" == "0" ]]; then
+    return 1
+  fi
+  local repo_dir="${REPO_DIR:-}"
+  [[ -n "$repo_dir" ]] || return 0
+  local cfg
+  cfg="$(wavemill_load_config "$repo_dir" 2>/dev/null || echo '{}')"
+  local enabled
+  enabled="$(printf '%s' "$cfg" | jq -r '.cleanup.terminalPaneRelease.enabled // true' 2>/dev/null || echo 'true')"
+  [[ "$enabled" == "false" ]] && return 1
+  return 0
+}
+
+wavemill_archive_pane_transcript() {
+  local issue="$1" session="${2:-${SESSION:-}}"
+  local archive_dir="${REPO_DIR:-.}/.wavemill/evals/artifacts/${issue}"
+  local transcript_path="$archive_dir/pane-transcript.txt"
+  local slug="" target="" tmp_path
+
+  [[ -f "$transcript_path" ]] && return 0
+
+  if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+    slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)"
+    target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  [[ -n "$slug" ]] || slug="${SLUG:-}"
+  [[ -n "$target" ]] || target="$session:$issue-$slug"
+
+  if ! command -v tmux >/dev/null 2>&1; then
+    return 0
+  fi
+
+  mkdir -p "$archive_dir" 2>/dev/null || return 1
+  tmp_path="$(mktemp "$archive_dir/.pane-transcript.XXXXXX")" || return 1
+
+  if tmux capture-pane -p -J -S - -t "$target" > "$tmp_path" 2>/dev/null; then
+    mv "$tmp_path" "$transcript_path"
+    return 0
+  fi
+
+  rm -f "$tmp_path" 2>/dev/null || true
+  return 0
+}
+
+wavemill_write_terminal_record() {
+  local session="$1" issue="$2" reason="$3" pr_number="${4:-}"
+  local archive_dir="${REPO_DIR:-.}/.wavemill/evals/artifacts/${issue}"
+  local record_path="$archive_dir/terminal-record.json"
+  local slug="" worktree="" branch="" base_branch="" window_target="" tmp_path
+
+  if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+    slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)"
+    worktree="$(jq -r --arg issue "$issue" '.tasks[$issue].worktree // empty' "$STATE_FILE" 2>/dev/null || true)"
+    branch="$(jq -r --arg issue "$issue" '.tasks[$issue].branch // empty' "$STATE_FILE" 2>/dev/null || true)"
+    window_target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  [[ -n "$slug" ]] || slug="${SLUG:-}"
+  [[ -n "$worktree" ]] || worktree="${WORKTREE_ROOT:+$WORKTREE_ROOT/$slug}"
+  [[ -n "$branch" ]] || branch="task/$slug"
+  base_branch="${BASE_BRANCH:-auto/integration}"
+
+  local transcript_archived="false"
+  [[ -f "$archive_dir/pane-transcript.txt" ]] && transcript_archived="true"
+
+  local git_disposition="pending-cleanup"
+  if [[ -n "$worktree" && -d "$worktree" ]]; then
+    git_disposition="retained"
+  fi
+
+  mkdir -p "$archive_dir" 2>/dev/null || return 1
+  tmp_path="$(mktemp "$archive_dir/.terminal-record.XXXXXX")" || return 1
+
+  if jq -cn \
+    --arg issue "$issue" \
+    --arg slug "$slug" \
+    --arg session "$session" \
+    --arg reason "$reason" \
+    --arg prNumber "$pr_number" \
+    --arg windowTarget "$window_target" \
+    --arg worktree "$worktree" \
+    --arg branch "$branch" \
+    --arg baseBranch "$base_branch" \
+    --arg transcriptArchived "$transcript_archived" \
+    --arg gitDisposition "$git_disposition" \
+    --arg recordedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    '{
+      issue: $issue,
+      slug: $slug,
+      session: $session,
+      reason: $reason,
+      prNumber: (if $prNumber == "" then null else $prNumber end),
+      windowTarget: $windowTarget,
+      worktree: $worktree,
+      branch: $branch,
+      baseBranch: $baseBranch,
+      transcriptArchived: ($transcriptArchived == "true"),
+      gitDisposition: $gitDisposition,
+      recordedAt: $recordedAt,
+      recover: ("retained worktree at " + $worktree + " branch " + $branch)
+    }' > "$tmp_path"; then
+    mv "$tmp_path" "$record_path"
+    return 0
+  fi
+
+  rm -f "$tmp_path" 2>/dev/null || true
+  return 1
+}
+
+wavemill_release_terminal_pane() {
+  local session="$1" issue="$2" reason="$3" pr_number="${4:-}"
+  local slug="" target="" pane_state=""
+
+  if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+    slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)"
+    target="$(jq -r --arg issue "$issue" '.tasks[$issue].windowId // empty' "$STATE_FILE" 2>/dev/null || true)"
+    pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  [[ -n "$slug" ]] || slug="${SLUG:-}"
+  [[ -n "$target" ]] || target="$session:$issue-$slug"
+
+  local wt_dir="${WORKTREE_ROOT:+$WORKTREE_ROOT/$slug}"
+
+  if [[ "$pane_state" == "released" ]]; then
+    if ! command -v tmux >/dev/null 2>&1; then
+      return 0
+    fi
+    if declare -F _tmux_window_target_exists >/dev/null 2>&1; then
+      _tmux_window_target_exists "$session" "$target" "$wt_dir" 2>/dev/null || return 0
+    else
+      return 0
+    fi
+  fi
+
+  if ! wavemill_terminal_pane_release_enabled "$wt_dir"; then
+    wavemill_archive_pane_transcript "$issue" "$session" || true
+    wavemill_write_terminal_record "$session" "$issue" "$reason" "$pr_number" || true
+    return 0
+  fi
+
+  wavemill_archive_pane_transcript "$issue" "$session" || return 1
+  wavemill_write_terminal_record "$session" "$issue" "$reason" "$pr_number" || return 1
+
+  if command -v tmux >/dev/null 2>&1; then
+    if declare -F _tmux_target_join >/dev/null 2>&1; then
+      tmux kill-window -t "$(_tmux_target_join "$session" "$target")" 2>/dev/null || true
+    else
+      tmux kill-window -t "$session:$target" 2>/dev/null || true
+    fi
+    if declare -F _tmux_window_target_exists >/dev/null 2>&1; then
+      if _tmux_window_target_exists "$session" "$target" "$wt_dir" 2>/dev/null; then
+        set_task_lifecycle_disposition "$issue" "" "retained" "tmux-window-close-failed" "wavemill_release_terminal_pane" 2>/dev/null || true
+        return 1
+      fi
+    fi
+  fi
+
+  rm -f "/tmp/wavemill-${session}-${issue}.hook" 2>/dev/null || true
+
+  if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then
+    local retention_reason=""
+    if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
+      retention_reason="pane-released-git-work-retained"
+    fi
+    state_mutate "$STATE_FILE" '
+      .tasks[$issue].paneState = "released"
+      | .tasks[$issue].paneReleasedAt = (now | todateiso8601)
+      | if $retentionReason != "" then
+          .tasks[$issue].lifecycle.resourceDisposition = "retained"
+          | .tasks[$issue].lifecycle.retention = {
+              reason: $retentionReason,
+              policy: "pane-released-git-retained",
+              actor: "terminal-reconciler",
+              timestamp: (now | todateiso8601)
+            }
+        else
+          (if (.tasks[$issue].lifecycle.resourceDisposition // "") == "verification-required" then .
+           else .tasks[$issue].lifecycle.resourceDisposition = "released"
+           end)
+        end
+      | .tasks[$issue].updated = (now | todateiso8601)' \
+      --arg issue "$issue" --arg retentionReason "$retention_reason" >/dev/null || true
+  fi
+
+  declare -F log >/dev/null 2>&1 && log "status" "🧹 $issue → terminal pane released (reason: $reason${pr_number:+, PR #$pr_number})" || true
+  return 0
 }
