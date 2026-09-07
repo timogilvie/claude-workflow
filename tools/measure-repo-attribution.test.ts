@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { after, describe, it } from 'node:test';
 import {
   analyzePullRequest,
@@ -178,5 +178,126 @@ describe('measure-repo-attribution cli arguments', () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Invalid --limit value/);
     assert.equal(readFileSync(reposFile, 'utf-8'), '["owner/repo"]\n');
+  });
+
+  it('loads repos from file and writes a generated JSON report', () => {
+    const tempDir = makeTempDir();
+    const binDir = join(tempDir, 'bin');
+    mkdirSync(binDir);
+
+    const reposFile = join(tempDir, 'repos.txt');
+    const outputFile = join(tempDir, 'nested', 'report.json');
+    const callLog = join(tempDir, 'gh-calls.log');
+    writeFileSync(reposFile, '# sampled repositories\nacme/project\n', 'utf-8');
+
+    const ghScript = join(binDir, 'gh');
+    writeFileSync(
+      ghScript,
+      `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$GH_CALL_LOG"
+
+if [[ "$1" == "auth" && "$2" == "status" ]]; then
+  exit 0
+fi
+
+if [[ "$1" == "api" && "$2" == "repos/acme/project/pulls" ]]; then
+  cat <<'JSON'
+[
+  {
+    "number": 1,
+    "title": "Copilot change",
+    "user": { "login": "github-copilot[bot]", "type": "Bot" },
+    "head": { "ref": "copilot/update-attribution", "sha": "abc123" },
+    "labels": [{ "name": "copilot" }],
+    "merged_at": "2026-01-01T00:00:00Z",
+    "body": ""
+  },
+  {
+    "number": 2,
+    "title": "Manual change",
+    "user": { "login": "octocat", "type": "User" },
+    "head": { "ref": "feature/manual-change", "sha": "def456" },
+    "labels": [],
+    "merged_at": "2026-01-02T00:00:00Z",
+    "body": ""
+  }
+]
+JSON
+  exit 0
+fi
+
+if [[ "$1" == "api" && "$2" == "repos/acme/project/pulls/1/commits" ]]; then
+  cat <<'JSON'
+[
+  { "commit": { "message": "Implement attribution\\n\\nGenerated with GitHub Copilot" } }
+]
+JSON
+  exit 0
+fi
+
+if [[ "$1" == "api" && "$2" == "repos/acme/project/pulls/2/commits" ]]; then
+  cat <<'JSON'
+[
+  { "commit": { "message": "Fix docs" } }
+]
+JSON
+  exit 0
+fi
+
+printf 'unexpected gh invocation: %s\\n' "$*" >&2
+exit 9
+`,
+      'utf-8',
+    );
+    chmodSync(ghScript, 0o755);
+
+    const result = spawnSync(
+      'npx',
+      [
+        'tsx',
+        'tools/measure-repo-attribution.ts',
+        '--repos-file',
+        reposFile,
+        '--limit',
+        '2',
+        '--output',
+        outputFile,
+        '--json',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: 'utf-8',
+        env: {
+          ...process.env,
+          GH_CALL_LOG: callLog,
+          PATH: `${binDir}:${process.env.PATH ?? ''}`,
+        },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
+
+    const stdoutReport = JSON.parse(result.stdout);
+    const fileReport = JSON.parse(readFileSync(outputFile, 'utf-8'));
+    assert.deepEqual(fileReport, stdoutReport);
+
+    assert.equal(stdoutReport.schemaVersion, 2);
+    assert.equal(stdoutReport.sampleLimit, 2);
+    assert.equal(stdoutReport.repositories.length, 1);
+    assert.equal(stdoutReport.repositories[0].repo, 'acme/project');
+    assert.equal(stdoutReport.repositories[0].sampledMergedPrs, 2);
+    assert.equal(stdoutReport.repositories[0].pullRequests.length, 2);
+    assert.equal(stdoutReport.repositories[0].pullRequests[0].agentAuthored.value, 'agent');
+    assert.equal(stdoutReport.repositories[0].pullRequests[0].harness.value, 'github-copilot');
+    assert.equal(stdoutReport.repositories[0].pullRequests[1].agentAuthored.value, 'unknown');
+    assert.equal(stdoutReport.repositories[0].coverage.union, 50);
+
+    const calls = readFileSync(callLog, 'utf-8').trim().split('\n');
+    assert.equal(calls[0], 'auth status');
+    assert(calls.some((call) => call.startsWith('api repos/acme/project/pulls ')));
+    assert(calls.includes('api repos/acme/project/pulls/1/commits --method GET -f per_page=100 -f page=1'));
+    assert(calls.includes('api repos/acme/project/pulls/2/commits --method GET -f per_page=100 -f page=1'));
   });
 });

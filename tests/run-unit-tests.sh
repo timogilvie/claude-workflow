@@ -114,6 +114,7 @@ TESTS=(
   shared/lib/pr-metadata.test.ts
   shared/lib/pr-attribution.test.ts
   shared/lib/attribution-coverage.test.ts
+  tools/measure-repo-attribution.test.ts
   shared/lib/pr-ci-status.test.ts
   shared/lib/ready-engine.test.ts
   shared/lib/ready-stage.test.ts
