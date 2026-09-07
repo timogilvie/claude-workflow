@@ -957,12 +957,12 @@ else
     fail "monitor is missing challenge sibling helpers for closed-PR resolution"
   fi
 
-  if grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' <<< "$CLOSED_BLOCK" \
-    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
-    && grep -Fq 'Auto-cleaning closed challenger pane/worktree' <<< "$CLOSED_BLOCK"; then
-    pass "closed challenger PRs trigger automatic pane/worktree cleanup"
+  if grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'Auto-cleaning closed PR pane/worktree' <<< "$CLOSED_BLOCK" \
+    && ! grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' <<< "$CLOSED_BLOCK"; then
+    pass "closed PRs unconditionally trigger pane/worktree cleanup"
   else
-    fail "closed challenger PRs do not trigger automatic cleanup"
+    fail "closed PRs do not trigger unconditional cleanup"
   fi
 
   if grep -Fq 'local linear_status="Backlog"' <<< "$CLOSED_BLOCK" \
