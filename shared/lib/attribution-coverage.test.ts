@@ -44,6 +44,39 @@ describe('attribution-coverage module', () => {
       assert.equal(config.modelCoverageFloor, 50);
       assert.equal(config.harnessCoverageFloor, 60); // from DEFAULT
     });
+
+    it('rejects unknown default config keys', () => {
+      const configFile = {
+        defaults: { modelCoverageFLoor: 50 },
+      };
+
+      assert.throws(
+        () => loadConfig(configFile, 'owner/repo'),
+        /Unknown attribution config key "modelCoverageFLoor" in attribution config defaults/,
+      );
+    });
+
+    it('rejects unknown top-level config keys', () => {
+      const configFile = {
+        default: { modelCoverageFloor: 50 },
+      };
+
+      assert.throws(
+        () => loadConfig(configFile, 'owner/repo'),
+        /Unknown attribution config key "default" in attribution config/,
+      );
+    });
+
+    it('rejects unknown per-repo config keys', () => {
+      const configFile = {
+        repos: { 'owner/repo': { disabledSignal: ['botAuthor'] } },
+      };
+
+      assert.throws(
+        () => loadConfig(configFile, 'owner/repo'),
+        /Unknown attribution config key "disabledSignal" in attribution config repos\.owner\/repo/,
+      );
+    });
   });
 
   describe('computeRepositoryReport', () => {

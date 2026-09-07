@@ -98,6 +98,14 @@ export interface AttributionConfigFile {
   repos?: Record<string, AttributionRepoConfig>;
 }
 
+const ATTRIBUTION_CONFIG_FILE_KEYS = new Set(['defaults', 'repos']);
+const ATTRIBUTION_REPO_CONFIG_KEYS = new Set([
+  'minEligiblePrs',
+  'modelCoverageFloor',
+  'harnessCoverageFloor',
+  'disabledSignals',
+]);
+
 export const DEFAULT_ATTRIBUTION_CONFIG: Required<AttributionRepoConfig> = {
   minEligiblePrs: 20,
   modelCoverageFloor: 60,
@@ -110,10 +118,45 @@ function pct(count: number, denominator: number): number {
   return Number(((count / denominator) * 100).toFixed(1));
 }
 
+function assertKnownKeys(
+  value: unknown,
+  allowedKeys: Set<string>,
+  context: string,
+): asserts value is Record<string, unknown> {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${context} must be a JSON object`);
+  }
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.has(key)) {
+      throw new Error(`Unknown attribution config key "${key}" in ${context}`);
+    }
+  }
+}
+
+function assertPlainObject(value: unknown, context: string): asserts value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${context} must be a JSON object`);
+  }
+}
+
+function validateConfigFile(configFile: AttributionConfigFile | undefined): void {
+  if (!configFile) return;
+  assertKnownKeys(configFile, ATTRIBUTION_CONFIG_FILE_KEYS, 'attribution config');
+  assertKnownKeys(configFile.defaults, ATTRIBUTION_REPO_CONFIG_KEYS, 'attribution config defaults');
+  if (configFile.repos !== undefined) {
+    assertPlainObject(configFile.repos, 'attribution config repos');
+    for (const [repoSlug, repoConfig] of Object.entries(configFile.repos)) {
+      assertKnownKeys(repoConfig, ATTRIBUTION_REPO_CONFIG_KEYS, `attribution config repos.${repoSlug}`);
+    }
+  }
+}
+
 export function loadConfig(
   configFile: AttributionConfigFile | undefined,
   repoSlug: string,
 ): Required<AttributionRepoConfig> {
+  validateConfigFile(configFile);
   const defaults: Required<AttributionRepoConfig> = { ...DEFAULT_ATTRIBUTION_CONFIG, ...configFile?.defaults };
   const repoOverrides = configFile?.repos?.[repoSlug] || {};
 
