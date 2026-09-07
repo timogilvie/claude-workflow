@@ -717,7 +717,6 @@ safe_remove_task_worktree_and_branch() {
 
   if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
     if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
-      classification="retain_dirty"
       if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "worktree_status_unreadable" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
@@ -726,7 +725,6 @@ safe_remove_task_worktree_and_branch() {
       return 10
     fi
     if [[ -n "$dirty_status" ]]; then
-      classification="retain_dirty"
       if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "uncommitted_changes" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
@@ -735,7 +733,6 @@ safe_remove_task_worktree_and_branch() {
       return 10
     fi
   fi
-  classification=""
 
   if [[ "$branch_is_deletable" == "true" ]] \
     && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
