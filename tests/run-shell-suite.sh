@@ -46,6 +46,7 @@ TESTS=(
   native-coding-commit.test.sh
   hook-write-context-guard.test.sh
   claude-tmux-server-guard.test.sh
+  agent-tmux-runtime-guard.test.sh
   expansion-handshake.test.sh
   config-version-prompt.test.sh
   monitor-ready-transition.test.sh

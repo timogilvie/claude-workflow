@@ -379,7 +379,7 @@ check_true "codex autonomous launcher reports completion hook" grep -q "wavemill
 check_true "codex autonomous launcher reports error hook" grep -q "wavemill_hook_write 'error' 'process_exit'" "$AUTONOMOUS_LAUNCHER"
 check_true "codex autonomous launcher logs single exit code to status log" grep -q 'codex exit code codex=' "$AUTONOMOUS_LAUNCHER"
 check_false "codex autonomous launcher avoids pipeline status" grep -q 'PIPESTATUS' "$AUTONOMOUS_LAUNCHER"
-check_true "codex autonomous dispatches launcher path via tmux -l" grep -q 'send-keys .* -l -- /tmp/sess-HOK-10-autonomous-launcher\.sh' "$TMUX_LOG"
+check_true "codex autonomous dispatches guarded launcher path via tmux -l" grep -q 'send-keys .* -l -- .* /tmp/sess-HOK-10-autonomous-launcher\.sh' "$TMUX_LOG"
 check_true "codex autonomous dispatches enter key after launcher" grep -q 'send-keys .* C-m' "$TMUX_LOG"
 
 echo ""

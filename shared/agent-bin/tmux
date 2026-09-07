@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -u
+
+# Execution-time containment for tmux commands run by Wavemill agents. Claude's
+# PreToolUse hook cannot see commands hidden inside scripts, so agent PATH puts
+# this executable in front of the real tmux binary.
+
+real_tmux="${WAVEMILL_REAL_TMUX:-}"
+if [[ -z "$real_tmux" || ! -x "$real_tmux" ]]; then
+  echo "wavemill: tmux guard is missing WAVEMILL_REAL_TMUX" >&2
+  exit 127
+fi
+
+# Outside a Wavemill worker, preserve ordinary tmux behavior. The issue may be
+# empty for ad-hoc Wavemill launches; the session alone activates containment.
+if [[ -z "${WAVEMILL_SESSION:-}" ]]; then
+  exec "$real_tmux" "$@"
+fi
+
+canonical_socket_path() {
+  local path="$1" dir base canonical_dir
+  case "$path" in
+    /*) ;;
+    *) path="$PWD/$path" ;;
+  esac
+  dir="${path%/*}"
+  base="${path##*/}"
+  canonical_dir="$(cd "$dir" 2>/dev/null && pwd -P)" || canonical_dir="$dir"
+  printf '%s/%s\n' "${canonical_dir%/}" "$base"
+}
+
+is_kill_server_command() {
+  local command_name="$1"
+  [[ "$command_name" == "kill-server" ]] && return 0
+  # tmux accepts unambiguous command prefixes; kill-s is the shortest useful
+  # spelling that cannot name kill-pane/session/window.
+  [[ ${#command_name} -ge 6 && "kill-server" == "$command_name"* ]]
+}
+
+socket_arg=""
+name_arg=""
+kill_server=0
+command_position=1
+seen_command=0
+args=("$@")
+i=0
+while (( i < ${#args[@]} )); do
+  arg="${args[$i]}"
+
+  if (( command_position == 1 )); then
+    if (( seen_command == 0 )); then
+      case "$arg" in
+        -S)
+          ((i += 1))
+          socket_arg="${args[$i]:-}"
+          ((i += 1))
+          continue
+          ;;
+        -S*)
+          socket_arg="${arg#-S}"
+          ((i += 1))
+          continue
+          ;;
+        -L)
+          ((i += 1))
+          name_arg="${args[$i]:-}"
+          ((i += 1))
+          continue
+          ;;
+        -L*)
+          name_arg="${arg#-L}"
+          ((i += 1))
+          continue
+          ;;
+        -c|-f|-T)
+          ((i += 2))
+          continue
+          ;;
+        -c*|-f*|-T*)
+          ((i += 1))
+          continue
+          ;;
+        --)
+          ((i += 1))
+          continue
+          ;;
+        -*)
+          ((i += 1))
+          continue
+          ;;
+      esac
+    fi
+
+    if [[ "$arg" == ";" || "$arg" == '\;' ]]; then
+      ((i += 1))
+      continue
+    fi
+    is_kill_server_command "$arg" && kill_server=1
+    command_position=0
+    seen_command=1
+  elif [[ "$arg" == ";" || "$arg" == '\;' ]]; then
+    command_position=1
+  fi
+  ((i += 1))
+done
+
+if (( kill_server == 0 )); then
+  exec "$real_tmux" "$@"
+fi
+
+reason=""
+if [[ -z "$socket_arg" && -z "$name_arg" ]]; then
+  reason="blocked implicit tmux kill-server; use tmux -S <private-socket>"
+else
+  control_socket="${WAVEMILL_CONTROL_TMUX_SOCKET:-}"
+  if [[ -z "$control_socket" ]]; then
+    control_socket="${TMUX:-}"
+    control_socket="${control_socket%%,*}"
+  fi
+  control_canonical=""
+  [[ -n "$control_socket" ]] && control_canonical="$(canonical_socket_path "$control_socket")"
+
+  requested_socket=""
+  if [[ -n "$socket_arg" ]]; then
+    requested_socket="$(canonical_socket_path "$socket_arg")"
+  elif [[ -n "$name_arg" ]]; then
+    socket_root="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)"
+    requested_socket="$(canonical_socket_path "$socket_root/$name_arg")"
+  fi
+
+  if [[ -n "$control_canonical" && "$requested_socket" == "$control_canonical" ]]; then
+    reason="blocked tmux kill-server targeting the Wavemill controller socket"
+  fi
+fi
+
+if [[ -z "$reason" ]]; then
+  exec "$real_tmux" "$@"
+fi
+
+guard_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+hook_protocol="${guard_dir%/agent-bin}/hooks/wavemill-hook-protocol.sh"
+if [[ -f "$hook_protocol" ]]; then
+  # shellcheck source=/dev/null
+  source "$hook_protocol"
+  wavemill_hook_write "policy-denied" "tmux_guard" "$reason" "${WAVEMILL_AGENT:-agent}" || true
+fi
+
+echo "wavemill: $reason" >&2
+exit 126
