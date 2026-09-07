@@ -279,8 +279,7 @@ describe('attribution-coverage module', () => {
       // Both repos eligible (20 and 20 PRs)
       assert.equal(aggregate.macro.agentAuthored.total, 2);
       // repo1: 100% coverage, repo2: 50% coverage -> mean = 75%
-      assert.equal(aggregate.macro.agentAuthored.attributed, 2);
-      assert.equal(aggregate.macro.agentAuthored.coverage, 100);
+      assert.equal(aggregate.macro.agentAuthored.coverage, 75);
     });
 
     it('feasibility gate: counts eligible repos clearing >=60% agent-or-harness', () => {

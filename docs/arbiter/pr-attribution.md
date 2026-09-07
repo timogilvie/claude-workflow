@@ -173,7 +173,12 @@ Each gate includes a reason string (e.g., `floor_met`, `below_min_prs_20`, `floo
   ],
   "aggregate": {
     "micro": { "agentAuthored": {...}, "harness": {...}, "model": {...}, "agentOrHarness": {...} },
-    "macro": { "agentAuthored": {...}, "harness": {...}, "model": {...}, "agentOrHarness": {...} },
+    "macro": {
+      "agentAuthored": { "total": 11, "coverage": 74.5 },
+      "harness": { "total": 11, "coverage": 61.8 },
+      "model": { "total": 11, "coverage": 18.2 },
+      "agentOrHarness": { "total": 11, "coverage": 78.2 }
+    },
     "feasibility": {
       "eligibleRepos": 11,
       "totalRepos": 15,

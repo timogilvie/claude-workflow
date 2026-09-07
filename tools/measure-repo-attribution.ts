@@ -345,10 +345,10 @@ function renderHuman(report: MultiRepoAttributionReport): void {
   console.log(`  agentOrHarness: ${report.aggregate.micro.agentOrHarness.attributed}/${report.aggregate.micro.agentOrHarness.total} = ${report.aggregate.micro.agentOrHarness.coverage}%`);
 
   console.log(`Macro (mean of eligible repos):`);
-  console.log(`  agentAuthored: ${report.aggregate.macro.agentAuthored.attributed}/${report.aggregate.macro.agentAuthored.total} = ${report.aggregate.macro.agentAuthored.coverage}%`);
-  console.log(`  harness: ${report.aggregate.macro.harness.attributed}/${report.aggregate.macro.harness.total} = ${report.aggregate.macro.harness.coverage}%`);
-  console.log(`  model: ${report.aggregate.macro.model.attributed}/${report.aggregate.macro.model.total} = ${report.aggregate.macro.model.coverage}%`);
-  console.log(`  agentOrHarness: ${report.aggregate.macro.agentOrHarness.attributed}/${report.aggregate.macro.agentOrHarness.total} = ${report.aggregate.macro.agentOrHarness.coverage}%`);
+  console.log(`  agentAuthored: ${report.aggregate.macro.agentAuthored.coverage}% across ${report.aggregate.macro.agentAuthored.total} eligible repos`);
+  console.log(`  harness: ${report.aggregate.macro.harness.coverage}% across ${report.aggregate.macro.harness.total} eligible repos`);
+  console.log(`  model: ${report.aggregate.macro.model.coverage}% across ${report.aggregate.macro.model.total} eligible repos`);
+  console.log(`  agentOrHarness: ${report.aggregate.macro.agentOrHarness.coverage}% across ${report.aggregate.macro.agentOrHarness.total} eligible repos`);
 
   console.log(`Feasibility gate (eligible repos with agentOrHarness >= 60%):`);
   console.log(`  ${report.aggregate.feasibility.agentOrHarnessGate.passed}/${report.aggregate.feasibility.agentOrHarnessGate.total} = ${report.aggregate.feasibility.agentOrHarnessGate.percentage}%`);

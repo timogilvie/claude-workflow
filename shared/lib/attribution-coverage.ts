@@ -8,6 +8,11 @@ export interface DimensionCoverage {
   coverage: number; // percentage (0-100)
 }
 
+export interface MacroDimensionCoverage {
+  total: number; // eligible repos included in the mean
+  coverage: number; // unweighted mean percentage across eligible repos
+}
+
 export interface SectionGate {
   render: boolean;
   reason: string;
@@ -67,10 +72,10 @@ export interface MultiRepoAttributionReport {
       agentOrHarness: DimensionCoverage;
     };
     macro: {
-      agentAuthored: DimensionCoverage;
-      harness: DimensionCoverage;
-      model: DimensionCoverage;
-      agentOrHarness: DimensionCoverage;
+      agentAuthored: MacroDimensionCoverage;
+      harness: MacroDimensionCoverage;
+      model: MacroDimensionCoverage;
+      agentOrHarness: MacroDimensionCoverage;
     };
     feasibility: {
       eligibleRepos: number;
@@ -160,41 +165,6 @@ function countSignals(prs: PrAttribution[]): Record<AttributionSignal | 'firstPa
   }
 
   return counts;
-}
-
-function computeCoveragePercentages(
-  signalCounts: Record<AttributionSignal | 'firstPartyRoute', number>,
-  total: number,
-): Record<AttributionSignal | 'firstPartyRoute' | 'union' | 'unattributed', number> {
-  const result: Record<AttributionSignal | 'firstPartyRoute' | 'union' | 'unattributed', number> = {
-    firstPartyRoute: pct(signalCounts.firstPartyRoute, total),
-    botAuthor: pct(signalCounts.botAuthor, total),
-    coAuthoredBy: pct(signalCounts.coAuthoredBy, total),
-    branchPrefix: pct(signalCounts.branchPrefix, total),
-    label: pct(signalCounts.label, total),
-    commitSignature: pct(signalCounts.commitSignature, total),
-  };
-
-  const unionCount = Array.from(Object.values(signalCounts)).some((v) => v > 0)
-    ? Object.values(signalCounts).some((v) => v > 0)
-      ? 1
-      : 0
-    : 0;
-  const attributedCount = Array.from(
-    new Set(
-      ([] as PrAttribution[])
-        .flatMap((pr) => pr.signals)
-        .map((s) => s),
-    ),
-  ).length > 0
-    ? 1
-    : 0;
-
-  // Actually compute union count from PRs
-  result.union = 0; // will be overridden in repository computation
-  result.unattributed = 0; // will be overridden in repository computation
-
-  return result;
 }
 
 function checkSectionGates(
@@ -304,51 +274,35 @@ export function computeAggregates(
   };
 
   // Macro: unweighted mean of eligible repos
-  let macroAgentAuthored = { total: 0, attributed: 0 };
-  let macroHarness = { total: 0, attributed: 0 };
-  let macroModel = { total: 0, attributed: 0 };
-  let macroAgentOrHarness = { total: 0, attributed: 0 };
+  let macroAgentAuthoredCoverage = 0;
+  let macroHarnessCoverage = 0;
+  let macroModelCoverage = 0;
+  let macroAgentOrHarnessCoverage = 0;
 
   for (const repo of eligibleRepos) {
-    macroAgentAuthored.total += 1;
-    macroAgentAuthored.attributed += repo.dimensionCoverage.agentAuthored.coverage > 0 ? 1 : 0;
-
-    macroHarness.total += 1;
-    macroHarness.attributed += repo.dimensionCoverage.harness.coverage > 0 ? 1 : 0;
-
-    macroModel.total += 1;
-    macroModel.attributed += repo.dimensionCoverage.model.coverage > 0 ? 1 : 0;
-
-    macroAgentOrHarness.total += 1;
-    macroAgentOrHarness.attributed += repo.dimensionCoverage.agentOrHarness.coverage > 0 ? 1 : 0;
+    macroAgentAuthoredCoverage += repo.dimensionCoverage.agentAuthored.coverage;
+    macroHarnessCoverage += repo.dimensionCoverage.harness.coverage;
+    macroModelCoverage += repo.dimensionCoverage.model.coverage;
+    macroAgentOrHarnessCoverage += repo.dimensionCoverage.agentOrHarness.coverage;
   }
 
+  const eligibleRepoCount = eligibleRepos.length;
   const macro = {
     agentAuthored: {
-      total: macroAgentAuthored.total,
-      attributed: macroAgentAuthored.total > 0 ? macroAgentAuthored.attributed : 0,
-      coverage:
-        macroAgentAuthored.total > 0
-          ? pct(macroAgentAuthored.attributed, macroAgentAuthored.total)
-          : 0,
+      total: eligibleRepoCount,
+      coverage: eligibleRepoCount > 0 ? Number((macroAgentAuthoredCoverage / eligibleRepoCount).toFixed(1)) : 0,
     },
     harness: {
-      total: macroHarness.total,
-      attributed: macroHarness.total > 0 ? macroHarness.attributed : 0,
-      coverage: macroHarness.total > 0 ? pct(macroHarness.attributed, macroHarness.total) : 0,
+      total: eligibleRepoCount,
+      coverage: eligibleRepoCount > 0 ? Number((macroHarnessCoverage / eligibleRepoCount).toFixed(1)) : 0,
     },
     model: {
-      total: macroModel.total,
-      attributed: macroModel.total > 0 ? macroModel.attributed : 0,
-      coverage: macroModel.total > 0 ? pct(macroModel.attributed, macroModel.total) : 0,
+      total: eligibleRepoCount,
+      coverage: eligibleRepoCount > 0 ? Number((macroModelCoverage / eligibleRepoCount).toFixed(1)) : 0,
     },
     agentOrHarness: {
-      total: macroAgentOrHarness.total,
-      attributed: macroAgentOrHarness.total > 0 ? macroAgentOrHarness.attributed : 0,
-      coverage:
-        macroAgentOrHarness.total > 0
-          ? pct(macroAgentOrHarness.attributed, macroAgentOrHarness.total)
-          : 0,
+      total: eligibleRepoCount,
+      coverage: eligibleRepoCount > 0 ? Number((macroAgentOrHarnessCoverage / eligibleRepoCount).toFixed(1)) : 0,
     },
   };
 
