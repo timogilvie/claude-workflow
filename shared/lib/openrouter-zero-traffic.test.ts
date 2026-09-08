@@ -68,6 +68,7 @@ function writeOpenRouterCert(repoDir: string): void {
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     certifiedAt: '2026-07-10T00:00:00.000Z',
+    expiresAt: '2099-12-31T23:59:59.999Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));
 }

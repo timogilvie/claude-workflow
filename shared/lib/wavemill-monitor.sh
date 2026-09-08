@@ -5353,7 +5353,7 @@ phase_launch_gate() {
       fi
       set_task_phase "$issue" "aborted"
       if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-        wavemill_reconcile_terminal "$SESSION" "$issue" "phase_launch_exhausted" || true
+        wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
       fi
       set_window_attention_state "$win" "needs-user"
       return 1
@@ -6091,6 +6091,19 @@ _restore_inflight_task_window_if_missing() {
   if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
     log "debug" "$issue → queue-owned released task has no pane to restore"
     return 0
+  fi
+
+  if [[ -f "${STATE_FILE:-}" ]]; then
+    local persisted_outcome rehydration_eligibility rehydration_reason
+    persisted_outcome="$(jq -r --arg issue "$issue" "$(task_lifecycle_jq_filter '(.tasks[$issue] // {}) | wm_workflow_outcome')" "$STATE_FILE" 2>/dev/null || echo active)"
+    rehydration_eligibility="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.eligibility // empty' "$STATE_FILE" 2>/dev/null || true)"
+    rehydration_reason="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.reason // empty' "$STATE_FILE" 2>/dev/null || true)"
+    if [[ "$persisted_outcome" != "active" ]] \
+      || [[ "$rehydration_eligibility" == terminal* || "$rehydration_eligibility" == "verification-required" ]]; then
+      log "debug" "$issue → restore skipped: persisted task is not rehydratable (${rehydration_eligibility:-outcome:$persisted_outcome}${rehydration_reason:+:$rehydration_reason})"
+      _RESTORE_STATE="none"
+      return 0
+    fi
   fi
 
   if [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]]; then
@@ -9010,43 +9023,6 @@ closed_pr_resource_policy() {
     return 0
   fi
   printf 'full-cleanup\n'
-}
-
-is_challenge_task() {
-  local issue="$1"
-  [[ "$(get_task_meta "$issue" "challenge")" == "true" ]]
-}
-
-get_challenge_sibling_pr() {
-  local issue="$1"
-  local pair_id role sibling_key
-
-  pair_id=$(get_task_meta "$issue" "challengePairId")
-  role=$(get_task_meta "$issue" "challengeRole")
-
-  [[ -z "$pair_id" || -z "$role" ]] && return 1
-
-  if [[ "$role" == "primary" ]]; then
-    sibling_key="${pair_id}_c"
-  elif [[ "$role" == "challenger" ]]; then
-    sibling_key="$pair_id"
-  else
-    return 1
-  fi
-
-  read_state_value "" --arg issue "$sibling_key" '.tasks[$issue].pr // empty'
-}
-
-# Check if a challenge task's sibling PR was merged.
-# Returns 0 if merged, 1 if not merged or unavailable.
-check_challenge_sibling_merged() {
-  local issue="$1"
-  local sibling_pr
-
-  sibling_pr=$(get_challenge_sibling_pr "$issue")
-  [[ -z "$sibling_pr" ]] && return 1
-
-  validate_pr_merge "$sibling_pr"
 }
 
 mark_challenge_compared() {
