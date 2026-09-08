@@ -1377,6 +1377,59 @@ test('legacy HOK-2595/HOK-2913 terminal residue reports verification-required li
   }
 });
 
+test('cleanup episode finding suppresses duplicate terminal residue findings', () => {
+  const fixture = createResidueGitFixture({ commits: 2, slug: 'cleanup-retained' });
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2955',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'done',
+      status: 'merged',
+      worktree: fixture.repoDir,
+      updated: agoIso(30),
+      lifecycle: {
+        schemaVersion: 1,
+        workflowOutcome: 'merged',
+        resourceDisposition: 'retained',
+        retention: {
+          reason: 'local-work-preserved',
+        },
+        cleanupEpisode: {
+          schemaVersion: 1,
+          episodeId: 'HOK-2955:cleanup:abc123def456',
+          fingerprint: 'abc123def456',
+          fingerprintInputs: {
+            branch: fixture.branch,
+            worktree: fixture.repoDir,
+          },
+          disposition: 'retained',
+          failureClass: 'expected-preservation',
+          firstAttemptAt: '2026-09-08T12:00:00Z',
+          lastAttemptAt: '2026-09-08T12:00:00Z',
+          attemptCount: 1,
+          nextRetryAt: null,
+          requiredOperatorAction: `Push ${fixture.branch} to origin or explicitly abandon it.`,
+          lastOutcome: 'local-work-preserved',
+          updatedAt: '2026-09-08T12:00:00Z',
+        },
+      },
+    }]), defaultObserverOptions());
+
+    const cleanup = findings.find((finding) => finding.id === 'cleanup-episode-wavemill-HOK-2955-abc123def456');
+    assert.ok(cleanup);
+    assert.equal(cleanup.category, 'operational');
+    assert.match(cleanup.title, /cleanup retained/);
+    assert.ok(cleanup.evidence.includes('disposition=retained'));
+    assert.ok(cleanup.evidence.includes('attempts=1'));
+    assert.match(cleanup.recommendation, /Push task\/cleanup-retained to origin/);
+    assert.equal(findings.some((finding) => finding.id.startsWith('terminal-task-parked-')), false);
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('aged terminal task with unpushed commits escalates to urgent work loss and fires arm-died-with-unpushed-work', () => {
   const fixture = createResidueGitFixture({ commits: 2, slug: 'lossy-terminal' });
   try {

@@ -13,6 +13,50 @@ export const RESOURCE_DISPOSITIONS = [
 export type WorkflowOutcome = typeof WORKFLOW_OUTCOMES[number];
 export type ResourceDisposition = typeof RESOURCE_DISPOSITIONS[number];
 
+export const CLEANUP_DISPOSITIONS = ['pending', 'reaping', 'reaped', 'retained', 'transient', 'needs-user'] as const;
+export const CLEANUP_FAILURE_CLASSES = ['expected-preservation', 'transient', 'operational', 'none'] as const;
+
+export type CleanupDisposition = typeof CLEANUP_DISPOSITIONS[number];
+export type CleanupFailureClass = typeof CLEANUP_FAILURE_CLASSES[number];
+
+export interface CleanupFingerprintInputs {
+  issue?: string;
+  branch?: string;
+  worktree?: string;
+  worktreeExists?: boolean;
+  localBranchExists?: boolean;
+  localHeadSha?: string;
+  baseBranch?: string;
+  baseSha?: string;
+  remoteTrackingHeadSha?: string;
+  dirtyStatusHash?: string;
+  dirtyStatus?: string;
+  prNumber?: string;
+  prState?: string;
+  prHeadRefOid?: string;
+  prBaseBranch?: string;
+  verificationReason?: string;
+  [key: string]: unknown;
+}
+
+export interface CleanupEpisode {
+  schemaVersion: 1;
+  episodeId: string;
+  fingerprint: string;
+  fingerprintInputs?: CleanupFingerprintInputs;
+  disposition: CleanupDisposition;
+  failureClass: CleanupFailureClass;
+  firstAttemptAt?: string;
+  lastAttemptAt?: string;
+  attemptCount: number;
+  maxAttempts?: number;
+  nextRetryAt?: string | null;
+  requiredOperatorAction?: string;
+  lastOutcome?: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
 export interface LifecycleRetention {
   reason: string;
   policy?: string;
@@ -59,6 +103,7 @@ export interface TaskLifecycleState {
   retention?: LifecycleRetention;
   launchContract?: LaunchContract;
   deliveryEvidence?: DeliveryEvidence;
+  cleanupEpisode?: CleanupEpisode;
   normalizedFromLegacy?: boolean;
   verificationRequiredReason?: string;
   [key: string]: unknown;

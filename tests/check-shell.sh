@@ -966,8 +966,9 @@ else
   fi
 
   if grep -Fq 'closed_pr_resource_policy "$ISSUE"' <<< "$CLOSED_BLOCK" \
-    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'wavemill_release_terminal_pane "$SESSION" "$ISSUE" "$SLUG" "pr_closed_unmerged" "$PR"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"' <<< "$HEREDOC_CONTENT" \
     && ! grep -Fq 'should_cleanup_closed_pr' <<< "$CLOSED_BLOCK"; then
     pass "closed PRs route every role through the shared pane-resource policy (HOK-2952)"
   else

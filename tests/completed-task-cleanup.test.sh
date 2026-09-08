@@ -576,7 +576,7 @@ check_contains "preserved local work logs retention" "$output" "cleanup preserve
 check_not_contains "preserved local work skips remote cleanup" "$output" "push origin --delete"
 check_contains "preserved local work still released the pane" "$output" "order=archive;tmux-kill;"
 check_contains "preserved local work keeps terminal record for recovery" "$output" "record=present"
-check_contains "preserved local work records verification-required disposition" "$output" "verification-required:retain_unpublished;"
+check_contains "preserved local work records retained disposition" "$output" "retained:retain_unpublished;"
 
 output="$(run_cleanup_case closed-unmerged-retained)"
 check_contains "closed unmerged work returns non-zero" "$output" "rc=1"

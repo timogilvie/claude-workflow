@@ -388,11 +388,379 @@ cleanup_remote_task_branch() {
   fi
 }
 
+cleanup_episode_config_value() {
+  local jq_expr="$1" fallback="$2"
+  if [[ -n "${REPO_DIR:-}" ]] && declare -F wavemill_load_config >/dev/null 2>&1; then
+    wavemill_load_config "$REPO_DIR" | jq -r "$jq_expr // \"$fallback\"" 2>/dev/null || printf '%s\n' "$fallback"
+  else
+    printf '%s\n' "$fallback"
+  fi
+}
+
+cleanup_episode_enabled() {
+  local enabled
+  if [[ -n "${WAVEMILL_CLEANUP_EPISODES_ENABLED+x}" ]]; then
+    case "$WAVEMILL_CLEANUP_EPISODES_ENABLED" in
+      0|false|False|FALSE|no|NO) return 1 ;;
+      *) return 0 ;;
+    esac
+  fi
+  enabled="$(cleanup_episode_config_value '.cleanup.episodes.enabled' 'true')"
+  [[ "$enabled" != "false" && "$enabled" != "0" ]]
+}
+
+cleanup_episode_max_attempts() {
+  local value="${WAVEMILL_CLEANUP_EPISODE_MAX_ATTEMPTS:-}"
+  [[ -z "$value" ]] && value="$(cleanup_episode_config_value '.cleanup.episodes.maxAttempts' '5')"
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || value=5
+  printf '%s\n' "$value"
+}
+
+cleanup_episode_backoff_base_seconds() {
+  local value="${WAVEMILL_CLEANUP_EPISODE_BACKOFF_BASE_SECONDS:-}"
+  [[ -z "$value" ]] && value="$(cleanup_episode_config_value '.cleanup.episodes.backoffBaseSeconds' '30')"
+  [[ "$value" =~ ^[0-9]+$ ]] || value=30
+  printf '%s\n' "$value"
+}
+
+cleanup_episode_backoff_cap_seconds() {
+  local value="${WAVEMILL_CLEANUP_EPISODE_BACKOFF_CAP_SECONDS:-}"
+  [[ -z "$value" ]] && value="$(cleanup_episode_config_value '.cleanup.episodes.backoffCapSeconds' '900')"
+  [[ "$value" =~ ^[0-9]+$ && "$value" -gt 0 ]] || value=900
+  printf '%s\n' "$value"
+}
+
+cleanup_episode_jitter_ratio() {
+  local value="${WAVEMILL_CLEANUP_EPISODE_JITTER_RATIO:-}"
+  [[ -z "$value" ]] && value="$(cleanup_episode_config_value '.cleanup.episodes.jitterRatio' '0.2')"
+  case "$value" in
+    ''|*[!0-9.]*|*.*.*) printf '0.2\n' ;;
+    *) printf '%s\n' "$value" ;;
+  esac
+}
+
+cleanup_episode_now_epoch() {
+  if [[ -n "${WAVEMILL_TEST_NOW_EPOCH:-}" && "$WAVEMILL_TEST_NOW_EPOCH" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$WAVEMILL_TEST_NOW_EPOCH"
+  else
+    date +%s
+  fi
+}
+
+cleanup_episode_iso_from_epoch() {
+  local epoch="$1"
+  jq -nr --argjson t "$epoch" '$t | todateiso8601'
+}
+
+cleanup_episode_now_iso() {
+  cleanup_episode_iso_from_epoch "$(cleanup_episode_now_epoch)"
+}
+
+cleanup_episode_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  else
+    shasum -a 256 | awk '{print $1}'
+  fi
+}
+
+cleanup_episode_fingerprint() {
+  jq -S -c . 2>/dev/null | cleanup_episode_sha256
+}
+
+cleanup_episode_collect_inputs() {
+  local issue="$1" slug="$2" wt_dir="$3" task_branch="$4" base_branch="${5:-${BASE_BRANCH:-main}}" pr="${6:-}" verification_reason="${7:-}"
+  local dirty_status="" dirty_status_hash="" worktree_exists="false" local_branch_exists="false"
+  local local_head_sha="" base_sha="" remote_tracking_head_sha="" pr_state_value="" pr_head_ref_oid="" pr_base_branch=""
+
+  if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
+    worktree_exists="true"
+    dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null || printf '__wavemill_status_failed__')"
+    dirty_status_hash="$(printf '%s' "$dirty_status" | cleanup_episode_sha256)"
+  fi
+  if [[ -n "${REPO_DIR:-}" && -n "$task_branch" ]] && git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$task_branch" 2>/dev/null; then
+    local_branch_exists="true"
+    local_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "${task_branch}^{commit}" 2>/dev/null || true)"
+  fi
+  if [[ -n "${REPO_DIR:-}" && -n "$base_branch" ]]; then
+    base_sha="$(git -C "$REPO_DIR" rev-parse --verify "refs/remotes/origin/${base_branch}^{commit}" 2>/dev/null || true)"
+  fi
+  if [[ -n "${REPO_DIR:-}" && -n "$task_branch" ]]; then
+    remote_tracking_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "refs/remotes/origin/${task_branch}^{commit}" 2>/dev/null || true)"
+  fi
+  if [[ -n "$pr" && -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then
+    pr_state_value="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.deliveryEvidence.prState // empty' "$STATE_FILE" 2>/dev/null || true)"
+    pr_head_ref_oid="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.deliveryEvidence.prHeadSha // .tasks[$issue].lifecycle.deliveryEvidence.prHeadRefOid // empty' "$STATE_FILE" 2>/dev/null || true)"
+    pr_base_branch="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.deliveryEvidence.prBaseBranch // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+
+  jq -cn \
+    --arg issue "$issue" \
+    --arg branch "$task_branch" \
+    --arg worktree "$wt_dir" \
+    --arg localHeadSha "$local_head_sha" \
+    --arg baseBranch "$base_branch" \
+    --arg baseSha "$base_sha" \
+    --arg remoteTrackingHeadSha "$remote_tracking_head_sha" \
+    --arg dirtyStatusHash "$dirty_status_hash" \
+    --arg dirtyStatus "$dirty_status" \
+    --arg prNumber "$pr" \
+    --arg prState "$pr_state_value" \
+    --arg prHeadRefOid "$pr_head_ref_oid" \
+    --arg prBaseBranch "$pr_base_branch" \
+    --arg verificationReason "$verification_reason" \
+    --argjson worktreeExists "$([[ "$worktree_exists" == "true" ]] && printf true || printf false)" \
+    --argjson localBranchExists "$([[ "$local_branch_exists" == "true" ]] && printf true || printf false)" \
+    '{
+      issue: $issue,
+      branch: $branch,
+      worktree: $worktree,
+      worktreeExists: $worktreeExists,
+      localBranchExists: $localBranchExists,
+      localHeadSha: $localHeadSha,
+      baseBranch: $baseBranch,
+      baseSha: $baseSha,
+      remoteTrackingHeadSha: $remoteTrackingHeadSha,
+      dirtyStatusHash: $dirtyStatusHash,
+      dirtyStatus: $dirtyStatus,
+      prNumber: $prNumber,
+      prState: $prState,
+      prHeadRefOid: $prHeadRefOid,
+      prBaseBranch: $prBaseBranch,
+      verificationReason: $verificationReason
+    }'
+}
+
+cleanup_episode_candidate_json() {
+  local issue="$1" slug="$2" reason="${3:-}" pr="${4:-}"
+  local wt_dir task_branch base_branch inputs fingerprint
+  if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    wt_dir="$(jq -r --arg issue "$issue" '.tasks[$issue].worktree // empty' "$STATE_FILE" 2>/dev/null || true)"
+    task_branch="$(jq -r --arg issue "$issue" '.tasks[$issue].branch // empty' "$STATE_FILE" 2>/dev/null || true)"
+  else
+    wt_dir=""
+    task_branch=""
+  fi
+  [[ -z "$wt_dir" ]] && wt_dir="${WORKTREE_ROOT}/${slug}"
+  [[ -z "$task_branch" ]] && task_branch="task/${slug}"
+  base_branch="${BASE_BRANCH:-main}"
+  inputs="$(cleanup_episode_collect_inputs "$issue" "$slug" "$wt_dir" "$task_branch" "$base_branch" "$pr" "$reason")"
+  fingerprint="$(printf '%s' "$inputs" | cleanup_episode_fingerprint)"
+  jq -cn --arg fingerprint "$fingerprint" --argjson inputs "$inputs" '{fingerprint:$fingerprint, fingerprintInputs:$inputs}'
+}
+
+cleanup_episode_get() {
+  local issue="$1"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  jq -c --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode // empty' "$STATE_FILE" 2>/dev/null
+}
+
+cleanup_episode_ack_present() {
+  local issue="$1"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  jq -e --arg issue "$issue" '
+    (.tasks[$issue].lifecycle.cleanupEpisode.operatorAcknowledgedAt // "") != ""
+    or (.tasks[$issue].cleanupRecoveryAcknowledged == true)
+  ' "$STATE_FILE" >/dev/null 2>&1
+}
+
+cleanup_episode_clear() {
+  local issue="$1"
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  state_mutate "$STATE_FILE" 'del(.tasks[$issue].lifecycle.cleanupEpisode)' --arg issue "$issue"
+}
+
+cleanup_episode_required_action() {
+  local failure_class="$1" outcome="$2" branch="$3"
+  case "$failure_class:$outcome" in
+    expected-preservation:dirty_worktree|expected-preservation:local-work-preserved)
+      printf 'Commit, stash, or discard the retained worktree changes, then acknowledge cleanup recovery.'
+      ;;
+    expected-preservation:*)
+      printf 'Push %s to origin or explicitly abandon it, then acknowledge cleanup recovery.' "$branch"
+      ;;
+    transient:*)
+      printf 'Restore remote/GitHub connectivity or credentials; cleanup will retry with backoff.'
+      ;;
+    operational:*)
+      printf 'Inspect local worktree, branch, and tmux cleanup failure, then acknowledge cleanup recovery.'
+      ;;
+    *)
+      printf 'Inspect cleanup evidence and acknowledge recovery when resolved.'
+      ;;
+  esac
+}
+
+cleanup_episode_backoff_delay_seconds() {
+  local attempt="$1" fingerprint="${2:-}"
+  local base cap ratio raw delay jitter_range hash_digit jitter_offset
+  base="$(cleanup_episode_backoff_base_seconds)"
+  cap="$(cleanup_episode_backoff_cap_seconds)"
+  [[ "$attempt" =~ ^[0-9]+$ && "$attempt" -gt 0 ]] || attempt=1
+  raw="$base"
+  local i=1
+  while (( i < attempt )); do
+    raw=$((raw * 2))
+    (( raw >= cap )) && { raw="$cap"; break; }
+    i=$((i + 1))
+  done
+  delay="$raw"
+  (( delay > cap )) && delay="$cap"
+  ratio="$(cleanup_episode_jitter_ratio)"
+  jitter_range="$(awk -v d="$delay" -v r="$ratio" 'BEGIN { printf "%d", d * r }' 2>/dev/null || printf '0')"
+  if [[ "$jitter_range" =~ ^[0-9]+$ && "$jitter_range" -gt 0 ]]; then
+    hash_digit="$(printf '%s:%s' "$fingerprint" "$attempt" | cleanup_episode_sha256 | cut -c1-4)"
+    jitter_offset=$(( (16#$hash_digit % (jitter_range * 2 + 1)) - jitter_range ))
+    delay=$((delay + jitter_offset))
+    (( delay < 1 )) && delay=1
+    (( delay > cap )) && delay="$cap"
+  fi
+  printf '%s\n' "$delay"
+}
+
+cleanup_episode_record_outcome() {
+  local issue="$1" disposition="$2" failure_class="$3" last_outcome="$4" candidate_json="$5"
+  local required_action="${6:-}" max_attempts now_epoch now_iso next_retry_at="" resource_disposition retention_reason branch
+
+  [[ -n "$issue" && -n "$candidate_json" && -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || return 1
+  max_attempts="$(cleanup_episode_max_attempts)"
+  now_epoch="$(cleanup_episode_now_epoch)"
+  now_iso="$(cleanup_episode_iso_from_epoch "$now_epoch")"
+  branch="$(printf '%s' "$candidate_json" | jq -r '.fingerprintInputs.branch // empty' 2>/dev/null || true)"
+  [[ -n "$required_action" ]] || required_action="$(cleanup_episode_required_action "$failure_class" "$last_outcome" "$branch")"
+
+  resource_disposition="$disposition"
+  retention_reason="$last_outcome"
+  case "$disposition" in
+    transient)
+      resource_disposition="verification-required"
+      retention_reason="$last_outcome"
+      local prior_count next_attempt delay next_epoch
+      prior_count="$(jq -r --arg issue "$issue" --arg fp "$(printf '%s' "$candidate_json" | jq -r '.fingerprint')" '
+        .tasks[$issue].lifecycle.cleanupEpisode as $e
+        | if ($e.fingerprint // "") == $fp and (($e.attemptCount // 0) | type == "number") then ($e.attemptCount // 0) else 0 end
+      ' "$STATE_FILE" 2>/dev/null || echo 0)"
+      [[ "$prior_count" =~ ^[0-9]+$ ]] || prior_count=0
+      next_attempt=$((prior_count + 1))
+      if (( next_attempt >= max_attempts )); then
+        disposition="needs-user"
+        resource_disposition="verification-required"
+        required_action="Cleanup retry budget exhausted. Inspect evidence and acknowledge recovery."
+        next_retry_at=""
+      else
+        delay="$(cleanup_episode_backoff_delay_seconds "$next_attempt" "$(printf '%s' "$candidate_json" | jq -r '.fingerprint')")"
+        next_epoch=$((now_epoch + delay))
+        next_retry_at="$(cleanup_episode_iso_from_epoch "$next_epoch")"
+      fi
+      ;;
+    needs-user)
+      resource_disposition="verification-required"
+      ;;
+    retained)
+      resource_disposition="retained"
+      ;;
+    reaped)
+      resource_disposition="reaped"
+      retention_reason=""
+      ;;
+  esac
+
+  state_mutate "$STATE_FILE" '
+    (.tasks[$issue] // {}) as $existing
+    | ($existing.lifecycle // {}) as $l
+    | ($candidate.fingerprint // "") as $fp
+    | ($l.cleanupEpisode // {}) as $prior
+    | (if (($prior.fingerprint // "") == $fp) then (($prior.attemptCount // 0) + 1) else 1 end) as $attemptCount
+    | .tasks[$issue].lifecycle = ($l + {
+        schemaVersion: 1,
+        workflowOutcome: ($l.workflowOutcome // (if (($existing.status // "") == "merged") then "merged" elif (($existing.status // "") == "aborted") then "aborted" elif (($existing.status // "") == "error") then "error" else "closed" end)),
+        resourceDisposition: $resourceDisposition,
+        cleanupEpisode: {
+          schemaVersion: 1,
+          episodeId: ($issue + ":cleanup:" + $fp),
+          fingerprint: $fp,
+          fingerprintInputs: ($candidate.fingerprintInputs // {}),
+          disposition: $disposition,
+          failureClass: $failureClass,
+          firstAttemptAt: (if (($prior.fingerprint // "") == $fp and (($prior.firstAttemptAt // "") != "")) then $prior.firstAttemptAt else $nowIso end),
+          lastAttemptAt: $nowIso,
+          attemptCount: $attemptCount,
+          maxAttempts: $maxAttempts,
+          nextRetryAt: (if $nextRetryAt == "" then null else $nextRetryAt end),
+          requiredOperatorAction: $requiredAction,
+          lastOutcome: $lastOutcome,
+          updatedAt: $nowIso
+        }
+      })
+    | if $retentionReason != "" then
+        .tasks[$issue].lifecycle.retention = {
+          reason: $retentionReason,
+          policy: (if $disposition == "retained" then "cleanup-episode-retained" else "manual-verification-required" end),
+          actor: "cleanup_completed_task",
+          timestamp: $nowIso,
+          evidence: ($candidate.fingerprintInputs // {})
+        }
+      else .
+      end
+    | .tasks[$issue].updated = $nowIso' \
+    --arg issue "$issue" \
+    --arg disposition "$disposition" \
+    --arg failureClass "$failure_class" \
+    --arg resourceDisposition "$resource_disposition" \
+    --arg retentionReason "$retention_reason" \
+    --arg lastOutcome "$last_outcome" \
+    --arg requiredAction "$required_action" \
+    --arg nowIso "$now_iso" \
+    --arg nextRetryAt "$next_retry_at" \
+    --argjson maxAttempts "$max_attempts" \
+    --argjson candidate "$candidate_json"
+}
+
+cleanup_episode_should_attempt() {
+  local issue="$1" slug="$2" reason="${3:-}" pr="${4:-}" candidate_json stored_json disposition fingerprint stored_fingerprint next_retry_at next_retry_epoch now_epoch
+  cleanup_episode_enabled || { printf 'attempt\n'; return 0; }
+  [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || { printf 'attempt\n'; return 0; }
+  stored_json="$(cleanup_episode_get "$issue" || true)"
+  [[ -n "$stored_json" ]] || { printf 'attempt\n'; return 0; }
+  cleanup_episode_ack_present "$issue" && { printf 'attempt\n'; return 0; }
+
+  candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "$reason" "$pr")"
+  fingerprint="$(printf '%s' "$candidate_json" | jq -r '.fingerprint')"
+  stored_fingerprint="$(printf '%s' "$stored_json" | jq -r '.fingerprint // empty' 2>/dev/null || true)"
+  disposition="$(printf '%s' "$stored_json" | jq -r '.disposition // empty' 2>/dev/null || true)"
+  if [[ -z "$stored_fingerprint" || "$fingerprint" != "$stored_fingerprint" ]]; then
+    printf 'attempt\n'
+    return 0
+  fi
+  case "$disposition" in
+    retained|needs-user)
+      printf 'skip\n'
+      return 0
+      ;;
+    transient)
+      next_retry_at="$(printf '%s' "$stored_json" | jq -r '.nextRetryAt // empty' 2>/dev/null || true)"
+      [[ -z "$next_retry_at" ]] && { printf 'attempt\n'; return 0; }
+      next_retry_epoch="$(jq -nr --arg t "$next_retry_at" '$t | fromdateiso8601? // 0' 2>/dev/null || echo 0)"
+      now_epoch="$(cleanup_episode_now_epoch)"
+      if [[ "$next_retry_epoch" =~ ^[0-9]+$ ]] && (( now_epoch < next_retry_epoch )); then
+        printf 'skip\n'
+      else
+        printf 'attempt\n'
+      fi
+      return 0
+      ;;
+    *)
+      printf 'attempt\n'
+      return 0
+      ;;
+  esac
+}
+
 _wavemill_write_preserved_branch_incident() {
   local reason="$1" branch="$2" wt_dir="$3" base_branch="$4" commits_ahead="$5" commit_shas="$6" caller="${7:-cleanup}"
   local base_sha="${8:-}" local_head_sha="${9:-}" remote_head_sha="${10:-}" verification_reason="${11:-}"
   local extras_json="${12:-}" marker_subdir="${13:-preserved-branches}"
-  local incident_dir marker_name marker_path tmp_path created_at
+  local incident_dir marker_name marker_path tmp_path created_at cleanup_fingerprint=""
 
   [[ -n "${REPO_DIR:-}" && -n "$branch" ]] || return 1
 
@@ -404,7 +772,16 @@ _wavemill_write_preserved_branch_incident() {
   incident_dir="$REPO_DIR/.wavemill/incidents/$marker_subdir"
   marker_name="${branch//\//__}.json"
   marker_path="$incident_dir/$marker_name"
-  created_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  created_at="$(cleanup_episode_now_iso 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  if [[ -n "${CLEANUP_EPISODE_CURRENT_FINGERPRINT:-}" ]]; then
+    cleanup_fingerprint="$CLEANUP_EPISODE_CURRENT_FINGERPRINT"
+  elif [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+    cleanup_fingerprint="$(jq -r --arg branch "$branch" '
+      (.tasks // {}) | to_entries
+      | map(select((.value.branch // "") == $branch or ("task/" + (.value.slug // "")) == $branch))
+      | .[0].value.lifecycle.cleanupEpisode.fingerprint // empty
+    ' "$STATE_FILE" 2>/dev/null || true)"
+  fi
 
   mkdir -p "$incident_dir" 2>/dev/null || return 1
   tmp_path="$(mktemp "$incident_dir/.${marker_name}.XXXXXX")" || return 1
@@ -421,6 +798,7 @@ _wavemill_write_preserved_branch_incident() {
     --arg localHeadSha "$local_head_sha" \
     --arg remoteHeadSha "$remote_head_sha" \
     --arg verificationReason "$verification_reason" \
+    --arg cleanupFingerprint "$cleanup_fingerprint" \
     --argjson extras "$extras_json" \
     '{
       reason: $reason,
@@ -435,8 +813,13 @@ _wavemill_write_preserved_branch_incident() {
     | if $baseSha != "" then . + {baseSha: $baseSha} else . end
     | if $localHeadSha != "" then . + {localHeadSha: $localHeadSha} else . end
     | if $remoteHeadSha != "" then . + {remoteHeadSha: $remoteHeadSha} else . end
+    | if $cleanupFingerprint != "" then . + {cleanupFingerprint: $cleanupFingerprint} else . end
     | if $verificationReason != "" then . + {verificationReason: $verificationReason} else . end
     | . + $extras' > "$tmp_path"; then
+    if [[ -f "$marker_path" ]] && cmp -s "$tmp_path" "$marker_path"; then
+      rm -f "$tmp_path" 2>/dev/null || true
+      return 0
+    fi
     mv "$tmp_path" "$marker_path"
     return 0
   fi
@@ -668,6 +1051,7 @@ safe_remove_task_worktree_and_branch() {
   local merged_to_base="false"
   local merged_to_current_head="false"
   local remote_contains_head="false"
+  local preservation_reason="unpushed_commits"
   local verification_reason=""
   local classification=""
   local cleanup_authority=""
@@ -684,6 +1068,9 @@ safe_remove_task_worktree_and_branch() {
   local final_check_passed=""
 
   WAVEMILL_CLEANUP_OUTCOME=""
+
+  SAFE_CLEANUP_PRESERVATION_REASON=""
+  SAFE_CLEANUP_VERIFICATION_REASON=""
 
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
@@ -717,6 +1104,8 @@ safe_remove_task_worktree_and_branch() {
 
   if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
     if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
+      SAFE_CLEANUP_PRESERVATION_REASON="dirty_worktree"
+      SAFE_CLEANUP_VERIFICATION_REASON="dirty_status_failed"
       if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "worktree_status_unreadable" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
@@ -725,6 +1114,8 @@ safe_remove_task_worktree_and_branch() {
       return 10
     fi
     if [[ -n "$dirty_status" ]]; then
+      SAFE_CLEANUP_PRESERVATION_REASON="dirty_worktree"
+      SAFE_CLEANUP_VERIFICATION_REASON=""
       if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "uncommitted_changes" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
@@ -874,6 +1265,8 @@ safe_remove_task_worktree_and_branch() {
     fi
 
     if cleanup_outcome_is_retain "$classification"; then
+      SAFE_CLEANUP_PRESERVATION_REASON="$preservation_reason"
+      SAFE_CLEANUP_VERIFICATION_REASON="$verification_reason"
       commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
       case "$verification_reason" in
         remote_missing_local_head|changed_after_pr_head|pr_closed_unmerged|pr_lookup_failed|pr_not_terminal:*|pr_base_mismatch:*|pr_head_oid_missing)
@@ -913,6 +1306,8 @@ safe_remove_task_worktree_and_branch() {
       || [[ "$final_head_sha" != "$initial_head_sha" ]]; then
       local_head_sha="${final_head_sha:-$local_head_sha}"
       verification_reason="local_head_changed"
+      SAFE_CLEANUP_PRESERVATION_REASON="unpushed_commits"
+      SAFE_CLEANUP_VERIFICATION_REASON="$verification_reason"
       final_check_passed="false"
       commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
       commits_ahead=""
@@ -974,15 +1369,29 @@ cleanup_completed_task() {
   local target=""
   local release_rc=0
   local pr=""
+  local cleanup_candidate_json=""
+  local cleanup_decision=""
 
   pr=$(jq -r --arg i "$issue" '.tasks[$i].pr // empty' "$STATE_FILE" 2>/dev/null || true)
   if [[ -z "$pr" ]] && declare -p PR_BY_ISSUE >/dev/null 2>&1; then
     pr="${PR_BY_ISSUE[$issue]:-}"
   fi
 
+  if cleanup_episode_enabled; then
+    cleanup_decision="$(cleanup_episode_should_attempt "$issue" "$slug" "" "$pr" 2>/dev/null || printf 'attempt')"
+    if [[ "$cleanup_decision" == "skip" ]]; then
+      log "debug" "$issue cleanup episode unchanged; skipping cleanup attempt"
+      return 0
+    fi
+    cleanup_candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "" "$pr" 2>/dev/null || true)"
+  fi
+
   set_task_lifecycle_disposition "$issue" "" "reaping" "" "cleanup_completed_task" 2>/dev/null || true
 
   if ! archive_stage_artifacts "$issue" "$slug"; then
+    if [[ -n "$cleanup_candidate_json" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "archive-stage-artifacts-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
     set_task_lifecycle_disposition "$issue" "" "verification-required" "archive-stage-artifacts-failed" "cleanup_completed_task" 2>/dev/null || true
     log_warn "  $issue cleanup could not archive stage artifacts; keeping task state"
     return 1
@@ -1009,7 +1418,11 @@ cleanup_completed_task() {
   fi
 
   if [[ "$release_rc" -ne 0 ]]; then
-    set_task_lifecycle_disposition "$issue" "" "retained" "${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-tmux-window-close-failed}" "cleanup_completed_task" 2>/dev/null || true
+    local release_reason="${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-tmux-window-close-failed}"
+    if [[ -n "$cleanup_candidate_json" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "$release_reason" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
+    set_task_lifecycle_disposition "$issue" "" "retained" "$release_reason" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup could not close tmux window; keeping task state"
     return 1
@@ -1021,19 +1434,55 @@ cleanup_completed_task() {
   local task_branch="task/${slug}"
   local cleanup_rc=0
   local cleanup_outcome=""
+  if [[ -n "$cleanup_candidate_json" ]]; then
+    CLEANUP_EPISODE_CURRENT_FINGERPRINT="$(printf '%s' "$cleanup_candidate_json" | jq -r '.fingerprint // empty' 2>/dev/null || true)"
+  else
+    CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
+  fi
   safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" "$issue" "$pr" || cleanup_rc=$?
   cleanup_outcome="${WAVEMILL_CLEANUP_OUTCOME:-}"
+  CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed "$cleanup_outcome"; then
+    if [[ -n "$cleanup_candidate_json" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "worktree-or-local-branch-cleanup-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
     set_task_lifecycle_disposition "$issue" "" "retained" "worktree-or-local-branch-cleanup-failed" "cleanup_completed_task" 2>/dev/null || true
     return 1
   elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
-    set_task_lifecycle_disposition "$issue" "" "verification-required" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
+    local preservation_reason="${SAFE_CLEANUP_PRESERVATION_REASON:-}"
+    local verification_reason="${SAFE_CLEANUP_VERIFICATION_REASON:-}"
+    local episode_outcome="${cleanup_outcome:-local-work-preserved}"
+    local episode_disposition="retained"
+    local episode_failure_class="expected-preservation"
+    local lifecycle_resource_disposition="retained"
+    if [[ -n "$verification_reason" ]]; then
+      episode_outcome="$verification_reason"
+    elif [[ -n "$preservation_reason" ]]; then
+      episode_outcome="$preservation_reason"
+    fi
+    case "$verification_reason" in
+      base_fetch_failed:*|remote_head_lookup_failed:*|remote_task_fetch_failed:*|origin_base_unresolvable)
+        episode_disposition="transient"
+        episode_failure_class="transient"
+        lifecycle_resource_disposition="verification-required"
+        ;;
+    esac
+    if cleanup_episode_enabled; then
+      cleanup_candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "" "$pr" 2>/dev/null || printf '%s' "$cleanup_candidate_json")"
+    fi
+    if [[ -n "$cleanup_candidate_json" ]]; then
+      cleanup_episode_record_outcome "$issue" "$episode_disposition" "$episode_failure_class" "$episode_outcome" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
+    set_task_lifecycle_disposition "$issue" "" "$lifecycle_resource_disposition" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup preserved local work (${cleanup_outcome:-unclassified}); keeping task state"
     return 1
   fi
 
   if ! cleanup_remote_task_branch "$issue" "$task_branch" "$pr"; then
+    if [[ -n "$cleanup_candidate_json" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "transient" "remote-branch-cleanup-unverified" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
     set_task_lifecycle_disposition "$issue" "" "verification-required" "remote-branch-cleanup-unverified" "cleanup_completed_task" 2>/dev/null || true
     return 1
   fi
@@ -1043,6 +1492,9 @@ cleanup_completed_task() {
   rm -f "${WORKTREE_ROOT}/${slug}/features/${slug}/.pane-release-blocked.json" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  if [[ -n "$cleanup_candidate_json" ]]; then
+    cleanup_episode_record_outcome "$issue" "reaped" "none" "cleanup-complete" "$cleanup_candidate_json" "" 2>/dev/null || true
+  fi
   set_task_lifecycle_disposition "$issue" "" "reaped" "" "cleanup_completed_task" 2>/dev/null || true
   remove_task_state "$issue"
   CLEANED["$issue"]=1
