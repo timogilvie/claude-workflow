@@ -465,12 +465,26 @@ export async function runNativeReview(
     const providerError = loopResult.stopReason === 'error'
       ? extractFinalAssistantErrorMessage(loopResult.messages)
       : '';
+    const classification = providerError
+      ? (loopResult.providerError?.kind ?? classifyProviderError(providerError).kind)
+      : undefined;
     const providerDescription = providerError
-      ? `${loopResult.providerError?.kind ?? classifyProviderError(providerError).kind}: ${providerError}`
+      ? `${classification}: ${providerError}`
       : '';
+
+    // Map provider error classifications to review failure categories for infrastructure recovery
+    let failureCategory = 'native-review-failed';
+    if (classification === 'context-window-exceeded') {
+      failureCategory = 'native-context-window-exceeded';
+    } else if (classification === 'provider-credit-exhausted') {
+      failureCategory = 'provider-credit-exhausted';
+    } else if (classification === 'provider-transient-error') {
+      failureCategory = 'provider-transient-error';
+    }
+
     return nativeReviewFailure(
       context,
-      'native-review-failed',
+      failureCategory,
       providerDescription || stopReasonDescription(loopResult.stopReason),
       deniedTools,
     );

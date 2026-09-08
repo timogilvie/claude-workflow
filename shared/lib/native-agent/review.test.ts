@@ -328,6 +328,82 @@ describe('native review', () => {
       rmSync(repoDir, { recursive: true, force: true });
     }
   });
+
+  it('propagates provider credit exhaustion as infrastructure failure', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      const message = assistantMessage('');
+      (message as any).errorMessage = 'HTTP 402 Payment Required: can only afford 213 tokens';
+      config.onEvent?.({ type: 'agent_start' });
+      config.onEvent?.({ type: 'turn_start' });
+      config.onEvent?.({ type: 'message_end', message });
+      config.onEvent?.({ type: 'turn_end', message, toolResults: [] });
+      config.onEvent?.({ type: 'agent_end', messages: [message] });
+
+      return {
+        messages: [message],
+        stopReason: 'error',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+        providerError: undefined,
+      };
+    });
+
+    nativeReviewTestUtils.setGetNativeProviderApiKey(() => 'test-key');
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.failureCategory, 'provider-credit-exhausted');
+      assert.match(result.codeReviewFindings[0].description, /provider-credit-exhausted/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it('propagates provider transient error as infrastructure failure', async () => {
+    const repoDir = makeTempRepo();
+    setReadyProvider();
+
+    nativeReviewTestUtils.setRunWavemillLoop(async (config) => {
+      const message = assistantMessage('');
+      (message as any).errorMessage = 'HTTP 502 Bad Gateway from upstream';
+      config.onEvent?.({ type: 'agent_start' });
+      config.onEvent?.({ type: 'turn_start' });
+      config.onEvent?.({ type: 'message_end', message });
+      config.onEvent?.({ type: 'turn_end', message, toolResults: [] });
+      config.onEvent?.({ type: 'agent_end', messages: [message] });
+
+      return {
+        messages: [message],
+        stopReason: 'error',
+        turnsCompleted: 1,
+        toolCallsExecuted: 0,
+        totalInputTokens: 10,
+        totalOutputTokens: 10,
+        totalCostUsd: 0,
+        wallClockMs: 5,
+        providerError: undefined,
+      };
+    });
+
+    nativeReviewTestUtils.setGetNativeProviderApiKey(() => 'test-key');
+
+    try {
+      const result = await runNativeReview(makeReviewContext(), repoDir, {});
+      assert.equal(result.verdict, 'not_ready');
+      assert.equal(result.failureCategory, 'provider-transient-error');
+      assert.match(result.codeReviewFindings[0].description, /provider-transient-error/);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function makeTempRepo(config: Record<string, unknown> = {}): string {
