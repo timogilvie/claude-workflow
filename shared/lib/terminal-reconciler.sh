@@ -5,7 +5,7 @@ WAVEMILL_TERMINAL_RECONCILER_LOADED=1
 
 wavemill_terminal_reason_valid() {
   case "${1:-}" in
-    review_complete|ready_complete|pr_opened|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|operator_abort|recovery_failure) return 0 ;;
+    review_complete|ready_complete|pr_opened|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|challenge_superseded|operator_abort|recovery_failure) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -38,7 +38,7 @@ wavemill_pr_live_state() {
   local pr_number="${1:-}"
   [[ -n "$pr_number" ]] || return 1
   command -v gh >/dev/null 2>&1 || return 1
-  gh pr view "$pr_number" --json number,state,mergedAt,headRefOid,headRefName,baseRefName,mergeCommit --jq \
+  _with_timeout "${API_TIMEOUT:-30}" gh pr view "$pr_number" --json number,state,mergedAt,headRefOid,headRefName,baseRefName,mergeCommit --jq \
     '{number, state, mergedAt, headRefOid, headRefName, baseRefName, mergeCommit, terminalState: (if .mergedAt != null then "MERGED" elif .state == "CLOSED" then "CLOSED" else .state end)}' 2>/dev/null
 }
 
@@ -47,7 +47,16 @@ wavemill_terminal_effective_reason() {
   [[ -n "$pr_json" ]] && terminal_state="$(jq -r '.terminalState // empty' <<<"$pr_json" 2>/dev/null || true)"
   case "$terminal_state" in
     MERGED) printf 'pr_merged\n'; return 0 ;;
-    CLOSED) [[ "$reason" != "pr_merged" ]] && { printf 'pr_closed_unmerged\n'; return 0; } ;;
+    CLOSED)
+      case "$reason" in
+        challenge_resolved_winner|challenge_invalid|challenge_no_comparison|challenge_superseded)
+          printf '%s\n' "$reason"
+          return 0
+          ;;
+        pr_merged) ;;
+        *) printf 'pr_closed_unmerged\n'; return 0 ;;
+      esac
+      ;;
   esac
   printf '%s\n' "$reason"
 }
@@ -69,6 +78,7 @@ wavemill_terminal_detail() {
     challenge_resolved_winner) printf 'Challenge resolved with winner' ;;
     challenge_invalid) printf 'Challenge marked invalid' ;;
     challenge_no_comparison) printf 'Challenge closed without comparison' ;;
+    challenge_superseded) printf 'Challenge superseded by merged sibling' ;;
     operator_abort) printf 'Workflow aborted by operator' ;;
     recovery_failure) printf 'Recovery failed' ;;
     *) printf '%s' "$reason" ;;
@@ -80,6 +90,7 @@ wavemill_terminal_phase_for_reason() {
     review_complete|pr_opened|ready_complete) printf 'ready\n' ;;
     pr_merged) printf 'done\n' ;;
     pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
+    challenge_superseded) printf 'superseded\n' ;;
     operator_abort) printf 'aborted\n' ;;
     recovery_failure) printf 'error\n' ;;
   esac
@@ -89,6 +100,7 @@ wavemill_terminal_status_for_reason() {
   case "$1" in
     pr_merged) printf 'merged\n' ;;
     pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
+    challenge_superseded) printf 'superseded\n' ;;
     operator_abort) printf 'aborted\n' ;;
     recovery_failure) printf 'error\n' ;;
     *) printf '' ;;
@@ -98,7 +110,7 @@ wavemill_terminal_status_for_reason() {
 wavemill_terminal_workflow_outcome_for_reason() {
   case "$1" in
     pr_merged) printf 'merged\n' ;;
-    pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'closed\n' ;;
+    pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|challenge_superseded) printf 'closed\n' ;;
     operator_abort) printf 'aborted\n' ;;
     recovery_failure) printf 'error\n' ;;
     *) printf 'active\n' ;;
@@ -108,7 +120,7 @@ wavemill_terminal_workflow_outcome_for_reason() {
 wavemill_terminal_stage_for_reason() {
   case "$1" in
     review_complete|pr_opened) printf 'review\n' ;;
-    ready_complete|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison) printf 'ready\n' ;;
+    ready_complete|pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|challenge_superseded) printf 'ready\n' ;;
     operator_abort|recovery_failure) printf '%s\n' "${CURRENT_PHASE:-${WAVEMILL_PHASE:-coding}}" ;;
   esac
 }
@@ -273,7 +285,7 @@ terminal_pane_release_enabled() {
 wavemill_terminal_pane_policy_for_reason() {
   local reason="$1" policy
   case "$reason" in
-    pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison)
+    pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison|challenge_superseded)
       policy="release" ;;
     review_complete|ready_complete|pr_opened)
       policy="metadata-only" ;;

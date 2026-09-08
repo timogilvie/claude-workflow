@@ -1478,7 +1478,8 @@ function terminalStatus(status?: string): boolean {
     || status === 'completed-external'
     || status === 'closed'
     || status === 'done'
-    || status === 'aborted';
+    || status === 'aborted'
+    || status === 'superseded';
 }
 
 function normalizedLifecycle(task: TaskState) {

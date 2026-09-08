@@ -273,6 +273,7 @@ jobs:
               - 'shared/lib/wavemill-startup-runner.sh'
               - 'shared/lib/wavemill-status.sh'
               - 'shared/lib/wavemill-common.sh'
+              - 'shared/lib/startup-terminal-preflight.sh'
               - 'shared/lib/ready-stage.ts'
               # Hook protocol
               - 'shared/hooks/**'
@@ -282,6 +283,7 @@ jobs:
               - 'wavemill'
               # The lifecycle tests themselves
               - 'tests/run-lifecycle-tests.sh'
+              - 'tests/startup-terminal-preflight.test.sh'
               - 'tests/planning-validation.test.sh'
               - 'tests/startup-handoff.test.sh'
               - 'tests/lifecycle-harness.test.sh'

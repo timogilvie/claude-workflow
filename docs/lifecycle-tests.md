@@ -32,11 +32,11 @@ The high-risk path list lives in `.github/workflows/ci.yml` under the `check-pat
 
 Current categories:
 
-- Core controller loop and phase transitions: `shared/lib/wavemill-mill.sh`, `shared/lib/agent-adapters.sh`, `shared/lib/stage-result.ts`, `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-status.sh`, `shared/lib/wavemill-common.sh`, `shared/lib/ready-stage.ts`
+- Core controller loop and phase transitions: `shared/lib/wavemill-mill.sh`, `shared/lib/agent-adapters.sh`, `shared/lib/stage-result.ts`, `shared/lib/wavemill-startup-runner.sh`, `shared/lib/wavemill-status.sh`, `shared/lib/wavemill-common.sh`, `shared/lib/startup-terminal-preflight.sh`, `shared/lib/ready-stage.ts`
 - Hook protocol: `shared/hooks/**`
 - Phase and prompt handoff instructions: `tools/prompts/**`
 - Top-level launcher: `wavemill`
-- Lifecycle test definitions: `tests/run-lifecycle-tests.sh`, `tests/planning-validation.test.sh`, `tests/startup-handoff.test.sh`, `tests/stage-state.test.sh`, `tests/stage-state.test.ts`, `tests/monitor-ready-transition.test.sh`, `tests/error-recovery.test.sh`, `tests/control-layout.test.sh`, `tests/wavemill-status.test.sh`
+- Lifecycle test definitions: `tests/run-lifecycle-tests.sh`, `tests/planning-validation.test.sh`, `tests/startup-terminal-preflight.test.sh`, `tests/startup-handoff.test.sh`, `tests/stage-state.test.sh`, `tests/stage-state.test.ts`, `tests/monitor-ready-transition.test.sh`, `tests/error-recovery.test.sh`, `tests/control-layout.test.sh`, `tests/wavemill-status.test.sh`
 - Dependency-aware task queue: `tests/lifecycle-harness.test.sh`, `tests/lifecycle-scenarios.test.sh`, `tests/wavemill-dependent-launch.test.sh`, `tests/wavemill-queued-tasks-state.test.sh`, `tests/wavemill-launch-plan-queue-metadata.test.sh`, `tests/fixtures/lifecycle/**`
 - Stage result CLI: `tools/stage-result-cli.ts`
 

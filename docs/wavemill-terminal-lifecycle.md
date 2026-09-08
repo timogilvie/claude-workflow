@@ -47,6 +47,7 @@ Invalid combinations:
 | `challenge_resolved_winner` | `closed` | Pane policy `release`. Losing side may be cleaned by existing challenge cleanup authority; retained state needs an explicit reason. |
 | `challenge_invalid` | `closed` | Pane policy `release`. Git resources are retained or verification-required unless cleanup completes. |
 | `challenge_no_comparison` | `closed` | Pane policy `release`. Git resources are retained or verification-required unless cleanup completes. |
+| `challenge_superseded` | `closed` | Pane policy `release`. Legacy status/phase may remain `superseded`; it maps to the closed workflow outcome and never rehydrates as active work. |
 | `operator_abort` | `aborted` | Cleanup authority is unchanged; remote PR branches are retained. |
 | `recovery_failure` | `error` | Resources require manual verification unless cleanup can prove they were reaped. |
 
@@ -69,7 +70,7 @@ Terminal pane release is deterministic, truthful, idempotent, and independent of
 
 | Terminal reason | Pane policy |
 | --- | --- |
-| `pr_merged`, `pr_closed_unmerged`, `challenge_resolved_winner`, `challenge_invalid`, `challenge_no_comparison` | `release` |
+| `pr_merged`, `pr_closed_unmerged`, `challenge_resolved_winner`, `challenge_invalid`, `challenge_no_comparison`, `challenge_superseded` | `release` |
 | `review_complete`, `ready_complete`, `pr_opened` | `metadata-only` (workflow still active; HOK-2937 queue handoff owns any release) |
 | `operator_abort`, `recovery_failure` | `retain` (the pane is the operator's diagnostic surface) |
 
@@ -104,3 +105,19 @@ For a closed, unmerged PR, `closed_pr_resource_policy` (shared/lib/wavemill-moni
 Readers normalize old or malformed task records on read. Missing launch contracts, missing remote branch deletion policy, terminal status with active pane metadata, or malformed lifecycle values become `resourceDisposition=verification-required` and `branchDeletionAuthorized=false`.
 
 Startup does not mass-rewrite legacy state. Normal state mutations backfill lifecycle fields when enough effective session data is available, while preserving unknown fields for rollback compatibility.
+
+## Startup Terminal Preflight
+
+`wavemill mill` runs `wavemill_startup_terminal_preflight` after the state ledger exists and before stale cleanup, the resume menu, tmux session creation, pane restoration, or agent launch. The preflight checks persisted task entries against bounded GitHub PR evidence, persisted lifecycle state, and challenge sibling state. Entries whose PR or sibling state is already terminal are routed through `wavemill_reconcile_terminal`; entries that remain active and have enough provenance are stamped as rehydratable.
+
+Each startup has a `runEpoch` (`YYYYMMDDTHHMMSSZ-<pid>`) exported as `WAVEMILL_RUN_EPOCH`/`RUN_EPOCH`. The top-level state file records the current `.runEpoch`. New task launch contracts record the same value in `lifecycle.launchContract.runEpoch`; rehydrated historical entries keep their original immutable launch contract and use the per-entry preflight stamp to show whether they were checked in the current startup.
+
+Per-entry stamps live at `.tasks[issue].startupPreflight`:
+
+- `verdict`: `rehydrate`, `terminal:<reason>`, `superseded`, `verification-required:<reason>`, or `unverified:network`.
+- `reason`: the verdict detail without the prefix when applicable.
+- `prState`: confirmed `OPEN`, `MERGED`, `CLOSED`, `UNKNOWN`, or empty when no PR evidence was required.
+- `checkedAt`: UTC timestamp for this startup check.
+- `runEpoch`: the startup epoch that produced the stamp.
+
+`verification-required:*` entries are preserved and do not launch an agent. `unverified:network` preserves state without destructive action and writes one aggregated network episode to `.wavemill/startup-preflight.json`. The rollback lever is `startup.terminalPreflight.enabled=false` or `WAVEMILL_STARTUP_TERMINAL_PREFLIGHT=0`; rollback skips the preflight but does not rewrite terminal entries to active state.

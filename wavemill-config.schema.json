@@ -64,6 +64,25 @@
             },
             "additionalProperties": false
         },
+        "startup": {
+            "type": "object",
+            "description": "Startup reconciliation gates that run before task panes or agents are created.",
+            "properties": {
+                "terminalPreflight": {
+                    "type": "object",
+                    "description": "Reconcile persisted task entries against authoritative terminal PR/challenge state before startup rehydration. The WAVEMILL_STARTUP_TERMINAL_PREFLIGHT=0 env var overrides this to disabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When enabled, terminal persisted tasks are reconciled and excluded before startup restores panes or launches agents."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "git": {
             "type": "object",
             "description": "Git behavior shared across wavemill workflows.",

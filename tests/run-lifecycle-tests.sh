@@ -36,6 +36,7 @@ run_lifecycle_test() {
 echo "=== Wavemill Lifecycle Integration Tests ==="
 
 run_lifecycle_test "planning validation regressions" bash tests/planning-validation.test.sh
+run_lifecycle_test "startup terminal preflight" bash tests/startup-terminal-preflight.test.sh
 run_lifecycle_test "startup handoff" bash tests/startup-handoff.test.sh
 run_lifecycle_test "lifecycle harness" bash tests/lifecycle-harness.test.sh
 run_lifecycle_test "lifecycle scenarios" bash tests/lifecycle-scenarios.test.sh

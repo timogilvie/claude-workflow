@@ -35,6 +35,10 @@ trap 'rm -rf "$tmp"' EXIT
 
 funcs="$tmp/startup-prune-functions.sh"
 {
+  extract_function "$COMMON_SCRIPT" "task_lifecycle_jq_defs"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "task_lifecycle_jq_filter"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "remove_task_state"
   printf '\n'
   extract_function "$MILL_SCRIPT" "cleanup_terminal_missing_worktree_entries"
@@ -62,6 +66,16 @@ cat > "$STATE_FILE" <<JSON
       "status": "merged",
       "phase": "ready",
       "worktree": "$existing_terminal"
+    },
+    "HOK-SUPERSEDED": {
+      "status": "superseded",
+      "phase": "superseded",
+      "worktree": "$missing_terminal"
+    },
+    "HOK-ERROR": {
+      "status": "error",
+      "phase": "error",
+      "worktree": "$missing_terminal"
     }
   }
 }
@@ -101,7 +115,19 @@ if [[ "$(jq -r '.tasks | has("HOK-MERGED")' "$STATE_FILE")" != "true" ]]; then
   exit 1
 fi
 
-if [[ "$LOG_OUTPUT" != *"Dropped 1 terminal task state entry"* ]]; then
+if [[ "$(jq -r '.tasks | has("HOK-SUPERSEDED")' "$STATE_FILE")" != "false" ]]; then
+  echo "superseded terminal task with missing worktree was not removed" >&2
+  jq . "$STATE_FILE" >&2
+  exit 1
+fi
+
+if [[ "$(jq -r '.tasks | has("HOK-ERROR")' "$STATE_FILE")" != "false" ]]; then
+  echo "error terminal task with missing worktree was not removed" >&2
+  jq . "$STATE_FILE" >&2
+  exit 1
+fi
+
+if [[ "$LOG_OUTPUT" != *"Dropped 3 terminal task state entries"* ]]; then
   echo "startup prune did not log removal count" >&2
   printf '%s\n' "$LOG_OUTPUT" >&2
   exit 1

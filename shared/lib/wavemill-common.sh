@@ -4289,15 +4289,15 @@ task_lifecycle_jq_defs() {
 def wm_terminal_status:
   (.status // "") as $status
   | (.phase // "") as $phase
-  | (["merged","complete","completed","completed-external","closed","done","aborted"] | index($status)) != null
+  | (["merged","complete","completed","completed-external","closed","done","aborted","superseded"] | index($status)) != null
     or $status == "error"
-    or ($phase | IN("done","closed","aborted","error"));
+    or ($phase | IN("done","closed","aborted","error","superseded"));
 
 def wm_workflow_outcome:
   (.status // "") as $status
   | (.phase // "") as $phase
   | if $status == "merged" or $phase == "done" then "merged"
-    elif ($status | IN("closed","complete","completed","completed-external","done")) or $phase == "closed" then "closed"
+    elif ($status | IN("closed","complete","completed","completed-external","done","superseded")) or ($phase | IN("closed","superseded")) then "closed"
     elif $status == "aborted" or $phase == "aborted" then "aborted"
     elif $status == "error" or $phase == "error" then "error"
     else "active"
@@ -4714,8 +4714,8 @@ save_task_state() {
 
   if ! state_mutate "$STATE_FILE" \
      "$(task_lifecycle_jq_filter '(.tasks[$issue] // {}) as $existing |
-      ((($existing.status // "") | IN("merged","complete","completed","completed-external","closed","done","aborted","error"))
-       or (($existing.phase // "") | IN("done","closed","aborted","error"))) as $existingTerminal |
+      ((($existing.status // "") | IN("merged","complete","completed","completed-external","closed","done","aborted","error","superseded"))
+       or (($existing.phase // "") | IN("done","closed","aborted","error","superseded"))) as $existingTerminal |
       (if $statusArg != "" then $statusArg elif $existingTerminal then ($existing.status // "active") else "active" end) as $effectiveStatus |
       .tasks[$issue] = ($existing + {
         slug: $slug,

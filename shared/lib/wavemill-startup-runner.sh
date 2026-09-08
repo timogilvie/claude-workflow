@@ -18,6 +18,8 @@ fi
 SESSION="$(jq -r '.session' "$PLAN_FILE")"
 REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
+WAVEMILL_RUN_EPOCH="$(jq -r '.runEpoch // empty' "$PLAN_FILE")"
+RUN_EPOCH="$WAVEMILL_RUN_EPOCH"
 RESOLVED_BASE_REF="$(jq -r '.resolvedBaseRef // empty' "$PLAN_FILE")"
 BASE_REF_PREFLIGHT_JSON="$(jq -c '.baseRefPreflight // empty' "$PLAN_FILE" 2>/dev/null || true)"
 WORKTREE_ROOT="$(jq -r '.worktreeRoot' "$PLAN_FILE")"
@@ -67,6 +69,7 @@ export SESSION REPO_DIR BASE_BRANCH RESOLVED_BASE_REF WORKTREE_ROOT PLANNING_MOD
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
 export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
+export WAVEMILL_RUN_EPOCH RUN_EPOCH
 
 source "$LIB_DIR/wavemill-common.sh"
 source "$LIB_DIR/agent-adapters.sh"
@@ -439,6 +442,8 @@ write_monitor_env() {
     write_shell_assignment "REQUIRE_CONFIRM" "$REQUIRE_CONFIRM"
     write_shell_assignment "DRY_RUN" "$DRY_RUN"
     write_shell_assignment "BASE_BRANCH" "$BASE_BRANCH"
+    write_shell_assignment "WAVEMILL_RUN_EPOCH" "$WAVEMILL_RUN_EPOCH"
+    write_shell_assignment "RUN_EPOCH" "$RUN_EPOCH"
     write_shell_assignment "PROJECT_NAME" "$PROJECT_NAME"
     write_shell_assignment "PLANNING_MODE" "$PLANNING_MODE"
     write_shell_assignment "AGENT_CMD" "$AGENT_CMD"

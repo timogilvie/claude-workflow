@@ -139,6 +139,7 @@ write_plan() {
     --arg session "$session" \
     --arg repoDir "$repo_dir" \
     --arg baseBranch "main" \
+    --arg runEpoch "20260908T000000Z-startup-test" \
     --arg worktreeRoot "$repo_dir/worktrees" \
     --arg planningMode "interactive" \
     --arg agentCmd "claude" \
@@ -156,6 +157,7 @@ write_plan() {
       session: $session,
       repoDir: $repoDir,
       baseBranch: $baseBranch,
+      runEpoch: $runEpoch,
       worktreeRoot: $worktreeRoot,
       planningMode: $planningMode,
       agentCmd: $agentCmd,
@@ -645,6 +647,17 @@ if [[ -f "$SUCCESS_MONITOR_ENV" ]] && grep -q '^TASKS_FILE=' "$SUCCESS_MONITOR_E
   pass "startup runner writes the monitor env inside tmux startup"
 else
   fail "startup runner did not write the monitor env"
+fi
+
+if [[ -f "$SUCCESS_MONITOR_ENV" ]] \
+  && grep -q '^WAVEMILL_RUN_EPOCH=20260908T000000Z-startup-test$' "$SUCCESS_MONITOR_ENV" \
+  && grep -q '^RUN_EPOCH=20260908T000000Z-startup-test$' "$SUCCESS_MONITOR_ENV" \
+  && [[ "$(jq -r '.tasks["HOK-1001"].lifecycle.launchContract.runEpoch // empty' "$STATE_FILE")" == "20260908T000000Z-startup-test" ]]; then
+  pass "startup runner persists and exports the run epoch"
+else
+  fail "startup runner did not propagate run epoch into task state and monitor env"
+  dump_file_on_failure "workflow-state" "$STATE_FILE"
+  dump_file_on_failure "monitor-env" "$SUCCESS_MONITOR_ENV"
 fi
 
 if grep -q "respawn-pane -k -t startup-success:mill.0" "$MOCK_TMUX_LOG"; then

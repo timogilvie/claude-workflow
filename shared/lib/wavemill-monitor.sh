@@ -223,6 +223,9 @@ source "$LIB_DIR/wavemill-common.sh"
 if [[ -f "$LIB_DIR/terminal-reconciler.sh" ]]; then
 source "$LIB_DIR/terminal-reconciler.sh"
 fi
+if [[ -f "$LIB_DIR/startup-terminal-preflight.sh" ]]; then
+source "$LIB_DIR/startup-terminal-preflight.sh"
+fi
 # Queue-health helpers used by the dependency queue planner path.
 # Sourced after wavemill-common.sh so state_mutate is available.
 if [[ -f "$LIB_DIR/queue-health.sh" ]]; then
@@ -6090,6 +6093,21 @@ _restore_inflight_task_window_if_missing() {
 
   if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
     log "debug" "$issue → queue-owned released task has no pane to restore"
+    return 0
+  fi
+
+  if declare -F startup_preflight_task_blocks_restore >/dev/null 2>&1 \
+    && startup_preflight_task_blocks_restore "$issue"; then
+    local terminal_reason terminal_pr
+    terminal_reason="$(startup_preflight_restore_terminal_reason "$issue")"
+    terminal_pr="$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // .tasks[$i].lifecycle.deliveryEvidence.prNumber // ""')"
+    log "debug" "$issue → terminal persisted state blocks $phase pane restoration ($terminal_reason)"
+    if [[ "$terminal_reason" == "recovery_failure" && "$(read_state_value "" --arg i "$issue" '.tasks[$i].startupPreflight.verdict // ""')" == verification-required* ]]; then
+      set_window_attention_state "$issue-$slug" "needs-user" || true
+    elif declare -F wavemill_reconcile_terminal >/dev/null 2>&1; then
+      wavemill_reconcile_terminal "$SESSION" "$issue" "$terminal_reason" "$terminal_pr" || true
+    fi
+    _RESTORE_STATE="none"
     return 0
   fi
 
@@ -12381,7 +12399,19 @@ if [[ -f "$STATE_FILE" ]]; then
     BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
     SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
     [[ -n "$PR" ]] && PR_BY_ISSUE["$ISSUE"]="$PR"
-  done < <(jq -r '.tasks | to_entries[] | "\(.key)|\(.value.slug // "")|\(.value.branch // "")|\(.value.pr // "")"' "$STATE_FILE" 2>/dev/null)
+  done < <(jq -r "$(task_lifecycle_jq_filter '
+    def wm_preflight_fully_reconciled:
+      (((.paneReleased // false) == true)
+       or ((.lifecycle.resourceDisposition // "") | IN("released","reaped")))
+      and ([.terminalReconciliations[]? | select((.linearApplied // true) != true)] | length == 0);
+    (.tasks // {})
+    | to_entries[]
+    | select(
+        (((.value | wm_workflow_outcome) == "active") and ((.value | wm_terminal_status) | not))
+        or ((.value | wm_preflight_fully_reconciled) | not)
+      )
+    | "\(.key)|\(.value.slug // "")|\(.value.branch // "")|\(.value.pr // "")"
+  ')" "$STATE_FILE" 2>/dev/null)
 fi
 
 # Overlay tasks selected in this launch.
@@ -13283,6 +13313,12 @@ monitor_issue_state() {
 	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
 	  if [[ "$task_status" == "aborted" ]]; then
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
+	    return 0
+	  fi
+	  if [[ "$task_status" == "superseded" ]]; then
+	    if declare -F wavemill_reconcile_terminal >/dev/null 2>&1; then
+	      wavemill_reconcile_terminal "$SESSION" "$ISSUE" "challenge_superseded" "$PR" || true
+	    fi
 	    return 0
 	  fi
 	  if [[ -n "$challenge_aborted" && -z "$PR" && -n "$pair_id_for_cleanup" ]] \

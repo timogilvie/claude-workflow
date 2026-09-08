@@ -61,6 +61,9 @@ source "$SCRIPT_DIR/queue-health.sh"
 if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
 source "$SCRIPT_DIR/terminal-reconciler.sh"
 fi
+if [[ -f "$SCRIPT_DIR/startup-terminal-preflight.sh" ]]; then
+source "$SCRIPT_DIR/startup-terminal-preflight.sh"
+fi
 load_config "$REPO_DIR"
 
 # ── Nested invocation guards (HOK-1214) ──────────────────────────
@@ -611,6 +614,7 @@ write_launch_plan() {
     --arg session "$SESSION" \
     --arg repoDir "$REPO_DIR" \
     --arg baseBranch "$BASE_BRANCH" \
+    --arg runEpoch "${WAVEMILL_RUN_EPOCH:-${RUN_EPOCH:-}}" \
     --arg resolvedBaseRef "${WAVEMILL_RESOLVED_BASE_REF:-}" \
     --argjson baseRefPreflight "${WAVEMILL_BASE_REF_PREFLIGHT_JSON:-null}" \
     --arg worktreeRoot "$WORKTREE_ROOT" \
@@ -644,6 +648,7 @@ write_launch_plan() {
       session: $session,
       repoDir: $repoDir,
       baseBranch: $baseBranch,
+      runEpoch: $runEpoch,
       resolvedBaseRef: (if $resolvedBaseRef == "" then null else $resolvedBaseRef end),
       baseRefPreflight: $baseRefPreflight,
       worktreeRoot: $worktreeRoot,
@@ -1364,18 +1369,21 @@ trap cleanup_on_exit INT TERM
 # Initialize state ledger
 init_state_ledger
 
+WAVEMILL_RUN_EPOCH="${WAVEMILL_RUN_EPOCH:-${RUN_EPOCH:-$(date -u +%Y%m%dT%H%M%SZ)-$$}}"
+RUN_EPOCH="$WAVEMILL_RUN_EPOCH"
+export WAVEMILL_RUN_EPOCH RUN_EPOCH
+
 
 cleanup_terminal_missing_worktree_entries() {
   local terminal_issues
-  terminal_issues=$(jq -r '
+  terminal_issues=$(jq -r "$(task_lifecycle_jq_filter '
     (.tasks // {})
     | to_entries[]
     | select((.value.worktree // "") != "")
-    | select(.value.status as $status
-        | ["aborted","merged","completed-external","complete","completed","closed","done"] | index($status))
+    | select(.value | wm_terminal_status)
     | select((.value.worktree | type) == "string")
-    | "\(.key)|\(.value.worktree)|\(.value.status)"
-  ' "$STATE_FILE" 2>/dev/null || true)
+    | "\(.key)|\(.value.worktree)|\(.value.status // .value.phase // "terminal")"
+  ')" "$STATE_FILE" 2>/dev/null || true)
   [[ -n "$terminal_issues" ]] || return 0
 
   local issue worktree status dropped=0
@@ -1434,7 +1442,12 @@ cleanup_stale_tasks() {
     # Check if PR was merged or closed
     elif [[ -n "$pr" ]]; then
       local pr_st
-      pr_st=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || echo "")
+      pr_st="$(jq -r --arg issue "$issue" --arg runEpoch "${WAVEMILL_RUN_EPOCH:-}" '
+        .tasks[$issue].startupPreflight
+        | select((.runEpoch // "") == $runEpoch)
+        | .prState // empty
+      ' "$STATE_FILE" 2>/dev/null || true)"
+      [[ -n "$pr_st" ]] || pr_st=$(pr_state "$pr" 2>/dev/null || echo "UNKNOWN")
       if [[ "$pr_st" == "MERGED" ]]; then
         should_clean=true
         full_clean=true
@@ -1466,6 +1479,8 @@ cleanup_stale_tasks() {
           ) >/dev/null 2>&1 &
     log "debug" "  ↳ Eval running in background; log: $eval_log"
         fi
+      elif [[ "$pr_st" == "UNKNOWN" ]]; then
+        log "debug" "  Retaining $issue during stale cleanup: PR #$pr state unavailable"
       fi
     fi
 
@@ -1504,15 +1519,13 @@ cleanup_stale_tasks() {
 
 detect_inflight_tasks() {
   [[ -f "$STATE_FILE" ]] || return 0
-  jq -r '
+  jq -r "$(task_lifecycle_jq_filter '
     (.tasks // {})
     | to_entries[]
-    | select((.value.status // "") as $status
-        | $status != "merged"
-        and $status != "completed-external"
-        and $status != "aborted")
+    | select((.value | wm_workflow_outcome) == "active")
+    | select((.value | wm_terminal_status) | not)
     | "\(.key)|\(.value.slug // "")|\(.value.phase // "executing")|\(.value.agent // "")|\(.value.branch // "")|\(.value.worktree // "")|\(.value.challengeRole // "")"
-  ' "$STATE_FILE" 2>/dev/null || true
+  ')" "$STATE_FILE" 2>/dev/null || true
 }
 
 count_inflight_primary_tasks() {
@@ -1531,6 +1544,18 @@ count_inflight_primary_tasks() {
 clear_inflight_tasks_from_state() {
   state_mutate "$STATE_FILE" '.tasks = {} | .updated = (now | todate)'
 }
+
+if declare -F wavemill_startup_terminal_preflight >/dev/null 2>&1; then
+  if [[ "$(startup_preflight_enabled)" == "true" ]]; then
+    log "debug" "Running startup terminal preflight"
+    wavemill_startup_terminal_preflight "$STATE_FILE" "$SESSION" || true
+  else
+    log "debug" "Startup terminal preflight disabled"
+    startup_preflight_stamp_run_epoch "$STATE_FILE" "$WAVEMILL_RUN_EPOCH" || true
+  fi
+elif [[ -f "$STATE_FILE" ]]; then
+  state_mutate "$STATE_FILE" '.runEpoch = $runEpoch | .updated = (now | todateiso8601)' --arg runEpoch "$WAVEMILL_RUN_EPOCH" >/dev/null 2>&1 || true
+fi
 
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
 if (( stale_count > 0 )); then
