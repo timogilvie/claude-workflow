@@ -102,6 +102,8 @@ run_startup_preflight_replay() {
     BASE_BRANCH="auto/integration"
     API_TIMEOUT=5
     AGENT_CMD="codex"
+    TOOLS_DIR="'"$INCIDENT_REPO_DIR"'/tools"
+    LIB_DIR="'"$INCIDENT_REPO_DIR"'/shared/lib"
     REQUIRE_CONFIRM=false
     DRY_RUN=false
     CHALLENGE_AUTO_MERGE=false
