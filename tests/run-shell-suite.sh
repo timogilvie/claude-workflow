@@ -69,6 +69,7 @@ TESTS=(
   completed-task-cleanup.test.sh
   error-recovery.test.sh
   startup-terminal-prune.test.sh
+  fresh-launch-terminal-preflight.test.sh
   planning-validation.test.sh
   wavemill-guards.test.sh
   wavemill-status.test.sh

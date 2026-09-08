@@ -955,6 +955,102 @@ wavemill_record_pr_delivery_evidence() {
     --arg mergedAt "${WAVEMILL_PR_EVIDENCE_MERGED_AT:-}" >/dev/null 2>&1 || true
 }
 
+# ---------------------------------------------------------------------------
+# Fresh-launch PR-attempt resolver (HOK-2965)
+# ---------------------------------------------------------------------------
+# Query GitHub PRs for a branch and classify the best candidate against
+# current-attempt evidence (issue lifecycle, expected base, head SHA).
+#
+# Populates RESOLVE_PR_* globals and returns 0:
+#   RESOLVE_PR_CLASSIFICATION: current-open | current-merged |
+#     historical-closed | historical-merged | unverifiable | none
+#   RESOLVE_PR_NUMBER: PR number or empty
+#   RESOLVE_PR_STATE: MERGED | CLOSED | OPEN | empty
+#   RESOLVE_PR_HEAD_REF: head ref name
+#   RESOLVE_PR_BASE_REF: base ref name
+#   RESOLVE_PR_HEAD_OID: head SHA
+#   RESOLVE_PR_EVIDENCE_JSON: raw gh output
+#
+# Arguments:
+#   $1 - branch name
+#   $2 - expected base branch (e.g. auto/integration)
+#   $3 - issue id (for logging)
+resolve_pr_for_launch() {
+  local branch="${1:-}" expected_base="${2:-}" issue="${3:-}"
+  RESOLVE_PR_CLASSIFICATION="none"
+  RESOLVE_PR_NUMBER=""
+  RESOLVE_PR_STATE=""
+  RESOLVE_PR_HEAD_REF=""
+  RESOLVE_PR_BASE_REF=""
+  RESOLVE_PR_HEAD_OID=""
+  RESOLVE_PR_EVIDENCE_JSON=""
+  [[ -n "$branch" ]] || return 0
+
+  local pr_json
+  if ! pr_json=$(_with_timeout "${API_TIMEOUT:-30}" gh pr list \
+      --head "$branch" --state all \
+      --json number,state,headRefName,baseRefName,headRefOid,mergedAt \
+      --jq '.' 2>/dev/null); then
+    RESOLVE_PR_CLASSIFICATION="unverifiable"
+    return 0
+  fi
+  [[ -n "$pr_json" ]] || return 0
+  if ! jq -e 'type == "array"' >/dev/null 2>&1 <<<"$pr_json"; then
+    RESOLVE_PR_CLASSIFICATION="unverifiable"
+    return 0
+  fi
+
+  local count
+  count=$(jq 'length' <<<"$pr_json" 2>/dev/null || echo 0)
+  [[ "$count" -gt 0 ]] || return 0
+
+  local best_pr best_state best_base best_head best_oid best_merged
+  best_pr=$(jq -r '.[0].number // empty' <<<"$pr_json" 2>/dev/null || true)
+  best_state=$(jq -r '.[0].state // empty' <<<"$pr_json" 2>/dev/null || true)
+  best_base=$(jq -r '.[0].baseRefName // empty' <<<"$pr_json" 2>/dev/null || true)
+  best_head=$(jq -r '.[0].headRefName // empty' <<<"$pr_json" 2>/dev/null || true)
+  best_oid=$(jq -r '.[0].headRefOid // empty' <<<"$pr_json" 2>/dev/null || true)
+  best_merged=$(jq -r '.[0].mergedAt // empty' <<<"$pr_json" 2>/dev/null || true)
+
+  RESOLVE_PR_NUMBER="$best_pr"
+  RESOLVE_PR_STATE="$best_state"
+  RESOLVE_PR_HEAD_REF="$best_head"
+  RESOLVE_PR_BASE_REF="$best_base"
+  RESOLVE_PR_HEAD_OID="$best_oid"
+  RESOLVE_PR_EVIDENCE_JSON="$pr_json"
+
+  local base_matches=false
+  if [[ -n "$expected_base" && "$best_base" == "$expected_base" ]]; then
+    base_matches=true
+  elif [[ -z "$expected_base" ]]; then
+    base_matches=true
+  fi
+
+  case "$best_state" in
+    OPEN)
+      if [[ "$base_matches" == true ]]; then
+        RESOLVE_PR_CLASSIFICATION="current-open"
+      else
+        RESOLVE_PR_CLASSIFICATION="historical-closed"
+      fi
+      ;;
+    MERGED)
+      if [[ "$base_matches" == true ]]; then
+        RESOLVE_PR_CLASSIFICATION="current-merged"
+      else
+        RESOLVE_PR_CLASSIFICATION="historical-merged"
+      fi
+      ;;
+    CLOSED)
+      RESOLVE_PR_CLASSIFICATION="historical-closed"
+      ;;
+    *)
+      RESOLVE_PR_CLASSIFICATION="unverifiable"
+      ;;
+  esac
+  return 0
+}
+
 # Records the structured evidence for one cleanup classification. Reads the
 # classification context (task_branch, wt_dir, issue, pr, PR evidence, final
 # check state, ...) from the calling scope of

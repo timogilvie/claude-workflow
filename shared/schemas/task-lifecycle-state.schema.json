@@ -196,6 +196,31 @@
     },
     "verificationRequiredReason": {
       "type": "string"
+    },
+    "launchReconciliation": {
+      "type": "object",
+      "description": "Fresh-launch PR reconciliation evidence (HOK-2965)",
+      "additionalProperties": true,
+      "properties": {
+        "classification": {
+          "type": "string"
+        },
+        "prNumber": {
+          "type": "string"
+        },
+        "prState": {
+          "type": "string"
+        },
+        "baseRef": {
+          "type": "string"
+        },
+        "checkedAt": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "string"
+        }
+      }
     }
   },
   "allOf": [

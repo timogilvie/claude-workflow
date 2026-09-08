@@ -467,6 +467,23 @@ JSON
     maybe_run_challenge_comparison() { :; }
     dispatch_queued_children_for_parent() { :; }
     find_pr_for_branch() { printf "%s\n" "${FOUND_PR:-$PR}"; }
+    resolve_pr_for_launch() {
+      local _pr="${FOUND_PR:-$PR}"
+      RESOLVE_PR_CLASSIFICATION="none"
+      RESOLVE_PR_NUMBER=""
+      RESOLVE_PR_STATE=""
+      RESOLVE_PR_HEAD_REF=""
+      RESOLVE_PR_BASE_REF=""
+      RESOLVE_PR_HEAD_OID=""
+      RESOLVE_PR_EVIDENCE_JSON=""
+      if [[ -n "$_pr" ]]; then
+        RESOLVE_PR_CLASSIFICATION="current-open"
+        RESOLVE_PR_NUMBER="$_pr"
+        RESOLVE_PR_STATE="OPEN"
+      fi
+    }
+    _restore_inflight_task_window_if_missing() { return 0; }
+    effective_task_base_branch() { printf '%s\n' "${BASE_BRANCH:-main}"; }
     get_task_phase() { printf "%s\n" "$CURRENT_PHASE"; }
     pr_state() { printf "%s\n" "$PR_STATUS"; }
     resolve_phase() { printf "%s\n" "$RESOLVED_PHASE"; }
