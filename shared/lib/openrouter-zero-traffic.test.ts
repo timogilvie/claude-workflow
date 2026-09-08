@@ -69,6 +69,7 @@ function writeOpenRouterCert(repoDir: string): void {
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
     // Dynamic so the artifact stays inside CERTIFICATION_TTL_DAYS regardless of run date.
     certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+    expiresAt: '2099-12-31T23:59:59.999Z',
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));
 }
