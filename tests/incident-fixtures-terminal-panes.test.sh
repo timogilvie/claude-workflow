@@ -75,11 +75,68 @@ count_matching_lines() {
   grep -c "$pattern" "$file" 2>/dev/null || true
 }
 
+tmux_window_count() {
+  incident_tmux list-windows -t "$SESSION" -F '#{window_name}' 2>/dev/null | wc -l | tr -d ' '
+}
+
+run_startup_preflight_replay() {
+  local before_windows after_windows before_agent after_agent rc=0
+  before_windows="$(tmux_window_count)"
+  before_agent="$(grep -cE '(^| )(claude|codex|native-agent)( |$)' "$NPX_CALLS_LOG" 2>/dev/null || true)"
+
+  PATH="$(incident_scenario_path)" \
+  SESSION="$SESSION" \
+  REPO_DIR="$REPO_DIR" \
+  WORKTREE_ROOT="$WORKTREE_ROOT" \
+  STATE_FILE="$STATE_FILE" \
+  STATE_DIR="$REPO_DIR/.wavemill" \
+  MILL_LOG_FILE="$MILL_LOG_FILE" \
+  TMUX_TMPDIR="$TMUX_TMPDIR" \
+  TMUX_SOCK="$TMUX_SOCK" \
+  WAVEMILL_RUN_EPOCH="incident-startup-epoch" \
+  bash -c '
+    set -Eeuo pipefail
+    source "'"$INCIDENT_COMMON_SCRIPT"'"
+    source "'"$INCIDENT_TERMINAL_RECONCILER_SCRIPT"'"
+    source "'"$INCIDENT_REPO_DIR"'/shared/lib/startup-terminal-preflight.sh"
+    BASE_BRANCH="auto/integration"
+    API_TIMEOUT=5
+    AGENT_CMD="codex"
+    REQUIRE_CONFIRM=false
+    DRY_RUN=false
+    CHALLENGE_AUTO_MERGE=false
+    declare -Ag CLEANED=()
+    log() { :; }
+    log_warn() { :; }
+    log_error() { :; }
+    execute() { "$@" >/dev/null 2>&1 || true; }
+    startup_terminal_preflight "$SESSION"
+  ' || rc=$?
+
+  after_windows="$(tmux_window_count)"
+  after_agent="$(grep -cE '(^| )(claude|codex|native-agent)( |$)' "$NPX_CALLS_LOG" 2>/dev/null || true)"
+  {
+    printf 'rc=%s\n' "$rc"
+    printf 'new_window_delta=%s\n' "$(( after_windows > before_windows ? after_windows - before_windows : 0 ))"
+    printf 'agent_launch_delta=%s\n' "$((after_agent - before_agent))"
+    printf 'slot_count=%s\n' "$(incident_slot_consuming_count)"
+  }
+}
+
 # ============================================================================
 # Scenario 1: HOK-2595-style closed non-challenge task, retained pane
 # ============================================================================
 echo ""
 echo "=== Scenario 1: incident_hok2595_closed_non_challenge_pr_retained_pane ==="
+
+incident_scenario_new "hok2595-startup"
+incident_scenario_start_tmux
+incident_setup_hok2595_closed_non_challenge
+startup_replay_2595="$(run_startup_preflight_replay)"
+expect_eq "$(tick_field "$startup_replay_2595" rc)" "0" "hok2595 startup preflight: completed"
+expect_eq "$(tick_field "$startup_replay_2595" new_window_delta)" "0" "hok2595 startup preflight: created zero new task panes"
+expect_eq "$(tick_field "$startup_replay_2595" agent_launch_delta)" "0" "hok2595 startup preflight: launched zero agents"
+expect_eq "$(tick_field "$startup_replay_2595" slot_count)" "0" "hok2595 startup preflight: terminal state consumes no slots"
 
 incident_scenario_new "hok2595"
 incident_scenario_start_tmux
@@ -133,6 +190,15 @@ echo "  scenario 1 diagnostics: tick1=$tick1_cleanup tick2=$tick2_cleanup remote
 # ============================================================================
 echo ""
 echo "=== Scenario 2: incident_hok2913c_challenger_superseded_pane_retained ==="
+
+incident_scenario_new "hok2913c-startup"
+incident_scenario_start_tmux
+incident_setup_hok2913c_superseded_challenger
+startup_replay_2913="$(run_startup_preflight_replay)"
+expect_eq "$(tick_field "$startup_replay_2913" rc)" "0" "hok2913c startup preflight: completed"
+expect_eq "$(tick_field "$startup_replay_2913" new_window_delta)" "0" "hok2913c startup preflight: created zero new task panes"
+expect_eq "$(tick_field "$startup_replay_2913" agent_launch_delta)" "0" "hok2913c startup preflight: launched zero agents"
+expect_eq "$(tick_field "$startup_replay_2913" slot_count)" "0" "hok2913c startup preflight: terminal state consumes no slots"
 
 incident_scenario_new "hok2913c"
 incident_scenario_start_tmux

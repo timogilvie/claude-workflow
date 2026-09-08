@@ -112,6 +112,21 @@ test('legacy HOK-2913 challenger state never authorizes remote branch deletion',
   assert.equal(normalized.branchDeletionAuthorized, false);
 });
 
+test('legacy superseded challenger is terminal and does not consume a slot', () => {
+  const normalized = normalizeTaskLifecycle({
+    slug: 'review-scope-guards-challenger',
+    status: 'superseded',
+    phase: 'superseded',
+    challengeRole: 'challenger',
+    challengePairId: 'HOK-2913',
+    paneState: 'active',
+  });
+
+  assert.equal(normalized.lifecycle.workflowOutcome, 'closed');
+  assert.equal(normalized.lifecycle.resourceDisposition, 'verification-required');
+  assert.equal(normalized.slotConsumes, false);
+});
+
 test('unknown lifecycle fields survive normalization', () => {
   const normalized = normalizeTaskLifecycle({
     lifecycle: {
