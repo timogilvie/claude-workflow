@@ -67,7 +67,7 @@ function writeOpenRouterCert(repoDir: string): void {
     model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
-    certifiedAt: '2026-07-10T00:00:00.000Z',
+    certifiedAt: new Date().toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));
 }
