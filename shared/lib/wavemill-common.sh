@@ -759,11 +759,17 @@ cleanup_episode_should_attempt() {
 _wavemill_write_preserved_branch_incident() {
   local reason="$1" branch="$2" wt_dir="$3" base_branch="$4" commits_ahead="$5" commit_shas="$6" caller="${7:-cleanup}"
   local base_sha="${8:-}" local_head_sha="${9:-}" remote_head_sha="${10:-}" verification_reason="${11:-}"
+  local extras_json="${12:-}" marker_subdir="${13:-preserved-branches}"
   local incident_dir marker_name marker_path tmp_path created_at cleanup_fingerprint=""
 
   [[ -n "${REPO_DIR:-}" && -n "$branch" ]] || return 1
 
-  incident_dir="$REPO_DIR/.wavemill/incidents/preserved-branches"
+  [[ -n "$extras_json" ]] || extras_json="{}"
+  if ! jq -e . >/dev/null 2>&1 <<<"$extras_json"; then
+    extras_json="{}"
+  fi
+
+  incident_dir="$REPO_DIR/.wavemill/incidents/$marker_subdir"
   marker_name="${branch//\//__}.json"
   marker_path="$incident_dir/$marker_name"
   created_at="$(cleanup_episode_now_iso 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -793,6 +799,7 @@ _wavemill_write_preserved_branch_incident() {
     --arg remoteHeadSha "$remote_head_sha" \
     --arg verificationReason "$verification_reason" \
     --arg cleanupFingerprint "$cleanup_fingerprint" \
+    --argjson extras "$extras_json" \
     '{
       reason: $reason,
       branch: $branch,
@@ -807,7 +814,8 @@ _wavemill_write_preserved_branch_incident() {
     | if $localHeadSha != "" then . + {localHeadSha: $localHeadSha} else . end
     | if $remoteHeadSha != "" then . + {remoteHeadSha: $remoteHeadSha} else . end
     | if $cleanupFingerprint != "" then . + {cleanupFingerprint: $cleanupFingerprint} else . end
-    | if $verificationReason != "" then . + {verificationReason: $verificationReason} else . end' > "$tmp_path"; then
+    | if $verificationReason != "" then . + {verificationReason: $verificationReason} else . end
+    | . + $extras' > "$tmp_path"; then
     if [[ -f "$marker_path" ]] && cmp -s "$tmp_path" "$marker_path"; then
       rm -f "$tmp_path" 2>/dev/null || true
       return 0
@@ -820,11 +828,209 @@ _wavemill_write_preserved_branch_incident() {
   return 1
 }
 
+# Structured cleanup outcome vocabulary (HOK-2953). The cleanup helper
+# publishes exactly one of these through WAVEMILL_CLEANUP_OUTCOME:
+#   safe_ancestor        local head is an ancestor of the effective base
+#   safe_exact_remote    remote task branch exists and carries the local head
+#   safe_terminal_pr_head terminal merged PR headRefOid equals the local head
+#   safe_noop            nothing deletable (protected/non-task/absent branch)
+#   retain_dirty         worktree dirty or unreadable
+#   retain_unpublished   local head not proven on base, remote, or PR head
+#   retain_closed_unmerged PR closed without merge and no abandon authority
+#   retain_unverifiable  required evidence missing, contradictory, or unfetchable
+#   operation_failed     deletion was authorized but removal failed
+cleanup_outcome_is_safe() {
+  case "${1:-${WAVEMILL_CLEANUP_OUTCOME:-}}" in
+    safe_ancestor|safe_exact_remote|safe_terminal_pr_head|safe_noop) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup_outcome_is_retain() {
+  case "${1:-${WAVEMILL_CLEANUP_OUTCOME:-}}" in
+    retain_dirty|retain_unpublished|retain_closed_unmerged|retain_unverifiable) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+cleanup_outcome_is_failed() {
+  [[ "${1:-${WAVEMILL_CLEANUP_OUTCOME:-}}" == "operation_failed" ]]
+}
+
+# Scenario-specific operator recovery guidance for a cleanup classification.
+_wavemill_cleanup_operator_guidance() {
+  local classification="$1" branch="$2" detail="${3:-}"
+  case "$classification" in
+    retain_dirty)
+      printf 'Worktree has uncommitted or unreadable changes; inspect them, then commit, stash, or discard before retrying cleanup.'
+      ;;
+    retain_unpublished)
+      if [[ "$detail" == "changed_after_pr_head" ]]; then
+        printf 'Local head of %s moved past the recorded PR head; inspect the extra commits (git log %s) and open a follow-up PR if they matter before deleting.' "$branch" "$branch"
+      else
+        printf 'Branch %s has commits not proven on the base, the remote, or a merged PR; push the branch or explicitly abandon it. Do not recreate deleted remote branches automatically.' "$branch"
+      fi
+      ;;
+    retain_closed_unmerged)
+      printf 'The PR for %s was closed without merging, so this work was never delivered; reopen or recreate the PR, or explicitly abandon the branch.' "$branch"
+      ;;
+    retain_unverifiable)
+      printf 'Delivery evidence for %s could not be fetched or was contradictory (%s); retry once GitHub/origin is reachable and do not delete manually without verified delivery.' "$branch" "${detail:-unknown}"
+      ;;
+    operation_failed)
+      printf 'Deletion was authorized but worktree or branch removal failed; inspect `git worktree list` and remove manually if appropriate.'
+      ;;
+    *)
+      printf ''
+      ;;
+  esac
+}
+
+# Fetch authoritative terminal PR evidence with a bounded gh call (HOK-2953).
+# On success populates the WAVEMILL_PR_EVIDENCE_* globals and returns 0. Any
+# fetch, parse, or unexpected-state failure clears them and returns 1 so
+# callers fail closed to retention.
+wavemill_fetch_pr_terminal_evidence() {
+  local pr="${1:-}"
+  WAVEMILL_PR_EVIDENCE_JSON=""
+  WAVEMILL_PR_EVIDENCE_STATE=""
+  WAVEMILL_PR_EVIDENCE_MERGED_AT=""
+  WAVEMILL_PR_EVIDENCE_HEAD_OID=""
+  WAVEMILL_PR_EVIDENCE_HEAD_REF=""
+  WAVEMILL_PR_EVIDENCE_BASE_REF=""
+  WAVEMILL_PR_EVIDENCE_MERGE_SHA=""
+  [[ -n "$pr" ]] || return 1
+
+  local details state
+  if ! details=$(_with_timeout "${API_TIMEOUT:-30}" gh pr view "$pr" \
+    --json number,state,mergedAt,headRefOid,headRefName,baseRefName,mergeCommit 2>/dev/null); then
+    return 1
+  fi
+  [[ -n "$details" ]] || return 1
+  jq -e . >/dev/null 2>&1 <<<"$details" || return 1
+
+  state=$(jq -r '.state // empty' <<<"$details" 2>/dev/null || true)
+  case "$state" in
+    MERGED|CLOSED|OPEN) ;;
+    *) return 1 ;;
+  esac
+
+  WAVEMILL_PR_EVIDENCE_JSON="$details"
+  WAVEMILL_PR_EVIDENCE_STATE="$state"
+  WAVEMILL_PR_EVIDENCE_MERGED_AT=$(jq -r '.mergedAt // empty' <<<"$details" 2>/dev/null || true)
+  WAVEMILL_PR_EVIDENCE_HEAD_OID=$(jq -r '.headRefOid // empty' <<<"$details" 2>/dev/null || true)
+  WAVEMILL_PR_EVIDENCE_HEAD_REF=$(jq -r '.headRefName // empty' <<<"$details" 2>/dev/null || true)
+  WAVEMILL_PR_EVIDENCE_BASE_REF=$(jq -r '.baseRefName // empty' <<<"$details" 2>/dev/null || true)
+  WAVEMILL_PR_EVIDENCE_MERGE_SHA=$(jq -r '.mergeCommit.oid // empty' <<<"$details" 2>/dev/null || true)
+  return 0
+}
+
+# Persist the fetched PR terminal evidence into the durable task lifecycle
+# state so the deletion authority used by cleanup survives auditing.
+wavemill_record_pr_delivery_evidence() {
+  local issue="${1:-}" pr="${2:-}"
+  [[ -n "$issue" && -n "$pr" && -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]] || return 0
+  declare -F state_mutate >/dev/null 2>&1 || return 0
+  state_mutate "$STATE_FILE" '
+    if .tasks[$issue] == null then . else
+      .tasks[$issue].lifecycle.deliveryEvidence = ((.tasks[$issue].lifecycle.deliveryEvidence // {}) + ({
+        prNumber: $pr,
+        prState: $state,
+        prBaseBranch: $baseRef,
+        prHeadSha: $headOid,
+        mergeSha: $mergeSha,
+        prMergedAt: $mergedAt
+      } | with_entries(select(.value != ""))))
+      | .tasks[$issue].updated = (now | todateiso8601)
+    end' \
+    --arg issue "$issue" --arg pr "$pr" \
+    --arg state "${WAVEMILL_PR_EVIDENCE_STATE:-}" \
+    --arg baseRef "${WAVEMILL_PR_EVIDENCE_BASE_REF:-}" \
+    --arg headOid "${WAVEMILL_PR_EVIDENCE_HEAD_OID:-}" \
+    --arg mergeSha "${WAVEMILL_PR_EVIDENCE_MERGE_SHA:-}" \
+    --arg mergedAt "${WAVEMILL_PR_EVIDENCE_MERGED_AT:-}" >/dev/null 2>&1 || true
+}
+
+# Records the structured evidence for one cleanup classification. Reads the
+# classification context (task_branch, wt_dir, issue, pr, PR evidence, final
+# check state, ...) from the calling scope of
+# safe_remove_task_worktree_and_branch via bash dynamic scoping; only that
+# function may call it. Arguments: classification, legacy marker reason,
+# verification detail, safeToDelete flag, marker subdirectory.
+_wavemill_record_cleanup_decision() {
+  local classification="$1" legacy_reason="$2" detail="$3" safe_to_delete="$4" marker_subdir="${5:-preserved-branches}"
+  local guidance extras
+  guidance="$(_wavemill_cleanup_operator_guidance "$classification" "$task_branch" "$detail")"
+  extras="$(jq -cn \
+    --arg classification "$classification" \
+    --arg safeToDelete "$safe_to_delete" \
+    --arg issue "${issue:-}" \
+    --arg prNumber "${pr:-}" \
+    --arg prState "${pr_state_evidence:-}" \
+    --arg prMergedAt "${pr_merged_at:-}" \
+    --arg prHeadOid "${pr_head_oid:-}" \
+    --arg prHeadRefName "${pr_head_ref:-}" \
+    --arg prBaseBranch "${pr_base_ref:-}" \
+    --arg prLookupStatus "${pr_lookup_status:-}" \
+    --arg configuredMergeMethod "${configured_merge_method:-}" \
+    --arg remoteBranchExists "${remote_branch_exists:-false}" \
+    --arg remoteLookupRc "${remote_lookup_rc:-}" \
+    --arg finalHeadSha "${final_head_sha:-}" \
+    --arg finalDirtyStatus "${final_dirty:-}" \
+    --arg finalCheckPassed "${final_check_passed:-}" \
+    --arg authority "${cleanup_authority:-}" \
+    --arg operatorGuidance "$guidance" \
+    '{
+      schemaVersion: 2,
+      classification: $classification,
+      safeToDelete: ($safeToDelete == "true"),
+      remoteBranchExists: ($remoteBranchExists == "true")
+    }
+    | if $issue != "" then . + {issue: $issue} else . end
+    | if $prNumber != "" then . + {prNumber: $prNumber} else . end
+    | if $prState != "" then . + {prState: $prState} else . end
+    | if $prMergedAt != "" then . + {prMergedAt: $prMergedAt} else . end
+    | if $prHeadOid != "" then . + {prHeadOid: $prHeadOid} else . end
+    | if $prHeadRefName != "" then . + {prHeadRefName: $prHeadRefName} else . end
+    | if $prBaseBranch != "" then . + {prBaseBranch: $prBaseBranch} else . end
+    | if $prLookupStatus != "" then . + {prLookupStatus: $prLookupStatus} else . end
+    | if $configuredMergeMethod != "" then . + {configuredMergeMethod: $configuredMergeMethod} else . end
+    | if $remoteLookupRc != "" then . + {remoteLookupRc: $remoteLookupRc} else . end
+    | if $finalHeadSha != "" then . + {finalHeadSha: $finalHeadSha} else . end
+    | if $finalDirtyStatus != "" then . + {finalDirtyStatus: $finalDirtyStatus} else . end
+    | if $finalCheckPassed != "" then . + {finalCheckPassed: ($finalCheckPassed == "true")} else . end
+    | if $authority != "" then . + {authority: $authority} else . end
+    | if $operatorGuidance != "" then . + {operatorGuidance: $operatorGuidance} else . end' 2>/dev/null || printf '{}')"
+  _wavemill_write_preserved_branch_incident "$legacy_reason" "$task_branch" "$wt_dir" "$base_branch" \
+    "$commits_ahead" "$commit_shas" "$caller" "$base_sha" "$local_head_sha" "$remote_head_sha" \
+    "$detail" "$extras" "$marker_subdir"
+}
+
+# Rollback gate for PR-aware deletion authority (HOK-2953). Disabling it
+# skips only the safe_terminal_pr_head authority; every other path is
+# unchanged and affected branches fall back to retention with evidence.
+wavemill_pr_aware_cleanup_enabled() {
+  case "${WAVEMILL_PR_AWARE_CLEANUP:-1}" in
+    0|false|no|off) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# Classify a completed task branch/worktree into a structured cleanup outcome
+# (HOK-2953), record the evidence used, and delete only under a safe
+# classification that is re-verified immediately before removal. The
+# classification is published through WAVEMILL_CLEANUP_OUTCOME; exit codes
+# stay 0 (safe/no-op), 10 (retained), 20 (operation failed) for callers.
+# Optional issue/pr args unlock the terminal-PR deletion authority; when
+# absent they are derived best-effort from durable task state, and derivation
+# is never itself deletion proof - only exact PR headRefOid equality is.
 safe_remove_task_worktree_and_branch() {
   local wt_dir="${1:-}"
   local task_branch="${2:-}"
   local base_branch="${3:-${BASE_BRANCH:-main}}"
   local caller="${4:-cleanup}"
+  local issue="${5:-}"
+  local pr="${6:-}"
   local branch_is_deletable="false"
   local dirty_status=""
   local local_branch_exists="false"
@@ -833,12 +1039,11 @@ safe_remove_task_worktree_and_branch() {
   local base_sha=""
   local local_head_sha=""
   local initial_head_sha=""
-  local verified_head_sha=""
   local remote_head_sha=""
   local remote_timeout=""
   local remote_ref=""
   local remote_output=""
-  local remote_lookup_rc=0
+  local remote_lookup_rc=""
   local fetch_rc=0
   local commits_ahead=""
   local commit_shas=""
@@ -848,12 +1053,28 @@ safe_remove_task_worktree_and_branch() {
   local remote_contains_head="false"
   local preservation_reason="unpushed_commits"
   local verification_reason=""
+  local classification=""
+  local cleanup_authority=""
+  local pr_lookup_status=""
+  local pr_state_evidence=""
+  local pr_merged_at=""
+  local pr_head_oid=""
+  local pr_head_ref=""
+  local pr_base_ref=""
+  local configured_merge_method=""
+  local contract_base_branch=""
+  local final_head_sha=""
+  local final_dirty=""
+  local final_check_passed=""
+
+  WAVEMILL_CLEANUP_OUTCOME=""
 
   SAFE_CLEANUP_PRESERVATION_REASON=""
   SAFE_CLEANUP_VERIFICATION_REASON=""
 
   if [[ "$task_branch" == "main" || "$task_branch" == "master" ]]; then
     log_warn "  Refusing to delete protected branch: $task_branch"
+    WAVEMILL_CLEANUP_OUTCOME="safe_noop"
     return 0
   fi
 
@@ -864,23 +1085,42 @@ safe_remove_task_worktree_and_branch() {
     esac
   fi
 
+  if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" && -n "$task_branch" ]]; then
+    if [[ -z "$issue" ]]; then
+      issue="$(jq -r --arg branch "$task_branch" --arg wt "$wt_dir" '
+        .tasks | to_entries[]
+        | select(((.value.branch // "") == $branch) or (($wt != "") and ((.value.worktree // "") == $wt)))
+        | .key' "$STATE_FILE" 2>/dev/null | head -n1 || true)"
+    fi
+    if [[ -n "$issue" ]]; then
+      if [[ -z "$pr" ]]; then
+        pr="$(jq -r --arg i "$issue" '.tasks[$i].pr // .tasks[$i].lifecycle.deliveryEvidence.prNumber // empty' "$STATE_FILE" 2>/dev/null || true)"
+      fi
+      contract_base_branch="$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.launchContract.baseBranch // empty' "$STATE_FILE" 2>/dev/null || true)"
+      configured_merge_method="$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.launchContract.mergeMethod // empty' "$STATE_FILE" 2>/dev/null || true)"
+      [[ -n "$contract_base_branch" ]] && base_branch="$contract_base_branch"
+    fi
+  fi
+
   if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
     if ! dirty_status="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)"; then
       SAFE_CLEANUP_PRESERVATION_REASON="dirty_worktree"
       SAFE_CLEANUP_VERIFICATION_REASON="dirty_status_failed"
-      if ! _wavemill_write_preserved_branch_incident "dirty_worktree" "$task_branch" "$wt_dir" "$base_branch" "" "" "$caller"; then
+      if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "worktree_status_unreadable" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
-      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} status could not be inspected; retained (branch=${task_branch})."
+      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} status could not be inspected; retained (branch=${task_branch}). $(_wavemill_cleanup_operator_guidance retain_dirty "$task_branch")"
+      WAVEMILL_CLEANUP_OUTCOME="retain_dirty"
       return 10
     fi
     if [[ -n "$dirty_status" ]]; then
       SAFE_CLEANUP_PRESERVATION_REASON="dirty_worktree"
       SAFE_CLEANUP_VERIFICATION_REASON=""
-      if ! _wavemill_write_preserved_branch_incident "dirty_worktree" "$task_branch" "$wt_dir" "$base_branch" "" "" "$caller"; then
+      if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "uncommitted_changes" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
-      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} has uncommitted changes; retained (branch=${task_branch})."
+      log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} has uncommitted changes; retained (branch=${task_branch}). $(_wavemill_cleanup_operator_guidance retain_dirty "$task_branch")"
+      WAVEMILL_CLEANUP_OUTCOME="retain_dirty"
       return 10
     fi
   fi
@@ -962,42 +1202,129 @@ safe_remove_task_worktree_and_branch() {
         fi
 
         if [[ -z "$verification_reason" && "$remote_contains_head" != "true" ]]; then
-          verification_reason="remote_missing_local_head"
+          if wavemill_pr_aware_cleanup_enabled && [[ -n "$pr" ]]; then
+            pr_lookup_status="attempted"
+            if wavemill_fetch_pr_terminal_evidence "$pr"; then
+              pr_lookup_status="ok"
+              pr_state_evidence="$WAVEMILL_PR_EVIDENCE_STATE"
+              pr_merged_at="$WAVEMILL_PR_EVIDENCE_MERGED_AT"
+              pr_head_oid="$WAVEMILL_PR_EVIDENCE_HEAD_OID"
+              pr_head_ref="$WAVEMILL_PR_EVIDENCE_HEAD_REF"
+              pr_base_ref="$WAVEMILL_PR_EVIDENCE_BASE_REF"
+              wavemill_record_pr_delivery_evidence "$issue" "$pr"
+              if [[ "$pr_state_evidence" == "MERGED" ]]; then
+                if [[ "$pr_base_ref" != "$base_branch" ]]; then
+                  classification="retain_unverifiable"
+                  verification_reason="pr_base_mismatch:${pr_base_ref:-unknown}"
+                elif [[ -z "$pr_head_oid" ]]; then
+                  classification="retain_unverifiable"
+                  verification_reason="pr_head_oid_missing"
+                elif [[ "$pr_head_oid" == "$local_head_sha" ]]; then
+                  classification="safe_terminal_pr_head"
+                  cleanup_authority="PR #${pr} merged into ${base_branch} with headRefOid exactly equal to local head ${local_head_sha}"
+                else
+                  classification="retain_unpublished"
+                  verification_reason="changed_after_pr_head"
+                fi
+              elif [[ "$pr_state_evidence" == "CLOSED" && -z "$pr_merged_at" ]]; then
+                classification="retain_closed_unmerged"
+                verification_reason="pr_closed_unmerged"
+              else
+                classification="retain_unpublished"
+                verification_reason="pr_not_terminal:${pr_state_evidence}"
+              fi
+            else
+              pr_lookup_status="failed"
+              classification="retain_unverifiable"
+              verification_reason="pr_lookup_failed"
+            fi
+          fi
+          if [[ -z "$classification" ]]; then
+            verification_reason="remote_missing_local_head"
+          fi
         fi
       fi
     fi
 
-    if [[ -z "$verification_reason" ]]; then
-      if ! verified_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "${task_branch}^{commit}" 2>/dev/null)" \
-        || [[ "$verified_head_sha" != "$initial_head_sha" ]]; then
-        local_head_sha="${verified_head_sha:-$local_head_sha}"
-        verification_reason="local_head_changed"
+    if [[ -z "$classification" ]]; then
+      if [[ -n "$verification_reason" ]]; then
+        case "$verification_reason" in
+          remote_missing_local_head) classification="retain_unpublished" ;;
+          *) classification="retain_unverifiable" ;;
+        esac
+      elif [[ "$merged_to_base" == "true" ]] || { [[ "$rev_list_ok" == "true" ]] && (( commits_ahead == 0 )); }; then
+        classification="safe_ancestor"
+        cleanup_authority="local head ${local_head_sha} is an ancestor of origin/${base_branch}"
+      elif [[ "$remote_contains_head" == "true" ]]; then
+        classification="safe_exact_remote"
+        cleanup_authority="remote branch origin/${task_branch} carries local head ${local_head_sha}"
+      else
+        classification="retain_unverifiable"
+        verification_reason="unclassified"
       fi
     fi
 
-    if [[ -n "$verification_reason" ]]; then
+    if cleanup_outcome_is_retain "$classification"; then
       SAFE_CLEANUP_PRESERVATION_REASON="$preservation_reason"
       SAFE_CLEANUP_VERIFICATION_REASON="$verification_reason"
       commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
-      if [[ "$verification_reason" == remote_missing_local_head ]]; then
-        commits_ahead="${commits_ahead:-}"
-      else
-        commits_ahead=""
-      fi
-      if ! _wavemill_write_preserved_branch_incident "$preservation_reason" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller" "$base_sha" "$local_head_sha" "$remote_head_sha" "$verification_reason"; then
+      case "$verification_reason" in
+        remote_missing_local_head|changed_after_pr_head|pr_closed_unmerged|pr_lookup_failed|pr_not_terminal:*|pr_base_mismatch:*|pr_head_oid_missing)
+          commits_ahead="${commits_ahead:-}"
+          ;;
+        *)
+          commits_ahead=""
+          ;;
+      esac
+      if ! _wavemill_record_cleanup_decision "$classification" "unpushed_commits" "$verification_reason" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
-      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch cleanup lacked authoritative git evidence ($verification_reason); retained. Recover with: git -C $REPO_DIR push origin $task_branch"
+      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch cleanup lacked authoritative delivery evidence (${classification}: ${verification_reason}); retained. $(_wavemill_cleanup_operator_guidance "$classification" "$task_branch" "$verification_reason")"
+      WAVEMILL_CLEANUP_OUTCOME="$classification"
       return 10
     fi
+  fi
 
-    if (( commits_ahead > 0 )) && [[ "$remote_branch_exists" != "true" && "$merged_to_base" != "true" ]]; then
+  [[ -z "$classification" ]] && classification="safe_noop"
+
+  # TOCTOU guard: re-verify the worktree and branch head immediately before
+  # deletion so a commit or edit landing after classification retains the
+  # work instead of losing it.
+  if [[ "$local_branch_exists" == "true" ]]; then
+    if [[ -n "$wt_dir" && -d "$wt_dir" ]]; then
+      if ! final_dirty="$(git -C "$wt_dir" status --porcelain --untracked-files=all 2>/dev/null)" || [[ -n "$final_dirty" ]]; then
+        final_check_passed="false"
+        if ! _wavemill_record_cleanup_decision "retain_dirty" "dirty_worktree" "worktree_dirty_before_deletion" "false"; then
+          log_warn "  Failed to write preserved-branch incident marker for $task_branch"
+        fi
+        log_warn "  PRESERVED_DIRTY_WORKTREE: ${wt_dir} became dirty before deletion; retained (branch=${task_branch}). $(_wavemill_cleanup_operator_guidance retain_dirty "$task_branch")"
+        WAVEMILL_CLEANUP_OUTCOME="retain_dirty"
+        return 10
+      fi
+    fi
+    if ! final_head_sha="$(git -C "$REPO_DIR" rev-parse --verify "${task_branch}^{commit}" 2>/dev/null)" \
+      || [[ "$final_head_sha" != "$initial_head_sha" ]]; then
+      local_head_sha="${final_head_sha:-$local_head_sha}"
+      verification_reason="local_head_changed"
       SAFE_CLEANUP_PRESERVATION_REASON="unpushed_commits"
-      SAFE_CLEANUP_VERIFICATION_REASON="remote_branch_absent"
-      if ! _wavemill_write_preserved_branch_incident "unpushed_commits" "$task_branch" "$wt_dir" "$base_branch" "$commits_ahead" "$commit_shas" "$caller" "$base_sha" "$local_head_sha" "$remote_head_sha" "remote_branch_absent"; then
+      SAFE_CLEANUP_VERIFICATION_REASON="$verification_reason"
+      final_check_passed="false"
+      commit_shas="$(git -C "$REPO_DIR" rev-list --max-count=20 "$task_branch" 2>/dev/null || true)"
+      commits_ahead=""
+      if ! _wavemill_record_cleanup_decision "retain_unverifiable" "unpushed_commits" "local_head_changed" "false"; then
         log_warn "  Failed to write preserved-branch incident marker for $task_branch"
       fi
-      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch has $commits_ahead unpushed commit(s) not on origin/${base_branch}; retained. Recover with: git -C $REPO_DIR push origin $task_branch"
+      log_warn "  PRESERVED_UNPUSHED_WORK: $task_branch cleanup lacked authoritative git evidence (local_head_changed); retained. $(_wavemill_cleanup_operator_guidance retain_unverifiable "$task_branch" local_head_changed)"
+      WAVEMILL_CLEANUP_OUTCOME="retain_unverifiable"
+      return 10
+    fi
+    final_check_passed="true"
+
+    # Deletion requires a durable authority record. If the record cannot be
+    # persisted, retain rather than delete without recorded authority.
+    if ! _wavemill_record_cleanup_decision "$classification" "$classification" "" "true" "cleanup-decisions"; then
+      log_warn "  Failed to persist cleanup authority record for $task_branch; retained without deletion"
+      WAVEMILL_CLEANUP_OUTCOME="retain_unverifiable"
       return 10
     fi
   fi
@@ -1007,6 +1334,8 @@ safe_remove_task_worktree_and_branch() {
       log "debug" "Removed worktree: $wt_dir"
     else
       log_warn "  Worktree cleanup failed: $wt_dir"
+      WAVEMILL_CLEANUP_OUTCOME="operation_failed"
+      _wavemill_record_cleanup_decision "operation_failed" "operation_failed" "worktree_remove_failed" "false" "cleanup-decisions" 2>/dev/null || true
       return 20
     fi
   fi
@@ -1018,10 +1347,13 @@ safe_remove_task_worktree_and_branch() {
       log "debug" "Deleted local branch: $task_branch"
     else
       log_warn "  Local branch cleanup failed after worktree removal: $task_branch"
+      WAVEMILL_CLEANUP_OUTCOME="operation_failed"
+      _wavemill_record_cleanup_decision "operation_failed" "operation_failed" "local_branch_delete_failed" "false" "cleanup-decisions" 2>/dev/null || true
       return 20
     fi
   fi
 
+  WAVEMILL_CLEANUP_OUTCOME="$classification"
   return 0
 }
 
@@ -1035,7 +1367,7 @@ cleanup_completed_task() {
   local completion_reason="${3:-}"
   local win="$issue-$slug"
   local target=""
-  local target_gone="false"
+  local release_rc=0
   local pr=""
   local cleanup_candidate_json=""
   local cleanup_decision=""
@@ -1065,21 +1397,32 @@ cleanup_completed_task() {
     return 1
   fi
 
-  target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
-  if [[ -z "$target" ]] || ! command -v tmux >/dev/null 2>&1; then
-    target_gone="true"
+  # HOK-2952: pane release is a shared primitive (archive -> durable record
+  # -> verified kill -> truthful state) and is decoupled from the git steps
+  # below - a later git failure or preservation never re-couples the pane.
+  if declare -F wavemill_release_terminal_pane >/dev/null 2>&1; then
+    wavemill_release_terminal_pane "$SESSION" "$issue" "$slug" "${completion_reason:-completed}" "$pr" || release_rc=$?
   else
-    wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
-    if ! _tmux_window_target_exists "$SESSION" "$target"; then
-      target_gone="true"
+    # Legacy fallback for contexts that source wavemill-common.sh without
+    # terminal-reconciler.sh (no archive/record support).
+    target="$(_tmux_task_window_target "$SESSION" "$issue" "$slug" "${STATE_FILE:-}" "${WORKTREE_ROOT}/${slug}" 2>/dev/null || true)"
+    if [[ -n "$target" ]] && command -v tmux >/dev/null 2>&1; then
+      wavemill_cleanup_run tmux kill-window -t "$(_tmux_target_join "$SESSION" "$target")" 2>/dev/null || true
+      if _tmux_window_target_exists "$SESSION" "$target"; then
+        release_rc=1
+      fi
+    fi
+    if [[ "$release_rc" -eq 0 ]]; then
+      rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
     fi
   fi
 
-  if [[ "$target_gone" != "true" ]]; then
+  if [[ "$release_rc" -ne 0 ]]; then
+    local release_reason="${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-tmux-window-close-failed}"
     if [[ -n "$cleanup_candidate_json" ]]; then
-      cleanup_episode_record_outcome "$issue" "transient" "operational" "tmux-window-close-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "$release_reason" "$cleanup_candidate_json" "" 2>/dev/null || true
     fi
-    set_task_lifecycle_disposition "$issue" "" "retained" "tmux-window-close-failed" "cleanup_completed_task" 2>/dev/null || true
+    set_task_lifecycle_disposition "$issue" "" "retained" "$release_reason" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup could not close tmux window; keeping task state"
     return 1
@@ -1090,30 +1433,31 @@ cleanup_completed_task() {
   local wt_dir="${WORKTREE_ROOT}/${slug}"
   local task_branch="task/${slug}"
   local cleanup_rc=0
+  local cleanup_outcome=""
   if [[ -n "$cleanup_candidate_json" ]]; then
     CLEANUP_EPISODE_CURRENT_FINGERPRINT="$(printf '%s' "$cleanup_candidate_json" | jq -r '.fingerprint // empty' 2>/dev/null || true)"
   else
     CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   fi
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" || cleanup_rc=$?
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" "$issue" "$pr" || cleanup_rc=$?
+  cleanup_outcome="${WAVEMILL_CLEANUP_OUTCOME:-}"
   CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
-  if [[ "$cleanup_rc" -eq 20 ]]; then
+  if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed "$cleanup_outcome"; then
     if [[ -n "$cleanup_candidate_json" ]]; then
       cleanup_episode_record_outcome "$issue" "transient" "operational" "worktree-or-local-branch-cleanup-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
     fi
     set_task_lifecycle_disposition "$issue" "" "retained" "worktree-or-local-branch-cleanup-failed" "cleanup_completed_task" 2>/dev/null || true
     return 1
-  fi
-  if [[ "$cleanup_rc" -eq 10 ]]; then
+  elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
     local preservation_reason="${SAFE_CLEANUP_PRESERVATION_REASON:-}"
     local verification_reason="${SAFE_CLEANUP_VERIFICATION_REASON:-}"
-    local cleanup_outcome="local-work-preserved"
+    local episode_outcome="${cleanup_outcome:-local-work-preserved}"
     local episode_disposition="retained"
     local episode_failure_class="expected-preservation"
     if [[ -n "$verification_reason" ]]; then
-      cleanup_outcome="$verification_reason"
+      episode_outcome="$verification_reason"
     elif [[ -n "$preservation_reason" ]]; then
-      cleanup_outcome="$preservation_reason"
+      episode_outcome="$preservation_reason"
     fi
     case "$verification_reason" in
       base_fetch_failed:*|remote_head_lookup_failed:*|remote_task_fetch_failed:*|origin_base_unresolvable)
@@ -1125,16 +1469,12 @@ cleanup_completed_task() {
       cleanup_candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "" "$pr" 2>/dev/null || printf '%s' "$cleanup_candidate_json")"
     fi
     if [[ -n "$cleanup_candidate_json" ]]; then
-      cleanup_episode_record_outcome "$issue" "$episode_disposition" "$episode_failure_class" "$cleanup_outcome" "$cleanup_candidate_json" "" 2>/dev/null || true
-    else
-      set_task_lifecycle_disposition "$issue" "" "retained" "$cleanup_outcome" "cleanup_completed_task" 2>/dev/null || true
+      cleanup_episode_record_outcome "$issue" "$episode_disposition" "$episode_failure_class" "$episode_outcome" "$cleanup_candidate_json" "" 2>/dev/null || true
     fi
+    set_task_lifecycle_disposition "$issue" "" "verification-required" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue cleanup preserved local work; keeping task state"
-    if [[ "$episode_disposition" == "transient" ]]; then
-      return 1
-    fi
-    return 0
+    log_warn "  $issue cleanup preserved local work (${cleanup_outcome:-unclassified}); keeping task state"
+    return 1
   fi
 
   if ! cleanup_remote_task_branch "$issue" "$task_branch" "$pr"; then

@@ -45,6 +45,25 @@
             },
             "additionalProperties": false
         },
+        "terminal": {
+            "type": "object",
+            "description": "Terminal-state resource handling (HOK-2952). Governs how task tmux panes are released once a workflow reaches a terminal reason, independently of git worktree/branch cleanup.",
+            "properties": {
+                "paneRelease": {
+                    "type": "object",
+                    "description": "Automated pane release for terminal reasons (pr_merged, pr_closed_unmerged, challenge_*). Disabling is the HOK-2952 rollback lever: it stops automated release while truthful state fields, archived transcripts, and terminal records keep being written. The WAVEMILL_TERMINAL_PANE_RELEASE=0 env var overrides this to disabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Archive diagnostics, write a durable terminal record, and kill the task pane when a workflow reaches a terminal reason."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "git": {
             "type": "object",
             "description": "Git behavior shared across wavemill workflows.",

@@ -136,7 +136,6 @@ run_monitor_case() {
     RESTORE_SHOULD_FAIL="false"
     READY_LAUNCH_RC=0
     ABORTED="false"
-    CLEANUP_CLOSED_PR="false"
     ATTENTION_STATE=""
     SET_PHASE_TO=""
     READY_LAUNCH_COUNT=0
@@ -340,7 +339,6 @@ JSON
       ready_closed_cleanup)
         CURRENT_PHASE="ready"
         PR_STATUS="CLOSED"
-        CLEANUP_CLOSED_PR="true"
         ;;
       review_to_ready_pending)
         READY_LAUNCH_RC=4
@@ -530,7 +528,8 @@ JSON
     ready_queue_state() { printf "%s\n" "$QUEUE_STATE"; }
     mark_ready_stale() { :; }
     ready_candidate_selected() { return 1; }
-    should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
+    closed_pr_resource_policy() { printf "%s\n" "full-cleanup"; }
+    wavemill_release_terminal_pane() { return 0; }
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
     transient_error_recovery_pending() { return 1; }
