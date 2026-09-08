@@ -123,6 +123,7 @@ for f in \
   "$REPO_DIR"/tests/agent-tmux-runtime-guard.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
   "$REPO_DIR"/tests/startup-terminal-preflight.test.sh \
+  "$REPO_DIR"/tests/startup-cleanup-integration.test.sh \
   "$REPO_DIR"/tests/challenge-intent-roundtrip.test.sh \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
   "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
