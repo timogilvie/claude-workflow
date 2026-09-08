@@ -64,6 +64,7 @@ TESTS=(
   lifecycle-harness.test.sh
   archive-stage-artifacts.test.sh
   cleanup-branch.test.sh
+  cleanup-episodes.test.sh
   completed-task-cleanup.test.sh
   error-recovery.test.sh
   startup-terminal-prune.test.sh

@@ -11,8 +11,19 @@ Each task may carry `lifecycle` in `.wavemill/workflow-state.json`:
 - `launchContract`: immutable effective launch and cleanup contract. It records base branch, base SHA, integration mode, merge method, remote branch deletion policy, challenge role/pair, session/run epoch, and window ID.
 - `deliveryEvidence`: mutable evidence learned later, including reviewed/published head SHA, PR head SHA, PR number/state/base, and merge SHA.
 - `retention`: required when a terminal outcome still has allocated, retained, or verification-required resources.
+- `cleanupEpisode`: durable cleanup scheduler state for terminal cleanup attempts.
 
 The lifecycle schema is `shared/schemas/task-lifecycle-state.schema.json`; TypeScript readers use `shared/lib/task-lifecycle.ts`.
+
+## Cleanup Episodes
+
+Terminal cleanup records one cleanup episode per evidence fingerprint. The episode stores `fingerprint`, `fingerprintInputs`, `firstAttemptAt`, `lastAttemptAt`, `attemptCount`, `nextRetryAt`, `lastOutcome`, `failureClass`, and `requiredOperatorAction`.
+
+Expected preservation, such as dirty worktrees, unpublished commits, divergent local heads, or local head changes during verification, is terminally reconciled as `resourceDisposition=retained` with `cleanupEpisode.disposition=retained`. Unchanged retained fingerprints are not retried automatically and do not consume slots. Cleanup retries only when the local evidence fingerprint changes or an operator records acknowledgement/recovery in state.
+
+Transient external failures, such as remote/base fetch or remote-head lookup failures, record `cleanupEpisode.disposition=transient` and a bounded exponential `nextRetryAt`. When the retry budget is exhausted, the episode moves to `needs-user` and repeated unchanged polls stay quiet until evidence changes or an operator acknowledges recovery.
+
+Disabling `cleanup.episodes.enabled` stops new scheduler gating but does not delete existing episode evidence, authorize deletion, or make retained terminal tasks slot-consuming.
 
 ## Slot Accounting
 

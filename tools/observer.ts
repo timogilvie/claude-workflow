@@ -19,7 +19,7 @@ import {
   detectRepoConfigIntegrity,
   type ConfigIntegrityIssue,
 } from '../shared/lib/config-integrity.ts';
-import { normalizeTaskLifecycle, type TaskLifecycleState } from '../shared/lib/task-lifecycle.ts';
+import { normalizeTaskLifecycle, type CleanupEpisode, type TaskLifecycleState } from '../shared/lib/task-lifecycle.ts';
 
 type Severity = 'urgent' | 'high' | 'medium' | 'low';
 type Category = 'stuck' | 'crash' | 'warning' | 'ux' | 'operational';
@@ -545,6 +545,59 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
+function taskCleanupEpisode(task: TaskState): CleanupEpisode | undefined {
+  const lifecycle = task.lifecycle && typeof task.lifecycle === 'object' && !Array.isArray(task.lifecycle)
+    ? task.lifecycle as Record<string, unknown>
+    : undefined;
+  const episode = lifecycle?.cleanupEpisode;
+  if (!episode || typeof episode !== 'object' || Array.isArray(episode)) return undefined;
+  const record = episode as Record<string, unknown>;
+  if (typeof record.fingerprint !== 'string' || typeof record.disposition !== 'string') return undefined;
+  return record as CleanupEpisode;
+}
+
+function cleanupEpisodeExplainsResidue(task: TaskState): boolean {
+  const episode = taskCleanupEpisode(task);
+  return episode !== undefined && episode.disposition !== 'reaped';
+}
+
+function cleanupEpisodeFinding(repo: RepoSnapshot, task: TaskState): Finding | undefined {
+  const episode = taskCleanupEpisode(task);
+  if (!episode || episode.disposition === 'reaped') return undefined;
+
+  const fingerprint = episode.fingerprint;
+  const nextRetry = episode.nextRetryAt ? `nextRetryAt=${episode.nextRetryAt}` : 'nextRetryAt=none';
+  const action = typeof episode.requiredOperatorAction === 'string' && episode.requiredOperatorAction.length > 0
+    ? episode.requiredOperatorAction
+    : 'Inspect cleanup evidence and acknowledge recovery when resolved.';
+  const titleDisposition = episode.disposition === 'transient'
+    ? 'waiting for cleanup retry'
+    : `cleanup ${episode.disposition}`;
+  const severity: Severity = episode.disposition === 'transient' ? 'medium' : 'high';
+
+  return {
+    id: `cleanup-episode-${repo.session}-${task.issue}-${fingerprint.slice(0, 12)}`,
+    severity,
+    category: 'operational',
+    confidence: 'high',
+    session: repo.session,
+    repoDir: repo.repoDir,
+    issue: task.issue,
+    title: `${task.issue} ${titleDisposition}`,
+    evidence: [
+      `disposition=${episode.disposition}`,
+      `failureClass=${episode.failureClass}`,
+      `lastOutcome=${episode.lastOutcome ?? 'unknown'}`,
+      `attempts=${episode.attemptCount}`,
+      `fingerprint=${fingerprint}`,
+      nextRetry,
+      `branch=${task.branch ?? episode.fingerprintInputs?.branch ?? 'unknown'}`,
+      `worktree=${task.worktree ?? episode.fingerprintInputs?.worktree ?? 'unknown'}`,
+    ],
+    recommendation: action,
+  };
+}
+
 function snapshotRepos(sessions: string[], options: ObserverOptions): RepoSnapshot[] {
   const repos: RepoSnapshot[] = [];
   const seen = new Set<string>();
@@ -933,6 +986,9 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
     // used to die silently (HOK-2911/HOK-2912).
     const repoBaseBranch = observerBaseBranch(repo.repoDir);
     for (const task of repo.tasks) {
+      const cleanupFinding = cleanupEpisodeFinding(repo, task);
+      if (cleanupFinding) findings.push(cleanupFinding);
+
       const ageMinutes = taskAgeMinutes(task, repo, now);
       // The stale age gate doubles as protection against phase-handoff false
       // positives: a healthy handoff briefly has no live agent but keeps
@@ -940,6 +996,7 @@ export function buildFindings(snapshot: Omit<ObserverSnapshot, 'findings'>, opti
       if (ageMinutes === undefined || !Number.isFinite(ageMinutes) || ageMinutes <= options.staleMinutes) continue;
 
       const normalized = normalizedLifecycle(task);
+      if (cleanupEpisodeExplainsResidue(task)) continue;
       const isTerminal = taskHasTerminalResidueStatus(task);
       const liveEvidence = taskHasLiveExecutionEvidence(repo, task, snapshot.panes, snapshot.processes);
       // Active tasks with a live agent are healthy; terminal tasks are inspected

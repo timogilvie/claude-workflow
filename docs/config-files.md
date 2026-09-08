@@ -113,6 +113,30 @@ comparison identifies a winner.
 - `true`: tend lets the winning PR enter the merge path automatically and
   closes or cleans up the loser.
 
+### Cleanup Episodes
+
+Terminal cleanup episodes are enabled by default. They persist cleanup evidence
+in `.wavemill/workflow-state.json`, skip unchanged retained cleanup evidence,
+and retry transient cleanup failures with bounded backoff:
+
+```json
+{
+  "cleanup": {
+    "episodes": {
+      "enabled": true,
+      "maxAttempts": 5,
+      "backoffBaseSeconds": 30,
+      "backoffCapSeconds": 900,
+      "jitterRatio": 0.2
+    }
+  }
+}
+```
+
+Set `cleanup.episodes.enabled` to `false` only as a rollback for scheduler
+gating. Existing cleanup evidence is preserved, and retained terminal tasks
+still do not consume active mill slots.
+
 ## Recommended Placement by Category
 
 Use `.wavemill-config.json` for:
