@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "arbiter-survival-label.schema.json",
+  "title": "ArbiterSurvivalLabelV1",
+  "description": "Arbiter S2 survival label: one label per merged PR per elapsed horizon (14/30/60 days), aggregated over normalized PR line ranges walked on the integration branch (never main blame). Producer: the wavemill survival labeller. Consumer: Hokusai/hokusai-data-pipeline training ingest. Contract doc: docs/arbiter/survival-label-contract.md. Any change requires a schema_version bump coordinated with the pipeline.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "prUrl",
+    "horizon_days",
+    "label_provenance",
+    "line_ranges",
+    "outcome",
+    "envelope"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0.0",
+      "description": "Contract version of this label object. Must equal envelope.schema_version (asserted by the contract test)."
+    },
+    "prUrl": {
+      "type": "string",
+      "pattern": "^https?://\\S+$",
+      "description": "Stable PR URL; the join key with eval and training corpora. Repo-agnostic: any host that assigns URLs to PRs (GitHub/GitLab/Gitea/Bitbucket)."
+    },
+    "horizon_days": {
+      "enum": [14, 30, 60],
+      "description": "Elapsed forward window after merge_sha. One label object per (prUrl, horizon_days)."
+    },
+    "label_provenance": {
+      "enum": ["harvested", "owner_corrected"],
+      "description": "harvested = automatic label; owner_corrected = Tier-2b correction (weighted heavier downstream; weight ratio pinned in the pipeline, not here)."
+    },
+    "line_ranges": {
+      "type": "array",
+      "description": "Normalized-then-anchored PR-changed line ranges: the denominator and matching substrate. Whitespace-only hunks stripped, formatter/linter-only lines stripped, rename tracking applied. May be empty only for missing/ineligible labels (e.g. insufficient_line_range_substrate).",
+      "items": { "$ref": "#/$defs/lineRange" }
+    },
+    "outcome": { "$ref": "#/$defs/survivalOutcome" },
+    "envelope": { "$ref": "#/$defs/reproducibilityEnvelope" },
+    "owner_correction": { "$ref": "#/$defs/ownerCorrection" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "label_provenance": { "const": "owner_corrected" } },
+        "required": ["label_provenance"]
+      },
+      "then": { "required": ["owner_correction"] },
+      "else": { "not": { "required": ["owner_correction"] } }
+    }
+  ],
+  "$defs": {
+    "gitSha": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40}|[0-9a-f]{64})$",
+      "description": "Full git object id, lowercase hex (40 chars for SHA-1 repos, 64 for SHA-256 repos)."
+    },
+    "sha256Hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase hex SHA-256 digest."
+    },
+    "isoUtcTimestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "description": "ISO-8601 UTC timestamp with trailing Z."
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version string, e.g. 1.0.0."
+    },
+    "reasonCode": {
+      "enum": [
+        "exact_revert",
+        "line_range_followup",
+        "linked_issue_or_pr",
+        "pre_merge_human_edit",
+        "task_redispatch",
+        "substantial_rewrite",
+        "no_evidence",
+        "unmerged_pr",
+        "missing_horizon",
+        "insufficient_history",
+        "insufficient_line_range_substrate",
+        "inaccessible_history",
+        "ambiguous_change"
+      ],
+      "description": "Typed reason code explaining the outcome. No free-form reason strings."
+    },
+    "missingReasonCode": {
+      "enum": [
+        "unmerged_pr",
+        "missing_horizon",
+        "insufficient_history",
+        "insufficient_line_range_substrate",
+        "inaccessible_history",
+        "ambiguous_change"
+      ],
+      "description": "Reason codes valid for a missing/ineligible label (report_outcome=null)."
+    },
+    "lineRangeAnchor": {
+      "type": "object",
+      "required": ["start", "end", "sha"],
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based inclusive start line."
+        },
+        "end": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based inclusive end line; end >= start."
+        },
+        "sha": {
+          "$ref": "#/$defs/gitSha",
+          "description": "Commit the coordinates are anchored to, so a consumer can re-check the substrate byte-exactly."
+        }
+      }
+    },
+    "lineRange": {
+      "type": "object",
+      "required": ["path", "old", "new"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Repo-relative path using / separators. For renames, the post-change path; rename tracking is applied at normalization time."
+        },
+        "old": {
+          "oneOf": [{ "$ref": "#/$defs/lineRangeAnchor" }, { "type": "null" }],
+          "description": "Pre-change coordinates anchored at the labelled PR's base for this file (pr_head_sha's parent lineage). Null for pure additions."
+        },
+        "new": {
+          "oneOf": [{ "$ref": "#/$defs/lineRangeAnchor" }, { "type": "null" }],
+          "description": "Post-change coordinates anchored at pr_head_sha. Null for pure deletions."
+        }
+      },
+      "not": {
+        "type": "object",
+        "properties": {
+          "old": { "type": "null" },
+          "new": { "type": "null" }
+        },
+        "required": ["old", "new"],
+        "description": "old and new must not both be null: an empty range carries no substrate."
+      }
+    },
+    "survivalOutcome": {
+      "type": "object",
+      "required": [
+        "survived",
+        "survival_ratio",
+        "reverted",
+        "undone_by",
+        "followup",
+        "report_outcome",
+        "reason_codes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "survived": {
+          "type": ["boolean", "null"],
+          "description": "true = no exact revert and no qualifying follow-up affected the normalized PR line ranges inside the horizon; false = ranges were exactly reverted or required qualifying follow-up; null = missing/ineligible."
+        },
+        "survival_ratio": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Line-weighted fraction of normalized PR-changed lines still present in the horizon terminal tree. Null for missing/ineligible."
+        },
+        "reverted": {
+          "type": ["boolean", "null"],
+          "description": "true only for exact/high-precision restoration of pre-change lines over the PR ranges. Null for missing/ineligible."
+        },
+        "undone_by": {
+          "enum": ["human", "agent", null],
+          "description": "Attributable dominant undoer for the undo event affecting the labelled ranges. Null for no undo, formatter-only churn, ambiguous/mixed attribution, or missing labels. Human undo is weighted heavily downstream; agent self-undo lightly."
+        },
+        "followup": {
+          "type": ["boolean", "null"],
+          "description": "true for qualifying line-range amendment, later PR/issue reference, same-task redispatch, or pre-merge human edit that materially undoes/replaces the candidate ranges before merge. Null for missing/ineligible."
+        },
+        "report_outcome": {
+          "enum": ["survived", "followup", "substantially_rewritten", "reverted", null],
+          "description": "Deterministic mutually exclusive derived field. Precedence: null (any component null) > reverted > substantially_rewritten (survival_ratio < versioned threshold) > followup > survived."
+        },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/reasonCode" },
+          "description": "Non-empty typed explanation of the outcome. Missing labels carry exactly one missing-reason code."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "report_outcome": { "const": null } },
+            "required": ["report_outcome"]
+          },
+          "then": {
+            "properties": {
+              "survived": { "type": "null" },
+              "survival_ratio": { "type": "null" },
+              "reverted": { "type": "null" },
+              "undone_by": { "type": "null" },
+              "followup": { "type": "null" },
+              "reason_codes": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "items": { "$ref": "#/$defs/missingReasonCode" }
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "survived": { "type": "boolean" },
+              "survival_ratio": { "type": "number" },
+              "reverted": { "type": "boolean" },
+              "followup": { "type": "boolean" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "report_outcome": { "const": "reverted" } },
+            "required": ["report_outcome"]
+          },
+          "then": {
+            "properties": {
+              "reverted": { "const": true },
+              "reason_codes": { "contains": { "const": "exact_revert" } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "report_outcome": { "const": "substantially_rewritten" } },
+            "required": ["report_outcome"]
+          },
+          "then": {
+            "properties": {
+              "reverted": { "const": false },
+              "reason_codes": { "contains": { "const": "substantial_rewrite" } }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "report_outcome": { "const": "followup" } },
+            "required": ["report_outcome"]
+          },
+          "then": {
+            "properties": {
+              "reverted": { "const": false },
+              "followup": { "const": true }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "report_outcome": { "const": "survived" } },
+            "required": ["report_outcome"]
+          },
+          "then": {
+            "properties": {
+              "survived": { "const": true },
+              "reverted": { "const": false },
+              "followup": { "const": false }
+            }
+          }
+        }
+      ]
+    },
+    "reproducibilityEnvelope": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "labeller_version",
+        "normalization_version",
+        "pr_head_sha",
+        "merge_sha",
+        "horizon_terminal_sha",
+        "integration_branch",
+        "computed_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/semver",
+          "description": "Contract version at emit time. Must equal the top-level schema_version."
+        },
+        "labeller_version": {
+          "$ref": "#/$defs/semver",
+          "description": "Semver of the labeller code that produced this label."
+        },
+        "normalization_version": {
+          "$ref": "#/$defs/semver",
+          "description": "Semver of the whitespace/rename/formatter normalizer and its threshold table (including the substantial-rewrite threshold)."
+        },
+        "pr_head_sha": {
+          "$ref": "#/$defs/gitSha",
+          "description": "Head commit of the labelled PR branch."
+        },
+        "merge_sha": {
+          "$ref": "#/$defs/gitSha",
+          "description": "Integration-branch merge commit for this PR. Never a main-branch squash commit."
+        },
+        "horizon_terminal_sha": {
+          "$ref": "#/$defs/gitSha",
+          "description": "Tip of integration_branch at (merge_sha committer time + horizon_days), resolved deterministically from the git graph."
+        },
+        "integration_branch": {
+          "type": "string",
+          "minLength": 1,
+          "not": { "const": "main" },
+          "description": "Branch the labeller walked, e.g. auto/integration. 'main' is rejected in v1.0.0: squash-promotion rewrites the SHA lineage the labeller needs."
+        },
+        "computed_at": {
+          "$ref": "#/$defs/isoUtcTimestamp",
+          "description": "When the labeller computed this label. Latest computed_at per (prUrl, horizon_days) wins in queries."
+        }
+      }
+    },
+    "ownerCorrection": {
+      "type": "object",
+      "required": ["supersedes", "correction"],
+      "additionalProperties": false,
+      "description": "Tier-2b owner correction. The harvested record is never mutated in place; a correction is an additional row that supersedes it by hash.",
+      "properties": {
+        "supersedes": {
+          "type": "object",
+          "required": ["schema_version", "computed_at", "label_hash"],
+          "additionalProperties": false,
+          "properties": {
+            "schema_version": {
+              "$ref": "#/$defs/semver",
+              "description": "schema_version of the superseded label."
+            },
+            "computed_at": {
+              "$ref": "#/$defs/isoUtcTimestamp",
+              "description": "envelope.computed_at of the superseded label."
+            },
+            "label_hash": {
+              "$ref": "#/$defs/sha256Hex",
+              "description": "SHA-256 of the canonical-JSON serialization of the superseded label (see canonicalHash in shared/lib/arbiter-survival-label.ts). Lets the pipeline find and invalidate/downweight a previously-trained-on row."
+            }
+          }
+        },
+        "correction": {
+          "type": "object",
+          "required": ["reason_code", "corrected_by", "corrected_at", "previous_report_outcome"],
+          "additionalProperties": false,
+          "properties": {
+            "reason_code": {
+              "oneOf": [{ "$ref": "#/$defs/reasonCode" }, { "const": "owner_dispute" }],
+              "description": "Why the owner corrected the label. owner_dispute covers disputes not expressible as a labeller reason code."
+            },
+            "corrected_by": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Identity of the human owner; opaque to this schema."
+            },
+            "corrected_at": {
+              "$ref": "#/$defs/isoUtcTimestamp",
+              "description": "When the correction was made."
+            },
+            "previous_report_outcome": {
+              "enum": ["survived", "followup", "substantially_rewritten", "reverted", null],
+              "description": "report_outcome of the superseded label, so the pipeline can compute the delta for an already-trained-on row."
+            },
+            "note": {
+              "type": "string",
+              "description": "Optional free-form owner note. Advisory only; never parsed by training."
+            }
+          }
+        }
+      }
+    }
+  }
+}
