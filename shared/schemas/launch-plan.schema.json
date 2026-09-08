@@ -82,6 +82,26 @@
                 "type": "string"
               }
             }
+          },
+          "launchReconciliation": {
+            "type": "object",
+            "description": "Fresh-launch PR reconciliation evidence (HOK-2965)",
+            "additionalProperties": true,
+            "properties": {
+              "classification": {
+                "type": "string",
+                "enum": ["current-open", "current-merged", "historical-closed", "historical-merged", "unverifiable", "none"]
+              },
+              "prNumber": {
+                "type": "string"
+              },
+              "prState": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string"
+              }
+            }
           }
         }
       }

@@ -9,6 +9,15 @@ source "$1"
 WAVEMILL_LIB_DIR="${WAVEMILL_LIB_DIR:-${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 source "$WAVEMILL_LIB_DIR/transient-marker.sh"
 
+# HOK-2965: Globals populated by resolve_pr_for_launch() from wavemill-common.sh
+RESOLVE_PR_CLASSIFICATION=""
+RESOLVE_PR_NUMBER=""
+RESOLVE_PR_STATE=""
+RESOLVE_PR_HEAD_REF=""
+RESOLVE_PR_BASE_REF=""
+RESOLVE_PR_HEAD_OID=""
+RESOLVE_PR_EVIDENCE_JSON=""
+
 run_linear_retry_drain_tick() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -13441,15 +13450,14 @@ monitor_issue_state() {
   fi
 
   if [[ "$task_status" == "error" ]]; then
-    if check_pr_exists "$BRANCH"; then
-      local recovered_pr
-      recovered_pr=$(find_pr_for_branch "$BRANCH")
-      if [[ -n "$recovered_pr" ]]; then
-        PR_BY_ISSUE["$ISSUE"]="$recovered_pr"
-        log "status" "$ISSUE → Found PR #$recovered_pr for errored task (updating state)"
-        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$recovered_pr" "" "$current_agent"
-        set_task_phase "$ISSUE" "review"
-      fi
+    resolve_pr_for_launch "$BRANCH" "$BASE_BRANCH" "$ISSUE"
+    if [[ "$RESOLVE_PR_CLASSIFICATION" == "current-open" || "$RESOLVE_PR_CLASSIFICATION" == "current-merged" ]] && [[ -n "$RESOLVE_PR_NUMBER" ]]; then
+      PR_BY_ISSUE["$ISSUE"]="$RESOLVE_PR_NUMBER"
+      log "status" "$ISSUE → Found PR #$RESOLVE_PR_NUMBER for errored task (updating state)"
+      save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$RESOLVE_PR_NUMBER" "" "$current_agent"
+      set_task_phase "$ISSUE" "review"
+    elif [[ "$RESOLVE_PR_CLASSIFICATION" == "historical-closed" || "$RESOLVE_PR_CLASSIFICATION" == "historical-merged" ]]; then
+      log_warn "$ISSUE: historical PR #${RESOLVE_PR_NUMBER} ignored for error-recovery binding"
     fi
     set_window_attention_state "$WIN" "needs-user"
     active_count=$((active_count + 1))
@@ -13460,9 +13468,14 @@ monitor_issue_state() {
   # phase, and cleanup state as the rest of the controller.
   handle_agent_error_recovery "$ISSUE" "${current_agent:-$AGENT_CMD}"
 
-  # Check if PR exists
+  # Check if PR exists — use attempt-aware resolution (HOK-2965)
   if [[ -z "$PR" ]]; then
-    PR="$(find_pr_for_branch "$BRANCH")"
+    resolve_pr_for_launch "$BRANCH" "$BASE_BRANCH" "$ISSUE"
+    if [[ "$RESOLVE_PR_CLASSIFICATION" == "current-open" || "$RESOLVE_PR_CLASSIFICATION" == "current-merged" ]]; then
+      PR="$RESOLVE_PR_NUMBER"
+    elif [[ "$RESOLVE_PR_CLASSIFICATION" == "historical-closed" || "$RESOLVE_PR_CLASSIFICATION" == "historical-merged" ]]; then
+      log_warn "$ISSUE: ignoring historical PR #${RESOLVE_PR_NUMBER} (${RESOLVE_PR_CLASSIFICATION}) — not binding to current attempt"
+    fi
     if [[ -n "$PR" ]]; then
       PR_BY_ISSUE["$ISSUE"]="$PR"
       # Preserve agent when updating with PR number
@@ -14585,18 +14598,19 @@ monitor_issue_state() {
 
       # Agent exited without creating a PR. This is an error condition, not
       # normal completion: preserve the worktree and branch for recovery.
-      if check_pr_exists "$BRANCH"; then
-        local pr_number
-        pr_number=$(find_pr_for_branch "$BRANCH")
-        if [[ -n "$pr_number" ]]; then
-          PR_BY_ISSUE["$ISSUE"]="$pr_number"
-          log "status" "$ISSUE → Found PR #$pr_number (updating state)"
-          save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$pr_number" "" "$current_agent"
-          set_task_phase "$ISSUE" "review"
-          set_window_attention_state "$WIN" "needs-user"
-          active_count=$((active_count + 1))
-          return 0
-        fi
+      # HOK-2965: use attempt-aware resolution to avoid binding historical PRs.
+      resolve_pr_for_launch "$BRANCH" "$BASE_BRANCH" "$ISSUE"
+      if [[ "$RESOLVE_PR_CLASSIFICATION" == "current-open" || "$RESOLVE_PR_CLASSIFICATION" == "current-merged" ]] && [[ -n "$RESOLVE_PR_NUMBER" ]]; then
+        local pr_number="$RESOLVE_PR_NUMBER"
+        PR_BY_ISSUE["$ISSUE"]="$pr_number"
+        log "status" "$ISSUE → Found PR #$pr_number (updating state)"
+        save_task_state "$ISSUE" "$SLUG" "$BRANCH" "$WT_DIR" "$pr_number" "" "$current_agent"
+        set_task_phase "$ISSUE" "review"
+        set_window_attention_state "$WIN" "needs-user"
+        active_count=$((active_count + 1))
+        return 0
+      elif [[ "$RESOLVE_PR_CLASSIFICATION" == "historical-closed" || "$RESOLVE_PR_CLASSIFICATION" == "historical-merged" ]]; then
+        log_warn "$ISSUE: historical PR #${RESOLVE_PR_NUMBER} ignored for agent-exit recovery"
       fi
 
       log_error "⚠ $ISSUE → Agent exited without creating PR on branch $BRANCH"

@@ -859,6 +859,40 @@ startup_run_task_phases() {
     fi
   fi
 
+  # HOK-2965: Fresh-launch PR reconciliation — before any resource allocation,
+  # check if the branch has a historical PR that makes this launch terminal.
+  if [[ "$(startup_preflight_enabled 2>/dev/null || echo true)" == "true" && "$DRY_RUN" != "true" ]]; then
+    resolve_pr_for_launch "$branch" "${BASE_BRANCH:-}" "$issue"
+    case "$RESOLVE_PR_CLASSIFICATION" in
+      current-merged)
+        startup_task_log "$issue" "$issue launch skipped: PR #${RESOLVE_PR_NUMBER} already merged"
+        if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+          startup_stamp_rehydration "$issue" "terminal" "pr_merged" "fresh-launch-preflight" 2>/dev/null || true
+        fi
+        [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" route done
+        STARTUP_TASK_LOG_FILE=""
+        return 0
+        ;;
+      historical-merged)
+        startup_task_log "$issue" "$issue launch skipped: historical merged PR #${RESOLVE_PR_NUMBER} on branch $branch"
+        if [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]]; then
+          startup_stamp_rehydration "$issue" "terminal" "pr_merged" "fresh-launch-preflight" 2>/dev/null || true
+        fi
+        [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" route done
+        STARTUP_TASK_LOG_FILE=""
+        return 0
+        ;;
+      historical-closed)
+        startup_task_log "$issue" "$issue: historical closed PR #${RESOLVE_PR_NUMBER} on branch $branch — launching with fresh attempt"
+        ;;
+      unverifiable)
+        startup_task_log "$issue" "$issue: PR state unverifiable for branch $branch — proceeding with launch"
+        ;;
+      current-open|none)
+        ;;
+    esac
+  fi
+
   [[ -z "$task_agent" ]] && task_agent="$AGENT_CMD"
   [[ -z "$coder_model" && -n "$challenge_model" ]] && coder_model="$challenge_model"
   [[ -z "$coder_model" && -n "$FORCE_MODEL" ]] && coder_model="$FORCE_MODEL"

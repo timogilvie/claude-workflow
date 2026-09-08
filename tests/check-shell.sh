@@ -141,6 +141,7 @@ for f in \
   "$REPO_DIR"/tests/operator-abort-cleanup.test.sh \
   "$REPO_DIR"/tests/transient-marker.test.sh \
   "$REPO_DIR"/tests/startup-terminal-prune.test.sh \
+  "$REPO_DIR"/tests/fresh-launch-terminal-preflight.test.sh \
   "$REPO_DIR"/tests/archive-stage-artifacts.test.sh \
   "$REPO_DIR"/tests/completed-task-cleanup.test.sh \
   "$REPO_DIR"/tests/native-agent-shell-operators.test.sh \
