@@ -1497,7 +1497,13 @@ cleanup_completed_task() {
   fi
   set_task_lifecycle_disposition "$issue" "" "reaped" "" "cleanup_completed_task" 2>/dev/null || true
   remove_task_state "$issue"
-  CLEANED["$issue"]=1
+  # CLEANED is a monitor-local cache. Startup preflight also calls this shared
+  # helper, before the monitor exists, so do not create an implicit indexed
+  # array here: issue IDs such as HOK-2895 are arithmetic expressions to an
+  # indexed array and abort under `set -u` while resolving the unset HOK token.
+  if declare -p CLEANED >/dev/null 2>&1; then
+    CLEANED["$issue"]=1
+  fi
 
   if [[ -n "$completion_reason" ]]; then
     log "$issue: Complete ($completion_reason)"
