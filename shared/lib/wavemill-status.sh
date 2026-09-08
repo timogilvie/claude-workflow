@@ -1332,6 +1332,7 @@ render_task_row() {
   local task_status="$6" task_phase="$7" state_pr="$8" agent_state="$9"
   local t st_str pr_str pr_info checks phase_str plan_status ready_status ready_queue_state attention_detail planning_detail launch_failure_detail reported ds pane watchdog_classification watchdog_detail running_detail coding_blocked_detail coding_auto_detail
   local execution_owner pane_state resource_disposition workflow_outcome lifecycle_retention_reason queue_handoff_at queue_wait_age queue_gate queue_head
+  local cleanup_disposition cleanup_attempt_count cleanup_next_retry cleanup_outcome cleanup_fingerprint cleanup_action
 
   t=$(elapsed "$worktree")
   reported=""
@@ -1340,11 +1341,23 @@ render_task_row() {
   resource_disposition=""
   workflow_outcome=""
   lifecycle_retention_reason=""
+  cleanup_disposition=""
+  cleanup_attempt_count=""
+  cleanup_next_retry=""
+  cleanup_outcome=""
+  cleanup_fingerprint=""
+  cleanup_action=""
   if [[ -n "$STATE_FILE" && -f "$STATE_FILE" ]]; then
     execution_owner="$(jq -r --arg issue "$issue" '.tasks[$issue].executionOwner // "task"' "$STATE_FILE" 2>/dev/null || echo "task")"
     pane_state="$(jq -r --arg issue "$issue" '.tasks[$issue].paneState // "active"' "$STATE_FILE" 2>/dev/null || echo "active")"
     workflow_outcome="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.workflowOutcome // empty' "$STATE_FILE" 2>/dev/null || true)"
     lifecycle_retention_reason="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.retention.reason // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_disposition="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.disposition // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_attempt_count="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.attemptCount // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_next_retry="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.nextRetryAt // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_outcome="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.lastOutcome // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_fingerprint="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.fingerprint // empty' "$STATE_FILE" 2>/dev/null || true)"
+    cleanup_action="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.cleanupEpisode.requiredOperatorAction // empty' "$STATE_FILE" 2>/dev/null || true)"
     if declare -F get_task_resource_disposition >/dev/null 2>&1; then
       resource_disposition="$(get_task_resource_disposition "$issue" 2>/dev/null || true)"
     else
@@ -1551,6 +1564,16 @@ render_task_row() {
 
   if [[ "$resource_disposition" == "verification-required" || "$resource_disposition" == "retained" ]]; then
     render_task_detail_lines "lifecycle: outcome=${workflow_outcome:-unknown} disposition=${resource_disposition}${lifecycle_retention_reason:+ reason=$lifecycle_retention_reason}"
+  fi
+  if [[ -n "$cleanup_disposition" && "$cleanup_disposition" != "reaped" ]]; then
+    local cleanup_detail
+    cleanup_detail="cleanup: ${cleanup_disposition}"
+    [[ -n "$cleanup_next_retry" ]] && cleanup_detail+=" retry_at=${cleanup_next_retry}"
+    [[ -n "$cleanup_attempt_count" ]] && cleanup_detail+=" attempts=${cleanup_attempt_count}"
+    [[ -n "$cleanup_outcome" ]] && cleanup_detail+=" outcome=${cleanup_outcome}"
+    [[ -n "$cleanup_fingerprint" ]] && cleanup_detail+=" fp=${cleanup_fingerprint:0:12}"
+    [[ -n "$cleanup_action" ]] && cleanup_detail+=" action=${cleanup_action}"
+    render_task_detail_lines "$cleanup_detail"
   fi
 
   if [[ "$execution_owner" == "queue" && ( "$pane_state" == "released" || "$resource_disposition" == "released" ) ]]; then

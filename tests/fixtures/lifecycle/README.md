@@ -64,4 +64,4 @@ Set these variables in `setup_*` to steer common controller branches:
 - `LINEAR_UPDATES=true`: enables captured `linear_set_state` calls.
 - `CHALLENGE_TASK=true`, `CHALLENGE_SIBLING_PR`, and `CHALLENGE_SIBLING_STATE`:
   exercise challenge PR cleanup decisions.
-- `CLEANUP_CLOSED_PR=true`: allows closed-PR cleanup.
+- `CHALLENGE_ROLE` / `CHALLENGE_AUTO_MERGE`: drive the closed-PR resource policy (`closed_pr_resource_policy`); a challenger under auto-merge gets pane-release-only, everything else full cleanup.

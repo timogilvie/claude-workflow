@@ -116,6 +116,60 @@
         }
       }
     },
+    "cleanupEpisode": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schemaVersion", "episodeId", "fingerprint", "disposition", "failureClass", "attemptCount", "updatedAt"],
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "episodeId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fingerprintInputs": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "disposition": {
+          "enum": ["pending", "reaping", "reaped", "retained", "transient", "needs-user"]
+        },
+        "failureClass": {
+          "enum": ["expected-preservation", "transient", "operational", "none"]
+        },
+        "firstAttemptAt": {
+          "type": "string"
+        },
+        "lastAttemptAt": {
+          "type": "string"
+        },
+        "attemptCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "nextRetryAt": {
+          "type": ["string", "null"]
+        },
+        "requiredOperatorAction": {
+          "type": "string"
+        },
+        "lastOutcome": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      }
+    },
     "normalizedFromLegacy": {
       "type": "boolean"
     },

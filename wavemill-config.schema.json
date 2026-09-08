@@ -45,6 +45,44 @@
             },
             "additionalProperties": false
         },
+        "terminal": {
+            "type": "object",
+            "description": "Terminal-state resource handling (HOK-2952). Governs how task tmux panes are released once a workflow reaches a terminal reason, independently of git worktree/branch cleanup.",
+            "properties": {
+                "paneRelease": {
+                    "type": "object",
+                    "description": "Automated pane release for terminal reasons (pr_merged, pr_closed_unmerged, challenge_*). Disabling is the HOK-2952 rollback lever: it stops automated release while truthful state fields, archived transcripts, and terminal records keep being written. The WAVEMILL_TERMINAL_PANE_RELEASE=0 env var overrides this to disabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Archive diagnostics, write a durable terminal record, and kill the task pane when a workflow reaches a terminal reason."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
+        "startup": {
+            "type": "object",
+            "description": "Startup safety checks before task rehydration and pane creation.",
+            "properties": {
+                "terminalPreflight": {
+                    "type": "object",
+                    "description": "Reconcile persisted tasks against terminal PR/challenge state before resume menus, launch plans, task panes, or agents are created. The WAVEMILL_STARTUP_TERMINAL_PREFLIGHT=0 env var overrides this to disabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When true, terminal persisted tasks are reconciled instead of rehydrated; unverifiable legacy entries are marked verification-required without cleanup."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "git": {
             "type": "object",
             "description": "Git behavior shared across wavemill workflows.",
@@ -2473,6 +2511,49 @@
                     "type": "boolean",
                     "default": false,
                     "description": "Automatically delete constraint rules after PR merge. When false (default), rules persist for audit trail."
+                }
+            },
+            "additionalProperties": false
+        },
+        "cleanup": {
+            "type": "object",
+            "description": "Settings for durable cleanup episodes and retry scheduling.",
+            "properties": {
+                "episodes": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Persist terminal cleanup episodes and skip unchanged retained evidence."
+                        },
+                        "maxAttempts": {
+                            "type": "integer",
+                            "default": 5,
+                            "minimum": 1,
+                            "description": "Maximum cleanup attempts for retryable cleanup failures before needs-user."
+                        },
+                        "backoffBaseSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 0,
+                            "description": "Initial cleanup retry backoff in seconds."
+                        },
+                        "backoffCapSeconds": {
+                            "type": "integer",
+                            "default": 900,
+                            "minimum": 1,
+                            "description": "Maximum cleanup retry backoff in seconds."
+                        },
+                        "jitterRatio": {
+                            "type": "number",
+                            "default": 0.2,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Deterministic jitter ratio applied to cleanup retry backoff."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "additionalProperties": false

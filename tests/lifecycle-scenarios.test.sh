@@ -195,6 +195,7 @@ for fn in \
   write_ready_queue_artifacts \
   resolve_pair_on_primary_merge \
   cleanup_merged_primary_challenge_task \
+  closed_pr_resource_policy \
   monitor_issue_state
 do
   extract_function "$MONITOR_SCRIPT_FILE" "$fn" >> "$MONITOR_FUNC_FILE"
@@ -272,7 +273,6 @@ run_lifecycle_scenario() {
       CHALLENGE_TASK="false"
       CHALLENGE_SIBLING_PR=""
       CHALLENGE_SIBLING_MERGED="false"
-      CLEANUP_CLOSED_PR="false"
       MONITOR_ITERATIONS=1
 
       active_count=0
@@ -301,7 +301,9 @@ run_lifecycle_scenario() {
       FEATURE_DIR="$WORKTREE_ROOT/$SLUG/features/$SLUG"
       WT_DIR="$WORKTREE_ROOT/$SLUG"
       printf "{\"title\":\"%s\"}\n" "$TASK_TITLE" > "/tmp/${SESSION}-${ISSUE}-issue.json"
-      printf "{\"tasks\":{}}\n" > "$STATE_FILE"
+      # The task entry must exist: the closed-PR path treats a missing task
+      # entry as "already durably reconciled" (HOK-2952) and short-circuits.
+      jq -n --arg issue "$ISSUE" --arg slug "$SLUG" "{tasks:{(\$issue):{slug:\$slug}}}" > "$STATE_FILE"
 
       BRANCH_BY_ISSUE["$ISSUE"]="$BRANCH"
       SLUG_BY_ISSUE["$ISSUE"]="$SLUG"
@@ -491,7 +493,8 @@ JSON
     is_challenge_task() { [[ "$CHALLENGE_TASK" == "true" ]]; }
     maybe_run_challenge_eval() { :; }
     maybe_run_challenge_comparison() { :; }
-    should_cleanup_closed_pr() { [[ "$CLEANUP_CLOSED_PR" == "true" ]]; }
+    challenge_pair_record_exists() { return 1; }
+    wavemill_release_terminal_pane() { return 0; }
     get_challenge_sibling_pr() { printf "%s\n" "$CHALLENGE_SIBLING_PR"; }
     check_challenge_sibling_merged() { [[ "$CHALLENGE_SIBLING_MERGED" == "true" ]]; }
     get_main_head_sha() { printf "%s\n" "$MAIN_SHA_RETURN"; }

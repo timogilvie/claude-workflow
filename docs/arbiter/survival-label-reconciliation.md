@@ -1,5 +1,7 @@
 # Survival Label Reconciliation
 
+> **Superseded by the frozen contract:** [`survival-label-contract.md`](survival-label-contract.md) (HOK-2803, v1.0.0) is now the source of truth for the survival label; this document remains as the R5 reconciliation lineage.
+
 Status: HOK-2792 reconciliation for Arbiter R5.
 
 ## Sources
