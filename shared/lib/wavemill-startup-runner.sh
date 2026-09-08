@@ -19,6 +19,7 @@ SESSION="$(jq -r '.session' "$PLAN_FILE")"
 WAVEMILL_RUN_EPOCH="$(jq -r '.runEpoch // empty' "$PLAN_FILE")"
 REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
+WAVEMILL_BASE_BRANCH_SOURCE="$(jq -r '.baseBranchSource // "runtime-env"' "$PLAN_FILE")"
 RESOLVED_BASE_REF="$(jq -r '.resolvedBaseRef // empty' "$PLAN_FILE")"
 BASE_REF_PREFLIGHT_JSON="$(jq -c '.baseRefPreflight // empty' "$PLAN_FILE" 2>/dev/null || true)"
 WORKTREE_ROOT="$(jq -r '.worktreeRoot' "$PLAN_FILE")"
@@ -44,6 +45,9 @@ LAUNCHED_ISSUES_FILE="$(jq -r '.startupConfig.launchedIssuesFile' "$PLAN_FILE")"
 MILL_LOG_FILE="$(jq -r '.startupConfig.millLogFile // empty' "$PLAN_FILE")"
 POLL_SECONDS="$(jq -r '.monitorConfig.pollSeconds // 10' "$PLAN_FILE")"
 REQUIRE_CONFIRM="$(jq -r '.monitorConfig.requireConfirm // true' "$PLAN_FILE")"
+WAVEMILL_REQUIRE_CONFIRM_SOURCE="$(jq -r '.monitorConfig.requireConfirmSource // "runtime-env"' "$PLAN_FILE")"
+INTEGRATION_MERGE_METHOD="$(jq -r '.monitorConfig.mergeMethod // "squash"' "$PLAN_FILE")"
+WAVEMILL_MERGE_METHOD_SOURCE="$(jq -r '.monitorConfig.mergeMethodSource // "repo-config"' "$PLAN_FILE")"
 DRY_RUN="$(jq -r '.monitorConfig.dryRun // false' "$PLAN_FILE")"
 if [[ "${WAVEMILL_DRY_RUN:-}" == "1" || "${WAVEMILL_DRY_RUN:-}" == "true" || "$DRY_RUN" == "true" ]]; then
   export WAVEMILL_DRY_RUN=1
@@ -66,8 +70,9 @@ LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || tru
 
 export SESSION REPO_DIR BASE_BRANCH RESOLVED_BASE_REF WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
 export WAVEMILL_RUN_EPOCH
+export WAVEMILL_BASE_BRANCH_SOURCE WAVEMILL_REQUIRE_CONFIRM_SOURCE WAVEMILL_MERGE_METHOD_SOURCE
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
-export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
+export POLL_SECONDS REQUIRE_CONFIRM INTEGRATION_MERGE_METHOD DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
 
 source "$LIB_DIR/wavemill-common.sh"
@@ -440,6 +445,9 @@ write_monitor_env() {
     write_shell_assignment "MERGE_QUEUE_SELECTION_FILE" "$STATE_DIR/merge-queue-selection.json"
     write_shell_assignment "POLL_SECONDS" "$POLL_SECONDS"
     write_shell_assignment "REQUIRE_CONFIRM" "$REQUIRE_CONFIRM"
+    write_shell_assignment "WAVEMILL_BASE_BRANCH_SOURCE" "$WAVEMILL_BASE_BRANCH_SOURCE"
+    write_shell_assignment "WAVEMILL_REQUIRE_CONFIRM_SOURCE" "$WAVEMILL_REQUIRE_CONFIRM_SOURCE"
+    write_shell_assignment "WAVEMILL_MERGE_METHOD_SOURCE" "$WAVEMILL_MERGE_METHOD_SOURCE"
     write_shell_assignment "DRY_RUN" "$DRY_RUN"
     write_shell_assignment "BASE_BRANCH" "$BASE_BRANCH"
     write_shell_assignment "PROJECT_NAME" "$PROJECT_NAME"
@@ -470,6 +478,39 @@ write_monitor_env() {
     write_shell_assignment "MONITOR_SCRIPT" "$MONITOR_SCRIPT"
     write_shell_assignment "MONITOR_ENV" "$MONITOR_ENV"
   } > "$MONITOR_ENV"
+}
+
+write_runtime_env_snapshot() {
+  local issue="$1" snapshot_dir snapshot_file tmp_file merge_method
+  [[ -n "$issue" && -n "${REPO_DIR:-}" ]] || return 0
+  snapshot_dir="$REPO_DIR/.wavemill/runtime-env"
+  snapshot_file="$snapshot_dir/$issue.json"
+  mkdir -p "$snapshot_dir" 2>/dev/null || return 0
+  tmp_file="$snapshot_file.tmp.$$"
+  merge_method="${INTEGRATION_MERGE_METHOD:-squash}"
+  jq -n \
+    --arg issue "$issue" \
+    --arg session "$SESSION" \
+    --arg runEpoch "$WAVEMILL_RUN_EPOCH" \
+    --arg baseBranch "$BASE_BRANCH" \
+    --arg baseBranchSource "${WAVEMILL_BASE_BRANCH_SOURCE:-runtime-env}" \
+    --arg requireConfirm "$REQUIRE_CONFIRM" \
+    --arg requireConfirmSource "${WAVEMILL_REQUIRE_CONFIRM_SOURCE:-runtime-env}" \
+    --arg mergeMethod "$merge_method" \
+    --arg mergeMethodSource "${WAVEMILL_MERGE_METHOD_SOURCE:-repo-config}" \
+    --arg capturedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      issue: $issue,
+      session: $session,
+      runEpoch: $runEpoch,
+      baseBranch: $baseBranch,
+      baseBranchSource: $baseBranchSource,
+      requireConfirm: ($requireConfirm == "true"),
+      requireConfirmSource: $requireConfirmSource,
+      mergeMethod: $mergeMethod,
+      mergeMethodSource: $mergeMethodSource,
+      capturedAt: $capturedAt
+    }' > "$tmp_file" 2>/dev/null && mv "$tmp_file" "$snapshot_file" 2>/dev/null || rm -f "$tmp_file"
 }
 
 setup_control_dashboard() {
@@ -803,6 +844,7 @@ startup_run_task_phases() {
   local startup_id
   startup_id="$(echo "$task_json" | jq -r '.startupId // empty')"
   issue="$(echo "$task_json" | jq -r '.issue')"
+  write_runtime_env_snapshot "$issue"
   [[ -z "$startup_id" || "$startup_id" == "null" ]] && startup_id="${ordinal:-1}"
   [[ -z "$ordinal" ]] && ordinal="$startup_id"
   if [[ -z "$total" ]]; then
@@ -971,7 +1013,7 @@ startup_run_task_phases() {
       # Only remove a freshly created worktree if we can't reuse it later.
       if [[ -n "${created_new:-}" && "$created_new" == "true" ]]; then
         local cleanup_rc=0
-        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" "$issue" "" || cleanup_rc=$?
+        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-main}")" "startup_dependency_failure" "$issue" "" || cleanup_rc=$?
         if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
           startup_log "WARN: $issue dependency-failure cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified})"
         elif [[ "$cleanup_rc" -ne 0 ]]; then
