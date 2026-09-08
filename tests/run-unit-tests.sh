@@ -140,6 +140,7 @@ TESTS=(
   shared/lib/headless-llm.test.ts
   shared/lib/router-log.test.ts
   shared/lib/arbiter-survival-label.test.ts
+  shared/lib/arbiter-survival-analyzer.test.ts
   shared/lib/challenge-analyzer.test.ts
   shared/lib/challenge-unavailable.test.ts
   shared/lib/challenge-attestation-backfill.test.ts
@@ -402,6 +403,7 @@ TESTS=(
   shared/lib/workflow-router.test.ts
   shared/lib/worktree-manager.test.ts
   tools/backfill-stage-scores.test.ts
+  tools/backfill-survival.test.ts
   tools/certify-launch-priority-model.test.ts
   tools/check-native-agent-launch.test.ts
   tools/check-review-setup.test.ts

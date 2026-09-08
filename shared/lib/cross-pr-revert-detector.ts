@@ -24,14 +24,14 @@ export interface CrossPrRevertFinding {
   title?: string;
 }
 
-interface RecentPrCommit {
+export interface RecentPrCommit {
   commit: string;
   parent: string;
   prNumber: number;
   title: string;
 }
 
-interface NameStatusEntry {
+export interface NameStatusEntry {
   status: string;
   path: string;
   previousPath?: string;
@@ -141,7 +141,7 @@ export function detectSurvivingChangeWarnings(
     .filter((finding): finding is CrossPrRevertFinding => finding !== null);
 }
 
-function collectRecentPrCommits(
+export function collectRecentPrCommits(
   shellRunner: ShellRunner,
   repoDir: string,
   revisionRange: string,
@@ -204,7 +204,7 @@ function extractPrNumber(subject: string): number | null {
   return Number.isInteger(prNumber) ? prNumber : null;
 }
 
-function parseNameStatusOutput(output: string): NameStatusEntry[] {
+export function parseNameStatusOutput(output: string): NameStatusEntry[] {
   if (!output.trim()) {
     return [];
   }
