@@ -59,3 +59,20 @@ The stderr summary reports rows/missing/outcome counts and `survival_rate`
 per horizon. A uniformly extreme rate (for example ~98% survived at every
 horizon on every repo) is a finding to escalate to the Arbiter decision log,
 not a bug to hide.
+
+### Initial measurement (2026-09-08, labeller v1.0.0)
+
+| Repo | Horizon | Labelled rows | survived | followup | subst. rewritten | reverted | survival_rate |
+|------|---------|---------------|----------|----------|------------------|----------|---------------|
+| timogilvie/wavemill (400 newest PRs) | 14d | 326 | 97 | 224 | 5 | 0 | 0.298 |
+| timogilvie/wavemill | 30d | 211 | 42 | 165 | 4 | 0 | 0.199 |
+| timogilvie/wavemill | 60d | 138 | 13 | 120 | 5 | 0 | 0.094 |
+| expressjs/express (141 newest PRs, `master`) | 14d | 136 | 125 | 10 | 1 | 0 | 0.919 |
+| expressjs/express | 30d | 131 | 109 | 11 | 11 | 0 | 0.832 |
+| expressjs/express | 60d | 129 | 83 | 18 | 28 | 0 | 0.643 |
+
+Rates are far from uniform — wavemill's high-churn integration branch amends
+most PR line ranges within two weeks (`line_range_followup` dominates), while
+express changes mostly survive. `reverted` (exact file-level restoration) is
+rare in both. Missing rows are unelapsed horizons for recent PRs plus one
+whitespace-only PR (`insufficient_line_range_substrate`).
