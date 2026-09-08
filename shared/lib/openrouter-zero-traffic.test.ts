@@ -67,7 +67,8 @@ function writeOpenRouterCert(repoDir: string): void {
     model: identity.storageIdentity.model,
     phase: 'workflow',
     suiteVersion: DEFAULT_CERTIFICATION_SUITE_VERSION,
-    certifiedAt: '2026-07-10T00:00:00.000Z',
+    // Dynamic so the artifact stays inside CERTIFICATION_TTL_DAYS regardless of run date.
+    certifiedAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
     scenarios: [{ scenarioId: 's1', passed: true }],
   }));
 }
