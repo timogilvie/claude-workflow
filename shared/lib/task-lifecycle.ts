@@ -118,7 +118,7 @@ export interface NormalizedTaskLifecycle {
 
 const WORKFLOW_OUTCOME_SET = new Set<string>(WORKFLOW_OUTCOMES);
 const RESOURCE_DISPOSITION_SET = new Set<string>(RESOURCE_DISPOSITIONS);
-const TERMINAL_STATUS = new Set(['merged', 'complete', 'completed', 'completed-external', 'closed', 'done', 'aborted']);
+const TERMINAL_STATUS = new Set(['merged', 'complete', 'completed', 'completed-external', 'closed', 'done', 'aborted', 'superseded']);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -146,7 +146,7 @@ export function workflowOutcomeFromLegacy(taskInput: unknown): WorkflowOutcome {
   const phase = text(task.phase);
 
   if (status === 'merged' || phase === 'done') return 'merged';
-  if (status === 'closed' || status === 'completed-external' || status === 'complete' || status === 'completed' || status === 'done' || phase === 'closed') return 'closed';
+  if (status === 'closed' || status === 'completed-external' || status === 'complete' || status === 'completed' || status === 'done' || status === 'superseded' || phase === 'closed' || phase === 'superseded') return 'closed';
   if (status === 'aborted' || phase === 'aborted') return 'aborted';
   if (status === 'error' || phase === 'error') return 'error';
   return 'active';
@@ -156,7 +156,7 @@ export function legacyIsTerminal(taskInput: unknown): boolean {
   const task = record(taskInput);
   const status = text(task.status);
   const phase = text(task.phase);
-  return (status !== undefined && TERMINAL_STATUS.has(status)) || status === 'error' || phase === 'error' || phase === 'closed' || phase === 'aborted' || phase === 'done';
+  return (status !== undefined && TERMINAL_STATUS.has(status)) || status === 'error' || phase === 'error' || phase === 'closed' || phase === 'aborted' || phase === 'done' || phase === 'superseded';
 }
 
 function hasRetention(lifecycle: Record<string, unknown>): boolean {

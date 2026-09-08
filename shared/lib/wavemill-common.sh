@@ -4741,15 +4741,15 @@ task_lifecycle_jq_defs() {
 def wm_terminal_status:
   (.status // "") as $status
   | (.phase // "") as $phase
-  | (["merged","complete","completed","completed-external","closed","done","aborted"] | index($status)) != null
+  | (["merged","complete","completed","completed-external","closed","done","aborted","superseded"] | index($status)) != null
     or $status == "error"
-    or ($phase | IN("done","closed","aborted","error"));
+    or ($phase | IN("done","closed","aborted","error","superseded"));
 
 def wm_workflow_outcome:
   (.status // "") as $status
   | (.phase // "") as $phase
   | if $status == "merged" or $phase == "done" then "merged"
-    elif ($status | IN("closed","complete","completed","completed-external","done")) or $phase == "closed" then "closed"
+    elif ($status | IN("closed","complete","completed","completed-external","done","superseded")) or ($phase | IN("closed","superseded")) then "closed"
     elif $status == "aborted" or $phase == "aborted" then "aborted"
     elif $status == "error" or $phase == "error" then "error"
     else "active"
@@ -4886,6 +4886,49 @@ slot_consuming_task_count() {
 slot_consuming_challenger_task_count() {
   [[ -n "${STATE_FILE:-}" && -f "$STATE_FILE" ]] || { printf '0\n'; return 0; }
   jq -r "$(task_lifecycle_jq_filter '(.tasks // {}) | to_entries | map(select((.value.challengeRole // "") == "challenger") | select(.value | wm_slot_consumes)) | length')" "$STATE_FILE" 2>/dev/null || printf '0\n'
+}
+
+get_task_meta() {
+  local issue="$1" field="$2"
+  [[ -n "${STATE_FILE:-}" && -r "$STATE_FILE" ]] || return 0
+  jq -r --arg issue "$issue" --arg field "$field" '.tasks[$issue][$field] // empty' "$STATE_FILE" 2>/dev/null || true
+}
+
+is_challenge_task() {
+  local issue="$1"
+  [[ "$(get_task_meta "$issue" "challenge")" == "true" ]]
+}
+
+get_challenge_sibling_pr() {
+  local issue="$1"
+  local pair_id role sibling_key
+
+  pair_id=$(get_task_meta "$issue" "challengePairId")
+  role=$(get_task_meta "$issue" "challengeRole")
+
+  [[ -z "$pair_id" || -z "$role" ]] && return 1
+
+  if [[ "$role" == "primary" ]]; then
+    sibling_key="${pair_id}_c"
+  elif [[ "$role" == "challenger" ]]; then
+    sibling_key="$pair_id"
+  else
+    return 1
+  fi
+
+  jq -r --arg issue "$sibling_key" '.tasks[$issue].pr // empty' "$STATE_FILE" 2>/dev/null || true
+}
+
+# Check if a challenge task's sibling PR was merged.
+# Returns 0 if merged, 1 if not merged or unavailable.
+check_challenge_sibling_merged() {
+  local issue="$1"
+  local sibling_pr
+
+  sibling_pr=$(get_challenge_sibling_pr "$issue")
+  [[ -z "$sibling_pr" ]] && return 1
+
+  validate_pr_merge "$sibling_pr"
 }
 
 get_task_execution_owner() {
@@ -5166,8 +5209,8 @@ save_task_state() {
 
   if ! state_mutate "$STATE_FILE" \
      "$(task_lifecycle_jq_filter '(.tasks[$issue] // {}) as $existing |
-      ((($existing.status // "") | IN("merged","complete","completed","completed-external","closed","done","aborted","error"))
-       or (($existing.phase // "") | IN("done","closed","aborted","error"))) as $existingTerminal |
+      ((($existing.status // "") | IN("merged","complete","completed","completed-external","closed","done","aborted","error","superseded"))
+       or (($existing.phase // "") | IN("done","closed","aborted","error","superseded"))) as $existingTerminal |
       (if $statusArg != "" then $statusArg elif $existingTerminal then ($existing.status // "active") else "active" end) as $effectiveStatus |
       .tasks[$issue] = ($existing + {
         slug: $slug,

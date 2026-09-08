@@ -35,9 +35,15 @@ trap 'rm -rf "$tmp"' EXIT
 
 funcs="$tmp/startup-prune-functions.sh"
 {
+  extract_function "$COMMON_SCRIPT" "task_lifecycle_jq_defs"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "task_lifecycle_jq_filter"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "remove_task_state"
   printf '\n'
   extract_function "$MILL_SCRIPT" "cleanup_terminal_missing_worktree_entries"
+  printf '\n'
+  extract_function "$MILL_SCRIPT" "detect_inflight_tasks"
 } > "$funcs"
 
 STATE_FILE="$tmp/workflow-state.json"
@@ -62,6 +68,32 @@ cat > "$STATE_FILE" <<JSON
       "status": "merged",
       "phase": "ready",
       "worktree": "$existing_terminal"
+    },
+    "HOK-SUPERSEDED": {
+      "status": "superseded",
+      "phase": "superseded",
+      "slug": "superseded",
+      "worktree": "$existing_terminal"
+    },
+    "HOK-DEFERRED": {
+      "status": "active",
+      "phase": "review",
+      "slug": "deferred",
+      "worktree": "$existing_terminal",
+      "rehydration": {
+        "eligibility": "deferred",
+        "reason": "pr_state_unverifiable"
+      }
+    },
+    "HOK-PREFLIGHT-TERMINAL": {
+      "status": "active",
+      "phase": "review",
+      "slug": "preflight-terminal",
+      "worktree": "$existing_terminal",
+      "rehydration": {
+        "eligibility": "terminal",
+        "reason": "pr_merged"
+      }
     }
   }
 }
@@ -98,6 +130,23 @@ fi
 if [[ "$(jq -r '.tasks | has("HOK-MERGED")' "$STATE_FILE")" != "true" ]]; then
   echo "terminal task with existing worktree was removed" >&2
   jq . "$STATE_FILE" >&2
+  exit 1
+fi
+
+inflight="$(detect_inflight_tasks)"
+if [[ "$inflight" != *"HOK-ACTIVE|"* ]]; then
+  echo "active task was not emitted for rehydration" >&2
+  printf '%s\n' "$inflight" >&2
+  exit 1
+fi
+if [[ "$inflight" != *"HOK-DEFERRED|"* ]]; then
+  echo "deferred active task was not emitted for safe rehydration" >&2
+  printf '%s\n' "$inflight" >&2
+  exit 1
+fi
+if [[ "$inflight" == *"HOK-MERGED|"* || "$inflight" == *"HOK-SUPERSEDED|"* || "$inflight" == *"HOK-PREFLIGHT-TERMINAL|"* ]]; then
+  echo "terminal task was emitted for rehydration" >&2
+  printf '%s\n' "$inflight" >&2
   exit 1
 fi
 

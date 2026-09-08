@@ -64,6 +64,25 @@
             },
             "additionalProperties": false
         },
+        "startup": {
+            "type": "object",
+            "description": "Startup safety checks before task rehydration and pane creation.",
+            "properties": {
+                "terminalPreflight": {
+                    "type": "object",
+                    "description": "Reconcile persisted tasks against terminal PR/challenge state before resume menus, launch plans, task panes, or agents are created. The WAVEMILL_STARTUP_TERMINAL_PREFLIGHT=0 env var overrides this to disabled.",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "When true, terminal persisted tasks are reconciled instead of rehydrated; unverifiable legacy entries are marked verification-required without cleanup."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "git": {
             "type": "object",
             "description": "Git behavior shared across wavemill workflows.",

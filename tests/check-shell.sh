@@ -85,6 +85,7 @@ for f in \
   "$LIB_DIR"/bounded-retry.sh \
   "$LIB_DIR"/transient-marker.sh \
   "$LIB_DIR"/terminal-reconciler.sh \
+  "$LIB_DIR"/startup-terminal-preflight.sh \
   "$LIB_DIR"/startup-progress.sh \
   "$LIB_DIR"/agent-adapters.sh \
   "$REPO_DIR"/shared/hooks/*.sh \
@@ -121,6 +122,7 @@ for f in \
   "$REPO_DIR"/tests/claude-tmux-server-guard.test.sh \
   "$REPO_DIR"/tests/agent-tmux-runtime-guard.test.sh \
   "$REPO_DIR"/tests/terminal-reconciler.test.sh \
+  "$REPO_DIR"/tests/startup-terminal-preflight.test.sh \
   "$REPO_DIR"/tests/challenge-intent-roundtrip.test.sh \
   "$REPO_DIR"/tests/challenge-varied-model-abort.test.sh \
   "$REPO_DIR"/tests/challenge-record-decisive.test.sh \
@@ -953,12 +955,14 @@ else
     fail "monitor is missing the role-aware closed-PR resource policy helper"
   fi
 
-  if grep -Fq 'get_challenge_sibling_pr() {' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq 'check_challenge_sibling_merged() {' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq 'validate_pr_merge "$sibling_pr"' <<< "$HEREDOC_CONTENT"; then
-    pass "monitor defines challenge sibling helpers for closed-PR resolution"
+  if grep -Fq 'get_challenge_sibling_pr() {' "$COMMON_SCRIPT" \
+    && grep -Fq 'check_challenge_sibling_merged() {' "$COMMON_SCRIPT" \
+    && grep -Fq 'validate_pr_merge "$sibling_pr"' "$COMMON_SCRIPT" \
+    && ! grep -Fq 'get_challenge_sibling_pr() {' <<< "$HEREDOC_CONTENT" \
+    && ! grep -Fq 'check_challenge_sibling_merged() {' <<< "$HEREDOC_CONTENT"; then
+    pass "common defines challenge sibling helpers for closed-PR resolution"
   else
-    fail "monitor is missing challenge sibling helpers for closed-PR resolution"
+    fail "challenge sibling helpers are not centralized in wavemill-common.sh"
   fi
 
   if grep -Fq 'closed_pr_resource_policy "$ISSUE"' <<< "$CLOSED_BLOCK" \

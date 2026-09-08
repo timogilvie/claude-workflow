@@ -26,6 +26,7 @@ TESTS=(
   operator-abort-cleanup.test.sh
   agent-resolve-from-model.test.sh
   terminal-reconciler.test.sh
+  startup-terminal-preflight.test.sh
   monitor-env-completeness.test.sh
   wavemill-expand-direct.test.sh
   routing-complete-writes.test.sh

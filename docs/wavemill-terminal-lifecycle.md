@@ -110,6 +110,45 @@ For a closed, unmerged PR, `closed_pr_resource_policy` (shared/lib/wavemill-moni
 2. `pane-transcript-<reason>.txt` beside it holds the final pane scrollback; the feature dir's `.terminal-history.jsonl` holds hook-state history.
 3. If the worktree was retained, it is still on disk at the recorded path; otherwise re-create one with `git worktree add <dir> <branch>`.
 
+## Startup Terminal Preflight (HOK-2954)
+
+Startup runs `startup_terminal_preflight` before resume menus, launch-plan writing, tmux session creation, task panes, or agent launches. The preflight reads persisted `.tasks`, checks authoritative PR/challenge terminal state where available, and stamps each retained entry with a `rehydration` contract:
+
+```json
+{
+  "eligibility": "eligible | deferred | verification-required | terminal",
+  "reason": "pr_merged | pr_closed_unmerged | challenge_resolved_winner | pr_state_unverifiable | ...",
+  "checkedAt": "2026-09-08T00:00:00Z",
+  "runEpoch": "20260908T000000Z.12345",
+  "actor": "startup-terminal-preflight"
+}
+```
+
+Eligibility meanings:
+
+- `terminal`: the task is already merged, closed, superseded, aborted, errored, or otherwise terminal. Startup routes it through `wavemill_reconcile_terminal` and existing cleanup/resource-disposition primitives instead of launching an agent.
+- `eligible`: the task has active lifecycle state and enough provenance for normal recovery.
+- `deferred`: live PR state could not be verified, usually because GitHub was unavailable. Startup preserves active state and emits one warning episode for the run; it does not terminalize or delete.
+- `verification-required`: legacy or malformed state is too ambiguous to recover safely. Startup stamps retention state, skips launch, takes no destructive action, and continues restoring unrelated valid tasks.
+
+Decision order is intentionally conservative:
+
+| Persisted state | Live PR state | Challenge sibling | Startup result |
+| --- | --- | --- | --- |
+| Terminal lifecycle/status/phase, including `superseded` | Any | Any | `terminal:<mapped reason>` |
+| Active with recorded PR | `MERGED` | Any | `terminal:pr_merged` |
+| Active with recorded PR | `CLOSED` without merge | Any | `terminal:pr_closed_unmerged` |
+| Active challenger | Open, missing, or no own PR | Sibling merged | `terminal:challenge_resolved_winner` |
+| Active with recorded PR | Unreadable or network failed | Worktree exists | `deferred:pr_state_unverifiable` |
+| Missing phase, slug, or recoverable worktree provenance | Any | Any | `verification-required:<why>` |
+| Active and recoverable | Open or no recorded PR needed | No terminal sibling | `eligible` |
+
+Run identity is recorded separately from historical task state. The mill creates `WAVEMILL_RUN_EPOCH` at startup, stamps top-level `.runEpoch`, includes it in the launch plan and monitor env, and `save_task_state` persists it into `lifecycle.launchContract.runEpoch`. This lets state readers distinguish current-session validation/launch activity from retained terminal history.
+
+Restart behavior is idempotent: each preflight step is either a read, a `state_mutate` stamp, or a call into the idempotent terminal reconciler and cleanup disposition machine. Re-running startup after a crash converges to the same eligibility, terminal markers, and resource disposition as an uninterrupted run.
+
+Rollback: `startup.terminalPreflight.enabled=false` or `WAVEMILL_STARTUP_TERMINAL_PREFLIGHT=0` skips classification. The epoch and `rehydration` fields are retained as harmless historical fields; disabled startup never rewrites terminal entries back to active.
+
 ## Legacy Migration
 
 Readers normalize old or malformed task records on read. Missing launch contracts, missing remote branch deletion policy, terminal status with active pane metadata, or malformed lifecycle values become `resourceDisposition=verification-required` and `branchDeletionAuthorized=false`.
