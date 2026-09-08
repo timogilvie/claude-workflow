@@ -9,6 +9,16 @@ source "$1"
 WAVEMILL_LIB_DIR="${WAVEMILL_LIB_DIR:-${LIB_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}}"
 source "$WAVEMILL_LIB_DIR/transient-marker.sh"
 
+if ! declare -F effective_task_base_branch >/dev/null 2>&1; then
+effective_task_base_branch() {
+  local issue="$1" value=""
+  if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]]; then
+    value="$(jq -r --arg issue "$issue" '.tasks[$issue].lifecycle.launchContract.baseBranch // .tasks[$issue].baseBranch // empty' "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "${value:-${BASE_BRANCH:-main}}"
+}
+fi
+
 run_linear_retry_drain_tick() {
   [[ "$DRY_RUN" == "true" ]] && return 0
 
@@ -1539,7 +1549,7 @@ challenge_cancel_challenger_arm() {
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
       local task_branch="task/${challenger_slug}"
       local cleanup_rc=0
-      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" "$challenger_key" "" || cleanup_rc=$?
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$(effective_task_base_branch "$challenger_key" 2>/dev/null || printf '%s\n' "$BASE_BRANCH")" "challenge_cancel_challenger_arm" "$challenger_key" "" || cleanup_rc=$?
       if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
         set_window_attention_state "$win" "needs-user"
         log_warn "  $challenger_key cleanup preserved local work during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
@@ -6109,10 +6119,10 @@ _restore_inflight_task_window_if_missing() {
   if [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]]; then
     local pr_number safety_reason release_reason
     pr_number="$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // ""')"
-    safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+    safety_reason="$(task_worktree_release_safety "$wt_dir" "$branch" "$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-main}")" 2>/dev/null || true)"
     if [[ "$safety_reason" == "ok" ]]; then
       reconciliation_lease_release "$feature_dir"
-      release_reason="$(pane_release_preflight "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" "$branch" "${BASE_BRANCH:-main}" 2>/dev/null || true)"
+      release_reason="$(pane_release_preflight "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" "$branch" "$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-main}")" 2>/dev/null || true)"
       if [[ "$release_reason" == "ok" ]]; then
         release_task_pane "$issue" "$slug" "$feature_dir" "$wt_dir" "$pr_number" || true
         return 0
@@ -9998,7 +10008,7 @@ cleanup_aborted_challenge_arm() {
   else
     CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   fi
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" "$issue" "" || cleanup_rc=$?
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-main}")" "cleanup_aborted_challenge_arm" "$issue" "" || cleanup_rc=$?
   cleanup_outcome="${WAVEMILL_CLEANUP_OUTCOME:-}"
   CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
@@ -13226,7 +13236,7 @@ handle_re_review_command() {
   reviewer_model="$(resolve_phase_model "review" "$reviewer_model" "claude-sonnet-5")"
   review_mode="$(read_phase_config "$feature_dir" "review" "mode" 2>/dev/null || true)"
   [[ -n "$review_mode" ]] || review_mode="static"
-  base_branch="$(read_state_value "" --arg i "$issue" '.tasks[$i].baseBranch // empty')"
+  base_branch="$(effective_task_base_branch "$issue" 2>/dev/null || read_state_value "" --arg i "$issue" '.tasks[$i].baseBranch // empty')"
   [[ -n "$base_branch" ]] || base_branch="${BASE_BRANCH:-main}"
 
   artifacts_json="$(review_artifacts_with_pr_number "$feature_dir" "$pr" | jq -c --arg timestamp "$audit_timestamp" --arg issue "$issue" \
@@ -15087,7 +15097,7 @@ monitor_issue_state() {
         fi
 
         local release_reason
-        release_reason="$(pane_release_preflight "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR" "$BRANCH" "$BASE_BRANCH" 2>/dev/null || true)"
+        release_reason="$(pane_release_preflight "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR" "$BRANCH" "$(effective_task_base_branch "$ISSUE" 2>/dev/null || printf '%s\n' "$BASE_BRANCH")" 2>/dev/null || true)"
         if [[ "$release_reason" == "ok" ]]; then
           if release_task_pane "$ISSUE" "$SLUG" "$ready_state_dir_path" "${WORKTREE_ROOT}/${SLUG}" "$PR"; then
             queue_owned_count=$((queue_owned_count + 1))

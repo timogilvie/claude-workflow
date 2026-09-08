@@ -8,6 +8,10 @@
 # runner all inherit the same implementation.
 # shellcheck source=bounded-retry.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bounded-retry.sh"
+if [[ -f "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/effective-task-config.sh" ]]; then
+  # shellcheck source=effective-task-config.sh
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/effective-task-config.sh"
+fi
 
 # Default tmux window names for mill mode surfaces.
 WAVEMILL_WINDOW_MILL="${WAVEMILL_WINDOW_MILL:-mill}"
@@ -1096,7 +1100,7 @@ safe_remove_task_worktree_and_branch() {
       if [[ -z "$pr" ]]; then
         pr="$(jq -r --arg i "$issue" '.tasks[$i].pr // .tasks[$i].lifecycle.deliveryEvidence.prNumber // empty' "$STATE_FILE" 2>/dev/null || true)"
       fi
-      contract_base_branch="$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.launchContract.baseBranch // empty' "$STATE_FILE" 2>/dev/null || true)"
+      contract_base_branch="$(effective_task_base_branch "$issue" 2>/dev/null || jq -r --arg i "$issue" '.tasks[$i].lifecycle.launchContract.baseBranch // empty' "$STATE_FILE" 2>/dev/null || true)"
       configured_merge_method="$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.launchContract.mergeMethod // empty' "$STATE_FILE" 2>/dev/null || true)"
       [[ -n "$contract_base_branch" ]] && base_branch="$contract_base_branch"
     fi
@@ -1439,7 +1443,7 @@ cleanup_completed_task() {
   else
     CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   fi
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_completed_task" "$issue" "$pr" || cleanup_rc=$?
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-main}")" "cleanup_completed_task" "$issue" "$pr" || cleanup_rc=$?
   cleanup_outcome="${WAVEMILL_CLEANUP_OUTCOME:-}"
   CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed "$cleanup_outcome"; then
@@ -5048,7 +5052,7 @@ def wm_retention_required:
 def wm_has_retention:
   ((.lifecycle.retention.reason // "") | type == "string" and length > 0);
 
-def wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMethod; $remoteDeletionAllowed; $challengeRole; $challengePair; $session; $runEpoch; $windowId; $actor):
+def wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMethod; $remoteDeletionAllowed; $challengeRole; $challengePair; $session; $runEpoch; $windowId; $requireConfirm; $baseBranchSource; $requireConfirmSource; $mergeMethodSource; $actor):
   . as $task
   | ($task.lifecycle // {}) as $l
   | ($task | wm_workflow_outcome) as $outcome
@@ -5058,6 +5062,7 @@ def wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMetho
       baseSha: $baseSha,
       integrationMode: $integrationMode,
       mergeMethod: $mergeMethod,
+      requireConfirm: ($requireConfirm == "true"),
       remoteBranchDeletionPolicy: {
         allowed: ($remoteDeletionAllowed == "true"),
         mode: (if $remoteDeletionAllowed == "true" then "merged-pr-task-branch" else "manual-verification" end),
@@ -5067,7 +5072,13 @@ def wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMetho
       challengePairId: $challengePair,
       session: $session,
       runEpoch: $runEpoch,
-      windowId: $windowId
+      windowId: $windowId,
+      provenance: {
+        baseBranch: $baseBranchSource,
+        requireConfirm: $requireConfirmSource,
+        mergeMethod: $mergeMethodSource,
+        remoteBranchDeletionPolicy: "launch-contract"
+      }
     }) as $contract
   | ($l.deliveryEvidence // {}) as $delivery
   | ($l + {
@@ -5456,6 +5467,7 @@ save_task_state() {
   local planner_model="${13:-}" coder_model="${14:-}" reviewer_model="${15:-}" plan_depth="${16:-}" code_depth="${17:-}" review_mode="${18:-}"
   local challenge_stage="${19:-}" phase="${20:-}" window_id="${21:-}"
   local status="${status_arg:-active}" effective_base_branch effective_base_sha integration_mode merge_method remote_deletion_allowed run_epoch
+  local require_confirm base_branch_source require_confirm_source merge_method_source
   if [[ "$challenge" == "true" && -z "$challenge_role" && -n "$challenge_pair" && "$challenge_pair" == "$issue" ]]; then
     challenge_role="primary"
   fi
@@ -5475,11 +5487,18 @@ save_task_state() {
     fi
   done
 
-  effective_base_branch="${BASE_BRANCH:-}"
+  effective_base_branch="$(effective_task_base_branch "$issue" 2>/dev/null || printf '%s\n' "${BASE_BRANCH:-}")"
   effective_base_sha="$(task_lifecycle_effective_base_sha "$effective_base_branch" 2>/dev/null || true)"
   integration_mode="direct-monitor"
   [[ "${MERGE_QUEUE_ENABLED:-true}" == "1" || "${MERGE_QUEUE_ENABLED:-true}" == "true" ]] && integration_mode="merge-queue"
   merge_method="${INTEGRATION_MERGE_METHOD:-squash}"
+  require_confirm="${REQUIRE_CONFIRM:-true}"
+  [[ "$require_confirm" == "1" ]] && require_confirm="true"
+  [[ "$require_confirm" == "0" ]] && require_confirm="false"
+  [[ "$require_confirm" == "false" ]] || require_confirm="true"
+  base_branch_source="${WAVEMILL_BASE_BRANCH_SOURCE:-runtime-env}"
+  require_confirm_source="${WAVEMILL_REQUIRE_CONFIRM_SOURCE:-runtime-env}"
+  merge_method_source="${WAVEMILL_MERGE_METHOD_SOURCE:-repo-config}"
   remote_deletion_allowed="${INTEGRATION_DELETE_BRANCH_AFTER_MERGE:-true}"
   [[ "$remote_deletion_allowed" == "1" ]] && remote_deletion_allowed="true"
   [[ "$remote_deletion_allowed" == "0" ]] && remote_deletion_allowed="false"
@@ -5515,7 +5534,7 @@ save_task_state() {
       | if $phase != "" then .tasks[$issue].phase = $phase else . end
       | if $windowId != "" then .tasks[$issue].windowId = $windowId else . end
       | if $traceId != "" then .tasks[$issue].traceId = $traceId else . end
-      | .tasks[$issue].lifecycle = (.tasks[$issue] | wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMethod; $remoteDeletionAllowed; $challengeRole; $challengePair; $session; $runEpoch; (.windowId // ""); "save_task_state"))
+      | .tasks[$issue].lifecycle = (.tasks[$issue] | wm_normalized_lifecycle($baseBranch; $baseSha; $integrationMode; $mergeMethod; $remoteDeletionAllowed; $challengeRole; $challengePair; $session; $runEpoch; (.windowId // ""); $requireConfirm; $baseBranchSource; $requireConfirmSource; $mergeMethodSource; "save_task_state"))
       | if ($existing.attempt // null) != null then .tasks[$issue].lifecycle.attempt = $existing.attempt else . end
       | if ($existing.prReconciliation // null) != null then .tasks[$issue].lifecycle.prReconciliation = $existing.prReconciliation else . end
       | if $pr != "" then .tasks[$issue].lifecycle.deliveryEvidence.prNumber = $pr else . end')" \
@@ -5530,6 +5549,10 @@ save_task_state() {
      --arg traceId "$_trace_id_for_state" \
      --arg baseBranch "$effective_base_branch" --arg baseSha "$effective_base_sha" \
      --arg integrationMode "$integration_mode" --arg mergeMethod "$merge_method" \
+     --arg requireConfirm "$require_confirm" \
+     --arg baseBranchSource "$base_branch_source" \
+     --arg requireConfirmSource "$require_confirm_source" \
+     --arg mergeMethodSource "$merge_method_source" \
      --arg remoteDeletionAllowed "$remote_deletion_allowed" --arg session "${SESSION:-}" \
      --arg runEpoch "$run_epoch"; then
     # log_warn is caller-provided (the mill and monitor define it; the startup
