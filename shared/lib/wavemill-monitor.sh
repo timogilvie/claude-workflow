@@ -8990,11 +8990,26 @@ should_update_linear_state() {
   [[ "$role" != "challenger" ]]
 }
 
-should_cleanup_closed_pr() {
+# HOK-2952: role-aware resource policy for a closed, unmerged PR (replaces
+# should_cleanup_closed_pr, which excluded non-challenge tasks and
+# auto-merge challengers entirely and leaked their panes). Every closed PR
+# releases its terminal pane; only a challenger whose challenge comparison
+# is still pending under auto-merge keeps its git work (`pane-release-only`)
+# - the challenge loser-cleanup path retains deletion authority there.
+closed_pr_resource_policy() {
   local issue="$1"
-  local role
+  local role pair_id
   role=$(get_task_meta "$issue" "challengeRole")
-  [[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" != "true" ]]
+  if [[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+    pair_id=$(get_task_meta "$issue" "challengePairId")
+    if [[ -n "$pair_id" ]] && challenge_pair_record_exists "$pair_id"; then
+      printf 'full-cleanup\n'
+      return 0
+    fi
+    printf 'pane-release-only\n'
+    return 0
+  fi
+  printf 'full-cleanup\n'
 }
 
 is_challenge_task() {
@@ -14561,6 +14576,14 @@ monitor_issue_state() {
     fi
     return 0
   elif [[ "$pr_status" == "CLOSED" ]]; then
+    # Already durably reconciled on an earlier pass (task state reaped):
+    # repeated passes and restarts are no-ops with no duplicate errors.
+    # Fails open ("true") when state is unreadable so an unknown task still
+    # takes the normal closed-PR path.
+    if [[ "$(read_state_value "true" --arg i "$ISSUE" '.tasks[$i] != null')" == "false" ]]; then
+      CLEANED["$ISSUE"]=1
+      return 0
+    fi
     log_warn "$ISSUE → PR #$PR CLOSED without merge"
     local linear_status="Backlog"
     if is_challenge_task "$ISSUE"; then
@@ -14600,12 +14623,24 @@ monitor_issue_state() {
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
       fi
     fi
-    if should_cleanup_closed_pr "$ISSUE"; then
-      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
+    # HOK-2952: one ownership policy for every closed-PR role. The old
+    # in-memory-only `CLEANED=1` branch (which left pane/worktree/state
+    # allocated forever) is gone; a blocked release/cleanup simply retries
+    # on the next pass off the durable markers.
+    local closed_pr_policy
+    closed_pr_policy="$(closed_pr_resource_policy "$ISSUE")"
+    if [[ "$closed_pr_policy" == "pane-release-only" ]]; then
+      # Challenger awaiting challenge comparison under auto-merge: git work
+      # must survive for the comparison, but the pane is done.
+      if wavemill_release_terminal_pane "$SESSION" "$ISSUE" "$SLUG" "pr_closed_unmerged" "$PR"; then
+        CLEANED["$ISSUE"]=1
+      else
+        log "debug" "  ↳ $ISSUE pane release deferred (${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-blocked})"
+      fi
+    else
+      log "debug" "  ↳ Auto-cleaning closed task pane/worktree"
       set_window_attention_state "$WIN" "clear"
       cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
-    else
-      CLEANED["$ISSUE"]=1
     fi
     return 0
   fi

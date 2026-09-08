@@ -620,7 +620,8 @@ harness_run_tick() {
     get_challenge_sibling_pr() { :; }
     check_challenge_sibling_merged() { return 1; }
     save_migration_reservation() { :; }
-    should_cleanup_closed_pr() { return 1; }
+    closed_pr_resource_policy() { printf "%s\n" "pane-release-only"; }
+    wavemill_release_terminal_pane() { return 0; }
     transient_error_recovery_pending() { return 1; }
     codex_has_pending_approval() { return 1; }
     launch_background_post_merge_eval() { :; }

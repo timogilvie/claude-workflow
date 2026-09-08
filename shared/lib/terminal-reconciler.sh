@@ -125,7 +125,7 @@ wavemill_terminal_marker_value() {
   local issue="$1" reason="$2" pr_number="${3:-}" pr_json="${4:-null}" now
   now="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   jq -cn --arg issue "$issue" --arg reason "$reason" --arg pr "$pr_number" --arg appliedAt "$now" --argjson prJson "$pr_json" \
-    '{issue:$issue, reason:$reason, prNumber:(if $pr == "" then null else $pr end), appliedAt:$appliedAt, stateApplied:true, stageApplied:false, hookApplied:false, paneMetadataApplied:false, paneApplied:false, linearApplied:false, pr:$prJson}'
+    '{issue:$issue, reason:$reason, prNumber:(if $pr == "" then null else $pr end), appliedAt:$appliedAt, stateApplied:true, stageApplied:false, hookApplied:false, paneMetadataApplied:false, paneReleased:false, linearApplied:false, pr:$prJson}'
 }
 
 wavemill_terminal_marker_field() {
@@ -228,6 +228,270 @@ wavemill_reconcile_pane_terminal() {
   return 0
 }
 
+# --- HOK-2952: deterministic terminal pane release ---------------------------
+#
+# One pane-resource policy for every terminal reason, and one release
+# primitive shared by terminal reconciliation (wavemill_reconcile_terminal)
+# and completed-task cleanup (cleanup_completed_task). Pane release is
+# deliberately independent of git worktree/branch cleanup: retained git work
+# stays discoverable through the durable terminal record written before the
+# window is killed.
+
+# Feature gate (rollback lever). Default enabled; disable with
+# terminal.paneRelease.enabled=false (user -> repo -> local config layering)
+# or the WAVEMILL_TERMINAL_PANE_RELEASE=0 env kill-switch. Disabling stops
+# automated release only - truthful state fields, archives, and terminal
+# records keep being written.
+terminal_pane_release_enabled() {
+  if [[ "${WAVEMILL_TERMINAL_PANE_RELEASE:-}" == "0" ]]; then
+    printf 'false\n'
+    return 0
+  fi
+  local repo_dir="${REPO_DIR:-}"
+  local user_config="$HOME/.wavemill/config.json"
+  local repo_config="$repo_dir/.wavemill-config.json"
+  local local_config="$repo_dir/.wavemill-config.local.json"
+  local user_json='{}' repo_json='{}' local_json='{}'
+  [[ -f "$user_config" ]] && user_json=$(cat "$user_config" 2>/dev/null || echo '{}')
+  [[ -f "$repo_config" ]] && repo_json=$(cat "$repo_config" 2>/dev/null || echo '{}')
+  [[ -f "$local_config" ]] && local_json=$(cat "$local_config" 2>/dev/null || echo '{}')
+  jq -nr \
+    --argjson user "$user_json" \
+    --argjson repo "$repo_json" \
+    --argjson local "$local_json" \
+    '({terminal:{paneRelease:{enabled:true}}} * $user * $repo * $local).terminal.paneRelease.enabled
+     | if . == false then "false" else "true" end' 2>/dev/null || printf 'true\n'
+}
+
+# Pane action terminal reconciliation owns for a reason:
+#   release       - workflow is over; archive + record + kill the task window
+#   metadata-only - workflow still active (HOK-2937 queue handoff owns any
+#                   release), the feature gate is off, or an explicit
+#                   operator hold (REQUIRE_CONFIRM on pr_merged) applies
+#   retain        - attention states where the pane is the operator's
+#                   diagnostic surface
+wavemill_terminal_pane_policy_for_reason() {
+  local reason="$1" policy
+  case "$reason" in
+    pr_merged|pr_closed_unmerged|challenge_resolved_winner|challenge_invalid|challenge_no_comparison)
+      policy="release" ;;
+    review_complete|ready_complete|pr_opened)
+      policy="metadata-only" ;;
+    operator_abort|recovery_failure)
+      policy="retain" ;;
+    *)
+      policy="metadata-only" ;;
+  esac
+  if [[ "$policy" == "release" ]]; then
+    if [[ "$(terminal_pane_release_enabled)" != "true" ]]; then
+      policy="metadata-only"
+    elif [[ "$reason" == "pr_merged" && "${REQUIRE_CONFIRM:-false}" == "true" ]]; then
+      # "Window stays open for review" contract: explicit operator hold.
+      policy="metadata-only"
+    fi
+  fi
+  printf '%s\n' "$policy"
+}
+
+# Fresh (TTL < 300s) hook state for an issue. Self-contained equivalent of
+# the monitor's fresh_hook_state_for_issue so the reconciler stays sourceable
+# without wavemill-monitor.sh; prints nothing when the hook is missing/stale.
+wavemill_terminal_fresh_hook_state() {
+  local session="$1" issue="$2" hook_file hook_ts now
+  hook_file="/tmp/wavemill-${session}-${issue}.hook"
+  [[ -f "$hook_file" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  hook_ts=$(jq -r '.timestamp // 0' "$hook_file" 2>/dev/null || echo 0)
+  [[ "$hook_ts" =~ ^[0-9]+$ ]] || return 0
+  now=$(date +%s)
+  (( now - hook_ts < 300 )) || return 0
+  jq -r '.state // empty' "$hook_file" 2>/dev/null || true
+}
+
+# wavemill_release_terminal_pane <session> <issue> [slug] [reason] [pr]
+#
+# Fault-ordered release: ownership guard -> archive diagnostics -> durable
+# terminal record -> kill window -> truthful state. Returns 0 on durable
+# release (including a missing/already-dead window with ownership proven);
+# returns 1 when blocked, with WAVEMILL_PANE_RELEASE_BLOCK_REASON set.
+# Never deletes or modifies git work; disposition stays owned by git truth.
+wavemill_release_terminal_pane() {
+  local session="$1" issue="$2" slug="${3:-}" reason="${4:-terminal}" pr_number="${5:-}"
+  local branch="" wt_dir="" head_sha="" target="" joined_target="" window_exists="false"
+  local archive_dir record_path transcript_archived="false" transcript_path=""
+  local pane_pid live_rc hook_state released_at reason_slug record_existed="false"
+  local wt_present="false"
+
+  WAVEMILL_PANE_RELEASE_BLOCK_REASON=""
+  command -v jq >/dev/null 2>&1 || { WAVEMILL_PANE_RELEASE_BLOCK_REASON="jq-missing"; return 1; }
+  [[ -n "$session" && -n "$issue" ]] || { WAVEMILL_PANE_RELEASE_BLOCK_REASON="context-missing"; return 1; }
+
+  if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+    [[ -n "$slug" ]] || slug="$(jq -r --arg issue "$issue" '.tasks[$issue].slug // empty' "$STATE_FILE" 2>/dev/null || true)"
+    branch="$(jq -r --arg issue "$issue" '.tasks[$issue].branch // empty' "$STATE_FILE" 2>/dev/null || true)"
+    wt_dir="$(jq -r --arg issue "$issue" '.tasks[$issue].worktree // empty' "$STATE_FILE" 2>/dev/null || true)"
+    # Fully released already: short-circuit before any tmux call.
+    if [[ "$(jq -r --arg issue "$issue" '.tasks[$issue].paneReleased // false' "$STATE_FILE" 2>/dev/null || echo false)" == "true" ]]; then
+      return 0
+    fi
+  fi
+  [[ -n "$branch" || -z "$slug" ]] || branch="task/${slug}"
+  [[ -n "$wt_dir" || -z "$slug" || -z "${WORKTREE_ROOT:-}" ]] || wt_dir="${WORKTREE_ROOT%/}/${slug}"
+
+  # 1. Ownership guard: never kill a pane still owned by an active workflow
+  # stage. A missing/already-dead window with ownership proven is idempotent
+  # success (the durable record below is still written).
+  if command -v tmux >/dev/null 2>&1; then
+    target="$(_tmux_task_window_target "$session" "$issue" "$slug" "${STATE_FILE:-}" "$wt_dir" 2>/dev/null || true)"
+  fi
+  if [[ -n "$target" ]]; then
+    window_exists="true"
+    joined_target="$(_tmux_target_join "$session" "$target" 2>/dev/null || printf '%s' "$target")"
+    if declare -F mill_pane_has_live_blocking_process >/dev/null 2>&1; then
+      pane_pid="$(tmux list-panes -t "$joined_target" -F '#{pane_pid}' 2>/dev/null | head -n 1 || true)"
+      live_rc=0
+      mill_pane_has_live_blocking_process "$pane_pid" || live_rc=$?
+      if [[ "$live_rc" -eq 0 ]]; then
+        WAVEMILL_PANE_RELEASE_BLOCK_REASON="live-agent-process"
+        return 1
+      elif [[ "$live_rc" -eq 2 ]]; then
+        WAVEMILL_PANE_RELEASE_BLOCK_REASON="liveness-indeterminate"
+        return 1
+      fi
+    fi
+  fi
+  hook_state="$(wavemill_terminal_fresh_hook_state "$session" "$issue" 2>/dev/null || true)"
+  case "$hook_state" in
+    working|waiting|approval-needed|blocked)
+      WAVEMILL_PANE_RELEASE_BLOCK_REASON="hook-${hook_state}"
+      return 1
+      ;;
+  esac
+
+  # 2. Archive diagnostics before any kill. Failures are logged but never
+  # block release (a restart replay may find no tmux server at all).
+  reason_slug="$(printf '%s' "$reason" | tr -cs 'A-Za-z0-9_.-' '-')"
+  archive_dir="${REPO_DIR:-.}/.wavemill/evals/artifacts/${issue}"
+  mkdir -p "$archive_dir" 2>/dev/null || true
+  if [[ "$window_exists" == "true" && -d "$archive_dir" ]]; then
+    transcript_path="$archive_dir/pane-transcript-${reason_slug}.txt"
+    if tmux capture-pane -p -J -S - -t "$joined_target" > "$transcript_path" 2>/dev/null; then
+      transcript_archived="true"
+    else
+      rm -f "$transcript_path" 2>/dev/null || true
+      declare -F log_warn >/dev/null 2>&1 && log_warn "  $issue pane transcript capture failed; releasing anyway" || true
+    fi
+  fi
+  local hook_protocol feature_dir=""
+  hook_protocol="${WAVEMILL_HOOK_PROTOCOL:-${LIB_DIR:-${REPO_DIR:-}/shared/lib}/../hooks/wavemill-hook-protocol.sh}"
+  [[ -f "$hook_protocol" ]] || hook_protocol="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/hooks/wavemill-hook-protocol.sh"
+  if [[ -f "$hook_protocol" ]]; then
+    # shellcheck source=../hooks/wavemill-hook-protocol.sh
+    source "$hook_protocol" 2>/dev/null || true
+    feature_dir="$(wavemill_terminal_feature_dir "$issue" 2>/dev/null || true)"
+    if declare -F wavemill_hook_archive_current >/dev/null 2>&1; then
+      WAVEMILL_SESSION="$session" WAVEMILL_ISSUE="$issue" WAVEMILL_FEATURE_DIR="$feature_dir" \
+        wavemill_hook_archive_current "$session" "$issue" "pane-release-${reason_slug}" || true
+    fi
+  fi
+
+  # 3. Durable terminal record, written atomically BEFORE the kill: the
+  # recovery pointer for retained git work once the pane is gone. Unchanged
+  # head/reason skips the rewrite so repeat passes stay no-ops.
+  record_path="$archive_dir/terminal-record.json"
+  [[ -n "$wt_dir" && -d "$wt_dir" ]] && wt_present="true"
+  [[ "$wt_present" == "true" ]] && head_sha="$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null || true)"
+  released_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  if [[ -f "$record_path" ]] \
+    && [[ "$(jq -r '.reason // empty' "$record_path" 2>/dev/null)" == "$reason" ]] \
+    && [[ "$(jq -r '.headSha // empty' "$record_path" 2>/dev/null)" == "$head_sha" ]]; then
+    record_existed="true"
+  else
+    local tmp_record="${record_path}.tmp.$$"
+    if ! jq -cn \
+      --arg issue "$issue" --arg slug "$slug" --arg session "$session" \
+      --arg reason "$reason" --arg pr "$pr_number" --arg branch "$branch" \
+      --arg worktree "$wt_dir" --arg headSha "$head_sha" --arg windowTarget "$target" \
+      --arg releasedAt "$released_at" --arg repoDir "${REPO_DIR:-}" \
+      --argjson transcriptArchived "$transcript_archived" \
+      --argjson worktreePresent "$wt_present" \
+      '{schemaVersion: 1, issue: $issue,
+        slug: (if $slug == "" then null else $slug end),
+        session: $session, reason: $reason,
+        prNumber: (if $pr == "" then null else $pr end),
+        branch: (if $branch == "" then null else $branch end),
+        worktree: (if $worktree == "" then null else $worktree end),
+        headSha: (if $headSha == "" then null else $headSha end),
+        windowTarget: (if $windowTarget == "" then null else $windowTarget end),
+        transcriptArchived: $transcriptArchived,
+        recovery: {
+          worktreePresentAtRelease: $worktreePresent,
+          branch: (if $branch == "" then null else $branch end),
+          howToRecover: (
+            if $branch == "" then "No branch recorded; inspect this archive directory for stage artifacts."
+            else ("Retained work (if any) lives on branch " + $branch
+              + (if $worktree == "" then "" else " (worktree at release: " + $worktree + ")" end)
+              + "; recover with: git -C " + $repoDir + " worktree add <dir> " + $branch)
+            end)
+        },
+        releasedAt: $releasedAt}' > "$tmp_record" 2>/dev/null \
+      || ! mv "$tmp_record" "$record_path" 2>/dev/null; then
+      rm -f "$tmp_record" 2>/dev/null || true
+      WAVEMILL_PANE_RELEASE_BLOCK_REASON="terminal-record-write-failed"
+      declare -F log_warn >/dev/null 2>&1 && log_warn "  $issue could not write terminal record; deferring pane release" || true
+      return 1
+    fi
+  fi
+
+  # 4. Kill the window (verified), then drop the hook file - mirrors
+  # release_task_pane_window_only.
+  if [[ "$window_exists" == "true" ]]; then
+    if declare -F wavemill_cleanup_run >/dev/null 2>&1; then
+      wavemill_cleanup_run tmux kill-window -t "$joined_target" 2>/dev/null || true
+    else
+      tmux kill-window -t "$joined_target" 2>/dev/null || true
+    fi
+    if _tmux_window_target_exists "$session" "$target"; then
+      WAVEMILL_PANE_RELEASE_BLOCK_REASON="tmux-window-close-failed"
+      # First failure warns; retries (record already durable) log at debug
+      # so repeated passes never emit duplicate pane-release errors.
+      if [[ "$record_existed" == "true" ]]; then
+        declare -F log >/dev/null 2>&1 && log "debug" "  $issue tmux window still present after kill; will retry" || true
+      else
+        declare -F log_warn >/dev/null 2>&1 && log_warn "  $issue tmux window still present after kill; will retry" || true
+      fi
+      return 1
+    fi
+  fi
+  rm -f "/tmp/wavemill-${session}-${issue}.hook" 2>/dev/null || true
+
+  # 5. Truthful state: pane fields describe the real state of tmux; the
+  # resource disposition stays owned by git-side truth for terminal
+  # outcomes (retained/verification-required/reaping/reaped survive).
+  if [[ -n "${STATE_FILE:-}" && -f "${STATE_FILE:-}" ]] && declare -F state_mutate >/dev/null 2>&1 \
+    && [[ "$(jq -r --arg issue "$issue" '.tasks[$issue] != null' "$STATE_FILE" 2>/dev/null || echo false)" == "true" ]]; then
+    state_mutate "$STATE_FILE" '
+      (.tasks[$issue].lifecycle // {}) as $l
+      | .tasks[$issue].paneState = "released"
+      | .tasks[$issue].paneReleased = true
+      | .tasks[$issue].paneReleasedAt = $releasedAt
+      | .tasks[$issue].terminalRecordWritten = true
+      | .tasks[$issue].lifecycle = ($l + {
+          schemaVersion: 1,
+          workflowOutcome: ($l.workflowOutcome // "active"),
+          resourceDisposition: (
+            if ($l.workflowOutcome // "active") == "active" and ($l.resourceDisposition // "allocated") == "allocated"
+            then "released"
+            else ($l.resourceDisposition // "allocated")
+            end
+          )
+        })
+      | .tasks[$issue].updated = (now | todateiso8601)
+    ' --arg issue "$issue" --arg releasedAt "$released_at" >/dev/null || true
+  fi
+  return 0
+}
+
 wavemill_terminal_linear_status() {
   local issue="$1" reason="$2" sibling_pr="" sibling_state=""
   case "$reason" in
@@ -302,11 +566,28 @@ wavemill_reconcile_terminal() {
     wavemill_terminalize_hook_for_issue "$session" "$issue" "$effective_reason" "$pr_number"
     wavemill_terminal_mark_field "$issue" "$key" "hookApplied" true
   fi
+  # Legacy `paneApplied` is read only as "metadata applied" back-compat for
+  # existing markers; it is never written for new markers and never treated
+  # as evidence of pane release (HOK-2952).
   if [[ "$(wavemill_terminal_marker_field "$issue" "$key" "paneMetadataApplied")" != "true" ]] \
     && [[ "$(wavemill_terminal_marker_field "$issue" "$key" "paneApplied")" != "true" ]]; then
     wavemill_reconcile_pane_terminal "$session" "$issue" "$effective_reason"
     wavemill_terminal_mark_field "$issue" "$key" "paneMetadataApplied" true
-    wavemill_terminal_mark_field "$issue" "$key" "paneApplied" true
+  fi
+  local pane_policy pane_released
+  pane_policy="$(wavemill_terminal_pane_policy_for_reason "$effective_reason")"
+  if [[ "$pane_policy" == "release" ]]; then
+    pane_released="false"
+    if [[ -n "${STATE_FILE:-}" && -r "${STATE_FILE:-}" ]]; then
+      pane_released="$(jq -r --arg issue "$issue" '.tasks[$issue].paneReleased // false' "$STATE_FILE" 2>/dev/null || echo false)"
+    fi
+    if [[ "$pane_released" != "true" ]]; then
+      if wavemill_release_terminal_pane "$session" "$issue" "" "$effective_reason" "$pr_number"; then
+        wavemill_terminal_mark_field "$issue" "$key" "paneReleased" true
+      else
+        declare -F log >/dev/null 2>&1 && log "debug" "  $issue terminal pane release deferred (${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-blocked}); will retry" || true
+      fi
+    fi
   fi
   if [[ "$(wavemill_terminal_marker_field "$issue" "$key" "linearApplied")" != "true" ]]; then
     linear_rc=0

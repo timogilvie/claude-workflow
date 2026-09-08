@@ -482,8 +482,11 @@ else
     # Extract function definitions from transient-marker.sh (also sourced by monitor)
     MARKER_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/transient-marker.sh" | sed 's/()//' | sort -u)
 
+    # Extract function definitions from terminal-reconciler.sh (also sourced by monitor)
+    RECONCILER_FUNCS=$(grep -oE '^[a-z_][a-z0-9_]*\(\)' "$LIB_DIR/terminal-reconciler.sh" | sed 's/()//' | sort -u)
+
     # Combine all available function definitions
-    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$BOUNDED_RETRY_FUNCS" "$HOOK_FUNCS" "$QUEUE_HEALTH_FUNCS" "$MARKER_FUNCS" | sort -u)
+    ALL_DEFINED=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s' "$HEREDOC_FUNCS" "$ADAPTER_FUNCS" "$COMMON_FUNCS" "$BOUNDED_RETRY_FUNCS" "$HOOK_FUNCS" "$QUEUE_HEALTH_FUNCS" "$MARKER_FUNCS" "$RECONCILER_FUNCS" | sort -u)
 
     # Known external commands and bash builtins that are NOT custom functions
     # This list covers standard utilities, coreutils, and tools used by wavemill
@@ -941,12 +944,13 @@ else
     fail "closed PR path is missing warning log"
   fi
 
-  if grep -Fq 'should_cleanup_closed_pr() {' <<< "$HEREDOC_CONTENT" \
+  if grep -Fq 'closed_pr_resource_policy() {' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'role=$(get_task_meta "$issue" "challengeRole")' <<< "$HEREDOC_CONTENT" \
-    && grep -Fq '[[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" != "true" ]]' <<< "$HEREDOC_CONTENT"; then
-    pass "monitor defines closed-PR cleanup helper for manual-review challengers"
+    && grep -Fq '[[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq "printf 'pane-release-only\\n'" <<< "$HEREDOC_CONTENT"; then
+    pass "monitor defines role-aware closed-PR resource policy (HOK-2952)"
   else
-    fail "monitor is missing closed-PR cleanup helper for manual-review challengers"
+    fail "monitor is missing the role-aware closed-PR resource policy helper"
   fi
 
   if grep -Fq 'get_challenge_sibling_pr() {' <<< "$HEREDOC_CONTENT" \
@@ -957,12 +961,13 @@ else
     fail "monitor is missing challenge sibling helpers for closed-PR resolution"
   fi
 
-  if grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' <<< "$CLOSED_BLOCK" \
+  if grep -Fq 'closed_pr_resource_policy "$ISSUE"' <<< "$CLOSED_BLOCK" \
     && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
-    && grep -Fq 'Auto-cleaning closed challenger pane/worktree' <<< "$CLOSED_BLOCK"; then
-    pass "closed challenger PRs trigger automatic pane/worktree cleanup"
+    && grep -Fq 'wavemill_release_terminal_pane "$SESSION" "$ISSUE" "$SLUG" "pr_closed_unmerged" "$PR"' <<< "$CLOSED_BLOCK" \
+    && ! grep -Fq 'should_cleanup_closed_pr' <<< "$CLOSED_BLOCK"; then
+    pass "closed PRs route every role through the shared pane-resource policy (HOK-2952)"
   else
-    fail "closed challenger PRs do not trigger automatic cleanup"
+    fail "closed PR path is missing the shared pane-resource policy dispatch"
   fi
 
   if grep -Fq 'local linear_status="Backlog"' <<< "$CLOSED_BLOCK" \
