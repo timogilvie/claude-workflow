@@ -47,6 +47,12 @@ export const INCIDENT_ROOT_CAUSE_CLASSES = [
   'provider_quota_exhaustion_blocking_review',
   'challenge_arm_missing_current_head_eval',
   'inspection_required',
+  'cleanup_retained_by_policy',
+  'cleanup_unpublished_at_risk',
+  'cleanup_verification_unavailable',
+  'cleanup_dirty_worktree',
+  'config_drift_base_branch',
+  'config_drift_confirm',
   'unclassified_local_failure',
 ] as const;
 
@@ -76,6 +82,12 @@ export function canonicalizeRootCauseClass(raw: string): IncidentRootCauseClass 
   if (/invalid[-_ ]config|schema[-_ ]validation|missing[-_ ]config/.test(lower)) {
     return 'local_config_failure';
   }
+  if (/cleanup[-_ ]retained[-_ ]by[-_ ]policy/.test(lower)) return 'cleanup_retained_by_policy';
+  if (/cleanup[-_ ]unpublished[-_ ]at[-_ ]risk/.test(lower)) return 'cleanup_unpublished_at_risk';
+  if (/cleanup[-_ ]verification[-_ ]unavailable/.test(lower)) return 'cleanup_verification_unavailable';
+  if (/cleanup[-_ ]dirty[-_ ]worktree/.test(lower)) return 'cleanup_dirty_worktree';
+  if (/config[-_ ]drift[-_ ]base[-_ ]branch/.test(lower)) return 'config_drift_base_branch';
+  if (/config[-_ ]drift[-_ ]confirm/.test(lower)) return 'config_drift_confirm';
   if (/ls-remote|ssh|publickey|github/.test(lower)) return 'remote_ssh_failure';
   if (/timeout|timed[-_ ]out/.test(lower)) return 'remote_timeout';
   if (/credential|permission|auth/.test(lower)) return 'remote_auth_failure';

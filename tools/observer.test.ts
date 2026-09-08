@@ -83,6 +83,13 @@ function writePermissiveSchema(repoDir: string): void {
     type: 'object',
     additionalProperties: true,
   }));
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    configVersion: '1.5.0',
+    mill: {
+      baseBranch: 'auto/integration',
+      requireConfirm: true,
+    },
+  }, null, 2));
 }
 
 function basicSnapshot(repoDir: string, logPath?: string) {
@@ -1261,6 +1268,39 @@ function createResidueGitFixture({
   return { root, repoDir, slug, branch };
 }
 
+function createMainIntegrationDivergenceFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'observer-effective-base-'));
+  const repoDir = join(root, 'repo');
+  const originDir = join(root, 'origin.git');
+  mkdirSync(repoDir, { recursive: true });
+  runGit(root, ['init', '--bare', originDir]);
+  runGit(root, ['init', repoDir]);
+  runGit(repoDir, ['config', 'user.email', 'observer-test@example.com']);
+  runGit(repoDir, ['config', 'user.name', 'Observer Test']);
+  runGit(repoDir, ['config', 'commit.gpgsign', 'false']);
+  runGit(repoDir, ['checkout', '-b', 'main']);
+  writeFileSync(join(repoDir, 'main.txt'), 'main\n');
+  runGit(repoDir, ['add', '.']);
+  runGit(repoDir, ['commit', '-m', 'main base']);
+  runGit(repoDir, ['remote', 'add', 'origin', originDir]);
+  runGit(repoDir, ['push', '-u', 'origin', 'main']);
+  runGit(repoDir, ['checkout', '-b', 'auto/integration']);
+  writeFileSync(join(repoDir, 'integration.txt'), 'integration\n');
+  runGit(repoDir, ['add', '.']);
+  runGit(repoDir, ['commit', '-m', 'integration promotion']);
+  runGit(repoDir, ['push', '-u', 'origin', 'auto/integration']);
+  const slug = 'review-scope-guards-merge-base-fallback-flags-the-branchs-own';
+  const branch = `task/${slug}`;
+  runGit(repoDir, ['checkout', '-b', branch]);
+  writePermissiveSchema(repoDir);
+  writeFileSync(join(repoDir, '.wavemill-config.json'), JSON.stringify({
+    configVersion: '1.5.0',
+    mill: { baseBranch: 'main', requireConfirm: false },
+    integration: { mergeMethod: 'squash' },
+  }, null, 2));
+  return { root, repoDir, slug, branch };
+}
+
 function agoIso(minutes: number): string {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
@@ -1332,6 +1372,57 @@ test('aged terminal task with clean branch fires medium terminal-task-parked wit
     assert.match(parked.recommendation, /never remove the worktree manually/);
 
     assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('effective launch-contract base suppresses main/integration work-loss false positive', () => {
+  const fixture = createMainIntegrationDivergenceFixture();
+  try {
+    const findings = buildFindings(residueSnapshot(fixture.repoDir, [{
+      issue: 'HOK-2913_c',
+      slug: fixture.slug,
+      branch: fixture.branch,
+      phase: 'closed',
+      status: 'closed',
+      worktree: fixture.repoDir,
+      updated: agoIso(60),
+      lifecycle: {
+        schemaVersion: 1,
+        workflowOutcome: 'closed',
+        resourceDisposition: 'retained',
+        retention: { reason: 'squash-delivered' },
+        launchContract: {
+          baseBranch: 'auto/integration',
+          requireConfirm: true,
+          mergeMethod: 'squash',
+          remoteBranchDeletionPolicy: { allowed: true, mode: 'merged-pr-task-branch' },
+          provenance: {
+            baseBranch: 'runtime-env',
+            requireConfirm: 'runtime-env',
+            mergeMethod: 'repo-config',
+            remoteBranchDeletionPolicy: 'launch-contract',
+          },
+        },
+        deliveryEvidence: {
+          prNumber: '2913',
+          prState: 'MERGED',
+          prBaseBranch: 'auto/integration',
+          prHeadSha: 'a'.repeat(40),
+          mergeSha: 'b'.repeat(40),
+        },
+      },
+    }]), defaultObserverOptions());
+
+    assert.equal(findings.some((finding) => finding.id.startsWith('arm-died-with-unpushed-work-')), false);
+    assert.equal(findings.some((finding) => finding.id.startsWith('terminal-task-parked-')), false);
+    const drift = findings.find((finding) => finding.id.startsWith('config-drift-wavemill-HOK-2913_c-'));
+    assert.ok(drift);
+    assert.equal(drift.severity, 'low');
+    assert.ok(drift.evidence.includes('baseBranch=auto/integration'));
+    assert.ok(drift.evidence.includes('baseBranchSource=runtime-env'));
+    assert.ok(drift.evidence.includes('repoConfigBaseBranch=main'));
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }
