@@ -299,6 +299,7 @@ function resolveTerminal(
   }
   const mergeTime = new Date(mergedAt);
   if (Number.isNaN(mergeTime.valueOf())) return { terminal: null, missingReason: 'insufficient_history' };
+  // Compute cutoff by adding milliseconds to UTC timestamp (not affected by DST).
   const cutoff = new Date(mergeTime.valueOf() + horizon * 24 * 60 * 60 * 1000);
   if (now.valueOf() < cutoff.valueOf()) return { terminal: null, missingReason: 'missing_horizon' };
   const terminal = history.slice(0, mergeIndex + 1).find((commit) => {
@@ -347,7 +348,9 @@ export function parseZeroContextDiff(diff: string): ParsedHunk[] {
       continue;
     }
     if (line.startsWith('+++ ')) {
-      path = stripDiffPath(line.slice(4));
+      const newPath = stripDiffPath(line.slice(4));
+      // For file deletions, newPath is '/dev/null'; use oldPath instead to track the deleted file
+      path = newPath === '/dev/null' ? oldPath : newPath;
       continue;
     }
     const match = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
@@ -369,7 +372,7 @@ export function parseZeroContextDiff(diff: string): ParsedHunk[] {
     if (line.startsWith('-')) current.oldLines.push(line.slice(1));
     if (line.startsWith('+')) current.newLines.push(line.slice(1));
   }
-  return hunks.filter((hunk) => hunk.path && hunk.path !== '/dev/null');
+  return hunks.filter((hunk) => hunk.path);
 }
 
 function stripDiffPath(path: string): string {
