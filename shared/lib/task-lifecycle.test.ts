@@ -133,6 +133,50 @@ test('unknown lifecycle fields survive normalization', () => {
   assert.deepEqual(normalized.lifecycle.futureField, { keep: true });
 });
 
+test('cleanup episode survives normalization on retained terminal lifecycle', () => {
+  const normalized = normalizeTaskLifecycle({
+    lifecycle: {
+      schemaVersion: 1,
+      workflowOutcome: 'merged',
+      resourceDisposition: 'retained',
+      retention: {
+        reason: 'local-work-preserved',
+      },
+      cleanupEpisode: {
+        schemaVersion: 1,
+        episodeId: 'HOK-2955:cleanup:abc123',
+        fingerprint: 'abc123',
+        fingerprintInputs: {
+          branch: 'task/example',
+          localHeadSha: 'a'.repeat(40),
+        },
+        disposition: 'retained',
+        failureClass: 'expected-preservation',
+        firstAttemptAt: '2026-09-08T12:00:00Z',
+        lastAttemptAt: '2026-09-08T12:00:00Z',
+        attemptCount: 1,
+        nextRetryAt: null,
+        requiredOperatorAction: 'Push task/example to origin or explicitly abandon it.',
+        lastOutcome: 'local-work-preserved',
+        updatedAt: '2026-09-08T12:00:00Z',
+        futureEpisodeField: {
+          keep: true,
+        },
+      },
+      launchContract: {
+        remoteBranchDeletionPolicy: {
+          allowed: false,
+          mode: 'manual-verification',
+        },
+      },
+    },
+  });
+
+  assert.equal(normalized.slotConsumes, false);
+  assert.equal(normalized.lifecycle.cleanupEpisode?.disposition, 'retained');
+  assert.deepEqual(normalized.lifecycle.cleanupEpisode?.futureEpisodeField, { keep: true });
+});
+
 test('malformed lifecycle fails closed to verification-required without deletion authority', () => {
   const normalized = normalizeTaskLifecycle({
     status: 'merged',
@@ -177,6 +221,29 @@ test('JSON schema rejects closed allocated state without retention', () => {
     resourceDisposition: 'allocated',
     retention: {
       reason: 'operator-retained-pane',
+    },
+    launchContract: {
+      remoteBranchDeletionPolicy: {
+        allowed: false,
+      },
+    },
+  }), true);
+
+  assert.equal(validate({
+    schemaVersion: 1,
+    workflowOutcome: 'merged',
+    resourceDisposition: 'retained',
+    retention: {
+      reason: 'local-work-preserved',
+    },
+    cleanupEpisode: {
+      schemaVersion: 1,
+      episodeId: 'HOK-2955:cleanup:abc123',
+      fingerprint: 'abc123',
+      disposition: 'retained',
+      failureClass: 'expected-preservation',
+      attemptCount: 1,
+      updatedAt: '2026-09-08T12:00:00Z',
     },
     launchContract: {
       remoteBranchDeletionPolicy: {

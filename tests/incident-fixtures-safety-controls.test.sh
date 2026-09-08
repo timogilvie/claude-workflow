@@ -65,24 +65,26 @@ branch_exists() {
   git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$1"
 }
 
-# assert_control_preserved <issue> <slug> <branch> <expected-reason> <expected-verification-reason-or-empty>
+# assert_control_preserved <issue> <slug> <branch> <expected-reason> <expected-verification-reason-or-empty> [expected-episode-disposition]
 #
-# Drives two ticks (proving the guard is not a one-shot fluke) and asserts,
-# after each: the preservation marker exists with the right reason/
-# verificationReason, the workflow-state task entry is retained (cleanup
-# never completed), the worktree directory still exists on disk, and the
-# local branch still exists. This is the shared assertion body for all five
-# controls - only the topology-building setup differs between them.
+# Drives ten ticks and asserts unchanged evidence produces one cleanup attempt
+# and one durable episode instead of a repeated cleanup hot loop.
 assert_control_preserved() {
   local issue="$1" slug="$2" branch="$3" expected_reason="$4" expected_verification_reason="$5"
+  local expected_episode_disposition="${6:-retained}"
   local wt_dir="$WORKTREE_ROOT/$slug"
   local marker_path
   marker_path="$(marker_path_for_branch "$REPO_DIR" "$branch")"
 
-  local tick1 tick1_cleanup
+  local tick1 tick1_cleanup tick1_remote
   tick1="$(run_monitor_tick "$issue" "$slug" "")"
   tick1_cleanup="$(tick_field "$tick1" cleanup_merged_primary_calls)"
+  tick1_remote="$(tick_field "$tick1" remote_call_delta)"
   expect_eq "$tick1_cleanup" "1" "$issue tick1: cleanup_merged_primary_challenge_task attempted (guard must run, not skip)"
+  case "$tick1_remote" in
+    ''|*[!0-9]*) report_fail "$issue tick1: remote_call_delta missing or nonnumeric ($tick1_remote)" ;;
+    *) report_pass "$issue tick1: remote_call_delta recorded ($tick1_remote)" ;;
+  esac
 
   if [[ -f "$marker_path" ]]; then
     report_pass "$issue tick1: preservation marker written at $marker_path"
@@ -100,6 +102,10 @@ assert_control_preserved() {
           ;;
       esac
     fi
+    local marker_fingerprint
+    marker_fingerprint="$(jq -r '.cleanupFingerprint // ""' "$marker_path")"
+    expect_true "$issue tick1: marker includes cleanup fingerprint" \
+      bash -c "[[ -n '$marker_fingerprint' ]]"
   else
     report_fail "$issue tick1: no preservation marker found at $marker_path"
   fi
@@ -109,18 +115,38 @@ assert_control_preserved() {
   expect_true "$issue tick1: worktree directory still present on disk" \
     bash -c "[[ -d '$wt_dir' ]]"
   expect_true "$issue tick1: local branch still exists" branch_exists "$branch"
+  expect_eq "$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.cleanupEpisode.disposition // ""' "$STATE_FILE")" "$expected_episode_disposition" \
+    "$issue tick1: cleanup episode disposition"
+  expect_eq "$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.cleanupEpisode.attemptCount // 0' "$STATE_FILE")" "1" \
+    "$issue tick1: cleanup episode attempt count"
+  if [[ "$expected_episode_disposition" == "retained" ]]; then
+    expect_eq "$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.resourceDisposition // ""' "$STATE_FILE")" "retained" \
+      "$issue tick1: retained terminal work consumes no active slot"
+  fi
 
-  # Second tick: the guard must keep preserving on unchanged evidence, not
-  # flip to deleting the branch just because it has already been asked once.
-  local tick2 tick2_cleanup
-  tick2="$(run_monitor_tick "$issue" "$slug" "")"
-  tick2_cleanup="$(tick_field "$tick2" cleanup_merged_primary_calls)"
-  expect_eq "$tick2_cleanup" "1" "$issue tick2: guard re-verifies (still attempted, not silently skipped)"
-  expect_true "$issue tick2: worktree directory still present after a second tick" \
+  local tick tick_cleanup tick_remote total_cleanup=1 total_remote="$tick1_remote"
+  [[ "$total_remote" =~ ^[0-9]+$ ]] || total_remote=0
+  for tick_number in 2 3 4 5 6 7 8 9 10; do
+    tick="$(run_monitor_tick "$issue" "$slug" "")"
+    tick_cleanup="$(tick_field "$tick" cleanup_merged_primary_calls)"
+    tick_remote="$(tick_field "$tick" remote_call_delta)"
+    [[ "$tick_cleanup" =~ ^[0-9]+$ ]] || tick_cleanup=0
+    [[ "$tick_remote" =~ ^[0-9]+$ ]] || tick_remote=0
+    total_cleanup=$((total_cleanup + tick_cleanup))
+    total_remote=$((total_remote + tick_remote))
+    expect_eq "$tick_cleanup" "0" "$issue tick$tick_number: unchanged cleanup episode skipped"
+    expect_eq "$(tick_field "$tick" rc)" "0" "$issue tick$tick_number: monitor returns success"
+  done
+  expect_eq "$total_cleanup" "1" "$issue ten ticks: cleanup attempted once for unchanged evidence"
+  expect_eq "$(jq -r --arg i "$issue" '.tasks[$i].lifecycle.cleanupEpisode.attemptCount // 0' "$STATE_FILE")" "1" \
+    "$issue ten ticks: cleanup episode attempt count remains one"
+  expect_eq "$(find "$(dirname "$marker_path")" -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' ')" "1" \
+    "$issue ten ticks: preservation marker deduplicated"
+  expect_true "$issue tick10: worktree directory still present" \
     bash -c "[[ -d '$wt_dir' ]]"
-  expect_true "$issue tick2: local branch still exists after a second tick" branch_exists "$branch"
+  expect_true "$issue tick10: local branch still exists" branch_exists "$branch"
   expect_eq "$(jq -r --arg i "$issue" '.tasks[$i] != null' "$STATE_FILE")" "true" \
-    "$issue tick2: workflow-state task entry still retained"
+    "$issue tick10: workflow-state task entry still retained"
 }
 
 # ============================================================================
@@ -157,7 +183,7 @@ echo ""
 echo "=== Control 7: control_missing_network ==="
 incident_scenario_new "missingnet"
 incident_setup_control_missing_network
-assert_control_preserved "$CONTROL_ISSUE" "$CONTROL_SLUG" "task/$CONTROL_SLUG" "unpushed_commits" "base_fetch_failed:"
+assert_control_preserved "$CONTROL_ISSUE" "$CONTROL_SLUG" "task/$CONTROL_SLUG" "unpushed_commits" "base_fetch_failed:" "transient"
 
 # ============================================================================
 # Control 8: never pushed

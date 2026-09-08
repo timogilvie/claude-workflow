@@ -958,11 +958,12 @@ else
   fi
 
   if grep -Fq 'if should_cleanup_closed_pr "$ISSUE"; then' <<< "$CLOSED_BLOCK" \
-    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$CLOSED_BLOCK" \
+    && grep -Fq 'monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"' <<< "$HEREDOC_CONTENT" \
+    && grep -Fq 'cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge"' <<< "$HEREDOC_CONTENT" \
     && grep -Fq 'Auto-cleaning closed challenger pane/worktree' <<< "$CLOSED_BLOCK"; then
-    pass "closed challenger PRs trigger automatic pane/worktree cleanup"
+    pass "closed challenger PRs trigger gated automatic pane/worktree cleanup"
   else
-    fail "closed challenger PRs do not trigger automatic cleanup"
+    fail "closed challenger PRs do not trigger gated automatic cleanup"
   fi
 
   if grep -Fq 'local linear_status="Backlog"' <<< "$CLOSED_BLOCK" \

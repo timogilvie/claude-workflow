@@ -2477,6 +2477,49 @@
             },
             "additionalProperties": false
         },
+        "cleanup": {
+            "type": "object",
+            "description": "Settings for durable cleanup episodes and retry scheduling.",
+            "properties": {
+                "episodes": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Persist terminal cleanup episodes and skip unchanged retained evidence."
+                        },
+                        "maxAttempts": {
+                            "type": "integer",
+                            "default": 5,
+                            "minimum": 1,
+                            "description": "Maximum cleanup attempts for retryable cleanup failures before needs-user."
+                        },
+                        "backoffBaseSeconds": {
+                            "type": "integer",
+                            "default": 30,
+                            "minimum": 0,
+                            "description": "Initial cleanup retry backoff in seconds."
+                        },
+                        "backoffCapSeconds": {
+                            "type": "integer",
+                            "default": 900,
+                            "minimum": 1,
+                            "description": "Maximum cleanup retry backoff in seconds."
+                        },
+                        "jitterRatio": {
+                            "type": "number",
+                            "default": 0.2,
+                            "minimum": 0,
+                            "maximum": 1,
+                            "description": "Deterministic jitter ratio applied to cleanup retry backoff."
+                        }
+                    },
+                    "additionalProperties": false
+                }
+            },
+            "additionalProperties": false
+        },
         "ui": {
             "type": "object",
             "description": "Settings for UI review and design artifact analysis.",

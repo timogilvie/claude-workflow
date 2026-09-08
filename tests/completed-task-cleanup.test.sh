@@ -499,7 +499,7 @@ check_not_contains "legacy state lacks branch deletion authority" "$output" "pus
 check_contains "legacy state logs lifecycle deletion-policy retention" "$output" "no authoritative lifecycle deletion policy"
 
 output="$(run_cleanup_case preserved-local-work)"
-check_contains "preserved local work returns non-zero" "$output" "rc=1"
+check_contains "preserved local work returns zero" "$output" "rc=0"
 check_contains "preserved local work keeps state" "$output" "remove_state_calls=0"
 check_contains "preserved local work preserves retry state" "$output" "reset_retry_calls=0"
 check_contains "preserved local work requests attention" "$output" "attention=needs-user"

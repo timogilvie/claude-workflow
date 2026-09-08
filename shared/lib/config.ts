@@ -339,6 +339,18 @@ export interface ConstraintsConfig {
   cleanupAfterMerge?: boolean;
 }
 
+export interface CleanupEpisodesConfig {
+  enabled?: boolean;
+  maxAttempts?: number;
+  backoffBaseSeconds?: number;
+  backoffCapSeconds?: number;
+  jitterRatio?: number;
+}
+
+export interface CleanupConfig {
+  episodes?: CleanupEpisodesConfig;
+}
+
 export interface UiConfig {
   devServer?: string;
   visualVerification?: boolean;
@@ -807,6 +819,7 @@ export interface WavemillConfig {
   challengeScheduler?: ChallengeSchedulerConfig;
   validation?: ValidationConfig;
   prePrVerification?: PrePrVerificationConfigSchema;
+  cleanup?: CleanupConfig;
   constraints?: ConstraintsConfig;
   ui?: UiConfig;
   review?: ReviewConfig;
