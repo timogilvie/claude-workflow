@@ -6,7 +6,7 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mutateJsonState } from '../shared/lib/state-mutex.ts';
 import { getIncidentConfig, getMillConfig, getObserverLinearConfig, type ObserverLinearConfig } from '../shared/lib/config.ts';
-import { detectIncidentsForRepo, detectIncidentsForTask } from '../shared/lib/wavemill-incident-detector.ts';
+import { detectIncidentsForRepo, detectIncidentsForTask, type TendCandidateDiagnostic } from '../shared/lib/wavemill-incident-detector.ts';
 import { IncidentStore } from '../shared/lib/wavemill-incident-store.ts';
 import type { IncidentRecord } from '../shared/lib/wavemill-incident-model.ts';
 import { syncIncident, type SyncResult } from '../shared/lib/incident-to-linear-synchronizer.ts';
@@ -1958,7 +1958,7 @@ function observe(options: ObserverOptions): ObserverSnapshot {
   };
 }
 
-async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<ObserverSnapshot> {
+export async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverOptions): Promise<ObserverSnapshot> {
   const incidents: IncidentRecord[] = [];
   if (!options.incidentDetector) {
     return { ...snapshot, incidents };
@@ -1987,7 +1987,9 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
     // a detector or persistence failure must not resolve incidents by absence.
     let cycleComplete = true;
     const candidates: IncidentRecord[] = [];
+    const tendCandidates = buildTendCandidateDiagnostics(repo, snapshot.findings);
     try {
+      const detectorContext = { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp), tendCandidates };
       for (const task of repo.tasks) {
         if (!task.issue || taskWorkflowIsTerminal(task)) continue;
         const taskPath = resolveTaskArtifactDir(repo.repoDir, task);
@@ -1995,7 +1997,7 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
         const detected = detectIncidentsForTask(
           taskPath,
           task.issue,
-          { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
+          detectorContext,
           options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
         );
         candidates.push(...detected);
@@ -2003,7 +2005,7 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
 
       candidates.push(...detectIncidentsForRepo(
         repo.repoDir,
-        { repoDir: repo.repoDir, session: repo.session, now: new Date(snapshot.timestamp) },
+        detectorContext,
         options.dependencyThreshold ?? incidentConfig.detection?.dependencyThreshold ?? 3,
       ));
     } catch (error) {
@@ -2014,8 +2016,8 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
     const freshFingerprints: string[] = [];
     for (const incident of dedupeIncidentCandidates(candidates, store)) {
       try {
-        const { record: stored, freshEvent } = await store.upsertDetailed(incident);
-        if (freshEvent) freshFingerprints.push(stored.fingerprint);
+        const { record: stored } = await store.upsertDetailed(incident);
+        freshFingerprints.push(stored.fingerprint);
         incidents.push(stored);
       } catch (error) {
         cycleComplete = false;
@@ -2059,6 +2061,63 @@ async function reconcileIncidents(snapshot: ObserverSnapshot, options: ObserverO
     findings: dedupeFindings([...snapshot.findings, ...uniqueIncidents.map(convertIncidentToFinding)]),
     incidents: uniqueIncidents,
   };
+}
+
+function buildTendCandidateDiagnostics(repo: RepoSnapshot, findings: Finding[]): TendCandidateDiagnostic[] {
+  const candidates: TendCandidateDiagnostic[] = [];
+  for (const finding of findings) {
+    if (finding.repoDir !== repo.repoDir) continue;
+    if (!finding.id.startsWith('marker-')) continue;
+    const fields = evidenceKeyValueMap(finding.evidence);
+    const markerKind = fields.get('markerKind');
+    if (markerKind !== 'merge-lane-idle-stall' && markerKind !== 'merge-lane-idle-stalled') continue;
+    const pr = numberFromString(fields.get('firstBlockedPr'))
+      ?? numberFromString(fields.get('prNumber'))
+      ?? firstNumberFromCsv(fields.get('blockedPrs'));
+    if (!pr) continue;
+    const task = repo.tasks.find((entry) => prNumberFromTask(entry) === pr);
+    candidates.push({
+      taskId: finding.issue ?? task?.issue,
+      pr,
+      headBranch: task?.branch,
+      markerKind,
+      firstBlockedGate: fields.get('firstBlockedGate') ?? fields.get('gate'),
+      pairId: fields.get('pairId') ?? task?.challengePairId,
+      blockedReason: fields.get('blockedReason') ?? fields.get('tendBlockReason'),
+    });
+  }
+  return candidates;
+}
+
+function evidenceKeyValueMap(evidence: string[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of evidence) {
+    const index = line.indexOf('=');
+    if (index <= 0) continue;
+    map.set(line.slice(0, index), line.slice(index + 1));
+  }
+  return map;
+}
+
+function numberFromString(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value.replace(/^#/, ''));
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function firstNumberFromCsv(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  for (const part of value.split(',')) {
+    const parsed = numberFromString(part.trim());
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function prNumberFromTask(task: TaskState): number | undefined {
+  if (!task.pr) return undefined;
+  const match = task.pr.match(/\d+/);
+  return match ? numberFromString(match[0]) : undefined;
 }
 
 function resolveTaskArtifactDir(repoDir: string, task: TaskState): string | null {
