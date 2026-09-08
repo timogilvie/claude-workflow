@@ -52,6 +52,22 @@ cleanup_file="$tmp/aborted-cleanup.sh"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "_wavemill_write_preserved_branch_incident"
   printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_safe"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_retain"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "cleanup_outcome_is_failed"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_cleanup_operator_guidance"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_pr_aware_cleanup_enabled"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_fetch_pr_terminal_evidence"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "wavemill_record_pr_delivery_evidence"
+  printf '\n'
+  extract_function "$COMMON_SCRIPT" "_wavemill_record_cleanup_decision"
+  printf '\n'
   extract_function "$COMMON_SCRIPT" "safe_remove_task_worktree_and_branch"
   printf '\n'
   extract_function "$COMMON_SCRIPT" "remove_task_state"

@@ -954,11 +954,11 @@ startup_run_task_phases() {
       # Only remove a freshly created worktree if we can't reuse it later.
       if [[ -n "${created_new:-}" && "$created_new" == "true" ]]; then
         local cleanup_rc=0
-        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" || cleanup_rc=$?
-        if [[ "$cleanup_rc" -eq 10 ]]; then
-          startup_log "WARN: $issue dependency-failure cleanup preserved local work"
+        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" "$issue" "" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
+          startup_log "WARN: $issue dependency-failure cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified})"
         elif [[ "$cleanup_rc" -ne 0 ]]; then
-          startup_log "WARN: $issue dependency-failure cleanup failed"
+          startup_log "WARN: $issue dependency-failure cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed})"
         fi
       fi
       startup_phase_failed "$startup_id" deps "$issue" "dependency install"
