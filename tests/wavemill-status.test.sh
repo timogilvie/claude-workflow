@@ -633,6 +633,52 @@ else
   fail "dashboard did not render skipped-check PR as passing"
 fi
 
+STATE_FILE_CLEANUP_EPISODE="$TMP_DIR/state-cleanup-episode.json"
+cat > "$STATE_FILE_CLEANUP_EPISODE" <<EOF
+{
+  "tasks": {
+    "HOK-2955": {
+      "slug": "cleanup-episode-task",
+      "branch": "task/cleanup-episode-task",
+      "worktree": "$WORKTREES_DIR/active-task",
+      "status": "merged",
+      "phase": "done",
+      "pr": "tracked",
+      "lifecycle": {
+        "schemaVersion": 1,
+        "workflowOutcome": "merged",
+        "resourceDisposition": "retained",
+        "retention": {
+          "reason": "local-work-preserved"
+        },
+        "cleanupEpisode": {
+          "schemaVersion": 1,
+          "episodeId": "HOK-2955:cleanup:abc123def456",
+          "fingerprint": "abc123def4567890",
+          "disposition": "retained",
+          "failureClass": "expected-preservation",
+          "attemptCount": 1,
+          "nextRetryAt": null,
+          "requiredOperatorAction": "Push task/cleanup-episode-task to origin or explicitly abandon it.",
+          "lastOutcome": "local-work-preserved",
+          "updatedAt": "2026-09-08T12:00:00Z"
+        }
+      }
+    }
+  }
+}
+EOF
+
+OUTPUT_CLEANUP_EPISODE="$TMP_DIR/output-cleanup-episode.txt"
+run_render "$STATE_FILE_CLEANUP_EPISODE" "$WORKTREES_DIR" "$BEHAVIOR_SKIPPED" "$OUTPUT_CLEANUP_EPISODE"
+
+if grep -q 'cleanup: retained attempts=1 outcome=local-work-preserved fp=abc1' "$OUTPUT_CLEANUP_EPISODE" \
+  && grep -q 'lifecycle: outcome=merged disposition=retained reason=local-work-' "$OUTPUT_CLEANUP_EPISODE"; then
+  pass "dashboard renders retained cleanup episode detail"
+else
+  fail "dashboard cleanup episode detail is missing"
+fi
+
 STATE_FILE_MONITOR_QUEUE="$TMP_DIR/state-monitor-queue.json"
 cat > "$STATE_FILE_MONITOR_QUEUE" <<EOF
 {

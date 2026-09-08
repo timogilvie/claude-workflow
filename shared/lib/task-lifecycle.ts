@@ -13,6 +13,50 @@ export const RESOURCE_DISPOSITIONS = [
 export type WorkflowOutcome = typeof WORKFLOW_OUTCOMES[number];
 export type ResourceDisposition = typeof RESOURCE_DISPOSITIONS[number];
 
+export const CLEANUP_DISPOSITIONS = ['pending', 'reaping', 'reaped', 'retained', 'transient', 'needs-user'] as const;
+export const CLEANUP_FAILURE_CLASSES = ['expected-preservation', 'transient', 'operational', 'none'] as const;
+
+export type CleanupDisposition = typeof CLEANUP_DISPOSITIONS[number];
+export type CleanupFailureClass = typeof CLEANUP_FAILURE_CLASSES[number];
+
+export interface CleanupFingerprintInputs {
+  issue?: string;
+  branch?: string;
+  worktree?: string;
+  worktreeExists?: boolean;
+  localBranchExists?: boolean;
+  localHeadSha?: string;
+  baseBranch?: string;
+  baseSha?: string;
+  remoteTrackingHeadSha?: string;
+  dirtyStatusHash?: string;
+  dirtyStatus?: string;
+  prNumber?: string;
+  prState?: string;
+  prHeadRefOid?: string;
+  prBaseBranch?: string;
+  verificationReason?: string;
+  [key: string]: unknown;
+}
+
+export interface CleanupEpisode {
+  schemaVersion: 1;
+  episodeId: string;
+  fingerprint: string;
+  fingerprintInputs?: CleanupFingerprintInputs;
+  disposition: CleanupDisposition;
+  failureClass: CleanupFailureClass;
+  firstAttemptAt?: string;
+  lastAttemptAt?: string;
+  attemptCount: number;
+  maxAttempts?: number;
+  nextRetryAt?: string | null;
+  requiredOperatorAction?: string;
+  lastOutcome?: string;
+  updatedAt: string;
+  [key: string]: unknown;
+}
+
 export interface LifecycleRetention {
   reason: string;
   policy?: string;
@@ -59,6 +103,7 @@ export interface TaskLifecycleState {
   retention?: LifecycleRetention;
   launchContract?: LaunchContract;
   deliveryEvidence?: DeliveryEvidence;
+  cleanupEpisode?: CleanupEpisode;
   normalizedFromLegacy?: boolean;
   verificationRequiredReason?: string;
   [key: string]: unknown;
@@ -73,7 +118,7 @@ export interface NormalizedTaskLifecycle {
 
 const WORKFLOW_OUTCOME_SET = new Set<string>(WORKFLOW_OUTCOMES);
 const RESOURCE_DISPOSITION_SET = new Set<string>(RESOURCE_DISPOSITIONS);
-const TERMINAL_STATUS = new Set(['merged', 'complete', 'completed', 'completed-external', 'closed', 'done', 'aborted']);
+const TERMINAL_STATUS = new Set(['merged', 'complete', 'completed', 'completed-external', 'closed', 'done', 'aborted', 'superseded']);
 
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -101,7 +146,7 @@ export function workflowOutcomeFromLegacy(taskInput: unknown): WorkflowOutcome {
   const phase = text(task.phase);
 
   if (status === 'merged' || phase === 'done') return 'merged';
-  if (status === 'closed' || status === 'completed-external' || status === 'complete' || status === 'completed' || status === 'done' || phase === 'closed') return 'closed';
+  if (status === 'closed' || status === 'completed-external' || status === 'complete' || status === 'completed' || status === 'done' || status === 'superseded' || phase === 'closed' || phase === 'superseded') return 'closed';
   if (status === 'aborted' || phase === 'aborted') return 'aborted';
   if (status === 'error' || phase === 'error') return 'error';
   return 'active';
@@ -111,7 +156,7 @@ export function legacyIsTerminal(taskInput: unknown): boolean {
   const task = record(taskInput);
   const status = text(task.status);
   const phase = text(task.phase);
-  return (status !== undefined && TERMINAL_STATUS.has(status)) || status === 'error' || phase === 'error' || phase === 'closed' || phase === 'aborted' || phase === 'done';
+  return (status !== undefined && TERMINAL_STATUS.has(status)) || status === 'error' || phase === 'error' || phase === 'closed' || phase === 'aborted' || phase === 'done' || phase === 'superseded';
 }
 
 function hasRetention(lifecycle: Record<string, unknown>): boolean {

@@ -11,7 +11,6 @@ setup_ready_closed_challenger_pr_cleanup() {
   CHALLENGE_TASK="true"
   CHALLENGE_SIBLING_PR="855"
   CHALLENGE_SIBLING_STATE="OPEN"
-  CLEANUP_CLOSED_PR="true"
   LINEAR_UPDATES="true"
   write_stage_result "$FEATURE_DIR" "review" "completed" "$CURRENT_AGENT"
 }

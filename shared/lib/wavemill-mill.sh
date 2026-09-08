@@ -61,6 +61,9 @@ source "$SCRIPT_DIR/queue-health.sh"
 if [[ -f "$SCRIPT_DIR/terminal-reconciler.sh" ]]; then
 source "$SCRIPT_DIR/terminal-reconciler.sh"
 fi
+if [[ -f "$SCRIPT_DIR/startup-terminal-preflight.sh" ]]; then
+source "$SCRIPT_DIR/startup-terminal-preflight.sh"
+fi
 load_config "$REPO_DIR"
 
 # ── Nested invocation guards (HOK-1214) ──────────────────────────
@@ -101,6 +104,8 @@ else
 fi
 STATE_DIR="${STATE_DIR:-$REPO_DIR/.wavemill}"
 STATE_FILE="$STATE_DIR/workflow-state.json"
+WAVEMILL_RUN_EPOCH="${WAVEMILL_RUN_EPOCH:-$(date -u +%Y%m%dT%H%M%SZ).$$}"
+export WAVEMILL_RUN_EPOCH
 MILL_LOG_DIR="$REPO_DIR/.wavemill/logs"
 mkdir -p "$MILL_LOG_DIR"
 MILL_LOG_FILE="$MILL_LOG_DIR/mill-${SESSION}.log"
@@ -609,6 +614,7 @@ write_launch_plan() {
 
   jq -n \
     --arg session "$SESSION" \
+    --arg runEpoch "$WAVEMILL_RUN_EPOCH" \
     --arg repoDir "$REPO_DIR" \
     --arg baseBranch "$BASE_BRANCH" \
     --arg resolvedBaseRef "${WAVEMILL_RESOLVED_BASE_REF:-}" \
@@ -642,6 +648,7 @@ write_launch_plan() {
     --argjson queuePlan "$(if [[ -n "$queue_plan_json" ]]; then printf "%s" "$queue_plan_json"; else printf "null"; fi)" \
     '{
       session: $session,
+      runEpoch: $runEpoch,
       repoDir: $repoDir,
       baseBranch: $baseBranch,
       resolvedBaseRef: (if $resolvedBaseRef == "" then null else $resolvedBaseRef end),
@@ -740,6 +747,12 @@ init_state_ledger() {
   if [[ ! -f "$STATE_FILE" ]]; then
     echo '{"session":"'$SESSION'","started":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","tasks":{}}' > "$STATE_FILE"
   fi
+  state_mutate "$STATE_FILE" \
+    '.session = $session
+     | .runEpoch = $runEpoch
+     | .updated = (now | todateiso8601)' \
+    --arg session "$SESSION" \
+    --arg runEpoch "$WAVEMILL_RUN_EPOCH" >/dev/null 2>&1 || true
   cleanup_background_jobs_startup
 }
 
@@ -1372,7 +1385,7 @@ cleanup_terminal_missing_worktree_entries() {
     | to_entries[]
     | select((.value.worktree // "") != "")
     | select(.value.status as $status
-        | ["aborted","merged","completed-external","complete","completed","closed","done"] | index($status))
+        | ["aborted","merged","completed-external","complete","completed","closed","done","error","superseded"] | index($status))
     | select((.value.worktree | type) == "string")
     | "\(.key)|\(.value.worktree)|\(.value.status)"
   ' "$STATE_FILE" 2>/dev/null || true)
@@ -1434,7 +1447,7 @@ cleanup_stale_tasks() {
     # Check if PR was merged or closed
     elif [[ -n "$pr" ]]; then
       local pr_st
-      pr_st=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || echo "")
+      pr_st=$(pr_state "$pr")
       if [[ "$pr_st" == "MERGED" ]]; then
         should_clean=true
         full_clean=true
@@ -1477,14 +1490,13 @@ cleanup_stale_tasks() {
       if [[ "$full_clean" == "true" ]]; then
         # Clean up worktree + branch for completed tasks
         local cleanup_rc=0
-        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" || cleanup_rc=$?
-        if [[ "$cleanup_rc" -eq 20 ]]; then
-          log_warn "  $issue cleanup failed; keeping task state"
+        safe_remove_task_worktree_and_branch "$worktree" "$branch" "$BASE_BRANCH" "stale_task_pruner" "$issue" "$pr" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 20 ]] || cleanup_outcome_is_failed; then
+          log_warn "  $issue cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
           continue
-        fi
-        if [[ "$cleanup_rc" -eq 10 ]]; then
+        elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_retain; then
           set_window_attention_state "$issue-$slug" "needs-user"
-          log_warn "  $issue cleanup preserved local work; keeping task state"
+          log_warn "  $issue cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
           continue
         fi
         if [[ "$cleanup_rc" -eq 0 && "$reason" != "branch deleted" && "$branch" != "main" && "$branch" != "master" ]]; then
@@ -1505,15 +1517,14 @@ cleanup_stale_tasks() {
 
 detect_inflight_tasks() {
   [[ -f "$STATE_FILE" ]] || return 0
-  jq -r '
+  jq -r "$(task_lifecycle_jq_filter '
     (.tasks // {})
     | to_entries[]
-    | select((.value.status // "") as $status
-        | $status != "merged"
-        and $status != "completed-external"
-        and $status != "aborted")
+    | select(.value | wm_workflow_outcome == "active")
+    | select((.value.rehydration.eligibility // "") as $eligibility
+        | $eligibility == "" or $eligibility == "eligible" or $eligibility == "deferred")
     | "\(.key)|\(.value.slug // "")|\(.value.phase // "executing")|\(.value.agent // "")|\(.value.branch // "")|\(.value.worktree // "")|\(.value.challengeRole // "")"
-  ' "$STATE_FILE" 2>/dev/null || true
+  ')" "$STATE_FILE" 2>/dev/null || true
 }
 
 count_inflight_primary_tasks() {
@@ -1536,6 +1547,9 @@ clear_inflight_tasks_from_state() {
 stale_count=$(jq '.tasks | length' "$STATE_FILE" 2>/dev/null || echo 0)
 if (( stale_count > 0 )); then
   log "debug" "Found $stale_count task(s) in state file from previous run. Checking..."
+  if [[ "${WAVEMILL_STARTUP_PREFLIGHT_LOADED:-0}" == "1" ]]; then
+    startup_terminal_preflight "$SESSION"
+  fi
   cleanup_stale_tasks
 fi
 

@@ -564,6 +564,17 @@ incident_set_task_updated() {
   mv "$tmp" "$STATE_FILE"
 }
 
+# incident_slot_consuming_count - evaluates the real slot accounting
+# (wm_slot_consumes over lifecycle dispositions) against the scenario's
+# workflow-state, so fixtures can assert slot counts before/after a pass.
+incident_slot_consuming_count() {
+  STATE_FILE="$STATE_FILE" COMMON="$INCIDENT_COMMON_SCRIPT" bash -c '
+    set -euo pipefail
+    source "$COMMON" >/dev/null 2>&1
+    slot_consuming_task_count
+  '
+}
+
 # --- driving monitor_issue_state ---------------------------------------------
 
 # run_monitor_tick <issue> <slug> [pr]

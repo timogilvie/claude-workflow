@@ -1539,15 +1539,14 @@ challenge_cancel_challenger_arm() {
       [[ -n "$challenger_worktree" ]] && wt_dir="$challenger_worktree"
       local task_branch="task/${challenger_slug}"
       local cleanup_rc=0
-      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" || cleanup_rc=$?
-      if [[ "$cleanup_rc" -eq 10 ]]; then
+      safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "$BASE_BRANCH" "challenge_cancel_challenger_arm" "$challenger_key" "" || cleanup_rc=$?
+      if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
         set_window_attention_state "$win" "needs-user"
-        log_warn "  $challenger_key cleanup preserved local work during challenge collapse; keeping task state"
+        log_warn "  $challenger_key cleanup preserved local work during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-unclassified}); keeping task state"
         return 1
-      fi
-      if [[ "$cleanup_rc" -eq 20 ]]; then
+      elif [[ "$cleanup_rc" -ne 0 ]]; then
         set_window_attention_state "$win" "needs-user"
-        log_warn "  $challenger_key cleanup failed during challenge collapse; keeping task state"
+        log_warn "  $challenger_key cleanup failed during challenge collapse (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed}); keeping task state"
         return 1
       fi
     fi
@@ -5354,7 +5353,7 @@ phase_launch_gate() {
       fi
       set_task_phase "$issue" "aborted"
       if [[ "${WAVEMILL_TERMINAL_RECONCILER_LOADED:-0}" == "1" ]]; then
-        wavemill_reconcile_terminal "$SESSION" "$issue" "phase_launch_exhausted" || true
+        wavemill_reconcile_terminal "$SESSION" "$issue" "recovery_failure" || true
       fi
       set_window_attention_state "$win" "needs-user"
       return 1
@@ -6092,6 +6091,19 @@ _restore_inflight_task_window_if_missing() {
   if [[ "$(get_task_execution_owner "$issue")" == "queue" && "$(get_task_pane_state "$issue")" == "released" ]]; then
     log "debug" "$issue → queue-owned released task has no pane to restore"
     return 0
+  fi
+
+  if [[ -f "${STATE_FILE:-}" ]]; then
+    local persisted_outcome rehydration_eligibility rehydration_reason
+    persisted_outcome="$(jq -r --arg issue "$issue" "$(task_lifecycle_jq_filter '(.tasks[$issue] // {}) | wm_workflow_outcome')" "$STATE_FILE" 2>/dev/null || echo active)"
+    rehydration_eligibility="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.eligibility // empty' "$STATE_FILE" 2>/dev/null || true)"
+    rehydration_reason="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.reason // empty' "$STATE_FILE" 2>/dev/null || true)"
+    if [[ "$persisted_outcome" != "active" ]] \
+      || [[ "$rehydration_eligibility" == terminal* || "$rehydration_eligibility" == "verification-required" ]]; then
+      log "debug" "$issue → restore skipped: persisted task is not rehydratable (${rehydration_eligibility:-outcome:$persisted_outcome}${rehydration_reason:+:$rehydration_reason})"
+      _RESTORE_STATE="none"
+      return 0
+    fi
   fi
 
   if [[ "$(get_task_execution_owner "$issue")" == "reconciliation" && "$(get_task_pane_state "$issue")" == "rehydrating" ]]; then
@@ -8991,48 +9003,26 @@ should_update_linear_state() {
   [[ "$role" != "challenger" ]]
 }
 
-should_cleanup_closed_pr() {
+# HOK-2952: role-aware resource policy for a closed, unmerged PR (replaces
+# should_cleanup_closed_pr, which excluded non-challenge tasks and
+# auto-merge challengers entirely and leaked their panes). Every closed PR
+# releases its terminal pane; only a challenger whose challenge comparison
+# is still pending under auto-merge keeps its git work (`pane-release-only`)
+# - the challenge loser-cleanup path retains deletion authority there.
+closed_pr_resource_policy() {
   local issue="$1"
-  local role
+  local role pair_id
   role=$(get_task_meta "$issue" "challengeRole")
-  [[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" != "true" ]]
-}
-
-is_challenge_task() {
-  local issue="$1"
-  [[ "$(get_task_meta "$issue" "challenge")" == "true" ]]
-}
-
-get_challenge_sibling_pr() {
-  local issue="$1"
-  local pair_id role sibling_key
-
-  pair_id=$(get_task_meta "$issue" "challengePairId")
-  role=$(get_task_meta "$issue" "challengeRole")
-
-  [[ -z "$pair_id" || -z "$role" ]] && return 1
-
-  if [[ "$role" == "primary" ]]; then
-    sibling_key="${pair_id}_c"
-  elif [[ "$role" == "challenger" ]]; then
-    sibling_key="$pair_id"
-  else
-    return 1
+  if [[ "$role" == "challenger" && "${CHALLENGE_AUTO_MERGE:-false}" == "true" ]]; then
+    pair_id=$(get_task_meta "$issue" "challengePairId")
+    if [[ -n "$pair_id" ]] && challenge_pair_record_exists "$pair_id"; then
+      printf 'full-cleanup\n'
+      return 0
+    fi
+    printf 'pane-release-only\n'
+    return 0
   fi
-
-  read_state_value "" --arg issue "$sibling_key" '.tasks[$issue].pr // empty'
-}
-
-# Check if a challenge task's sibling PR was merged.
-# Returns 0 if merged, 1 if not merged or unavailable.
-check_challenge_sibling_merged() {
-  local issue="$1"
-  local sibling_pr
-
-  sibling_pr=$(get_challenge_sibling_pr "$issue")
-  [[ -z "$sibling_pr" ]] && return 1
-
-  validate_pr_merge "$sibling_pr"
+  printf 'full-cleanup\n'
 }
 
 mark_challenge_compared() {
@@ -9884,6 +9874,10 @@ cleanup_merged_primary_challenge_task() {
 
   cleanup_completed_task "$issue" "$slug" "$completion_reason" || return $?
 
+  if jq -e --arg issue "$issue" '.tasks[$issue] != null' "$STATE_FILE" >/dev/null 2>&1; then
+    return 0
+  fi
+
   if ! state_mutate "$STATE_FILE" \
     '.tasks[$issue] = ($preserved + {updated: (now | todate)}) | .updated = (now | todate)' \
     --arg issue "$issue" \
@@ -9934,6 +9928,7 @@ cleanup_quarantined_no_pr_challenge_arm() {
 cleanup_aborted_challenge_arm() {
   local issue="$1" slug="${2:-}" reason="${3:-challenge aborted}"
   local win target target_gone wt_dir task_branch state_branch pr
+  local cleanup_candidate_json cleanup_decision
 
   [[ -z "$slug" ]] && slug=$(read_state_value "" --arg i "$issue" '.tasks[$i].slug // empty')
   [[ -n "$slug" ]] || {
@@ -9947,6 +9942,15 @@ cleanup_aborted_challenge_arm() {
   state_branch=$(read_state_value "" --arg i "$issue" '.tasks[$i].branch // empty')
   task_branch="${state_branch:-task/${slug}}"
   pr=$(read_state_value "" --arg i "$issue" '.tasks[$i].pr // empty')
+
+  if declare -F cleanup_episode_enabled >/dev/null 2>&1 && cleanup_episode_enabled; then
+    cleanup_decision="$(cleanup_episode_should_attempt "$issue" "$slug" "" "$pr" 2>/dev/null || printf 'attempt')"
+    if [[ "$cleanup_decision" == "skip" ]]; then
+      log "debug" "$issue aborted cleanup episode unchanged; skipping cleanup attempt"
+      return 0
+    fi
+    cleanup_candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "" "$pr" 2>/dev/null || true)"
+  fi
 
   archive_stage_artifacts "$issue" "$slug"
 
@@ -9967,6 +9971,9 @@ cleanup_aborted_challenge_arm() {
 
   if [[ "$target_gone" != "true" ]]; then
     set_window_attention_state "$win" "needs-user"
+    if [[ -n "${cleanup_candidate_json:-}" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "tmux-window-close-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
 	    log_warn "  $issue aborted challenge cleanup could not close tmux window, task is terminal and cleanup will retry"
     return 1
   fi
@@ -9985,15 +9992,48 @@ cleanup_aborted_challenge_arm() {
   fi
 
   local cleanup_rc=0
-  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" || cleanup_rc=$?
-  if [[ "$cleanup_rc" -eq 10 ]]; then
-    set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue aborted challenge cleanup preserved local work; keeping task state"
-    return 1
+  local cleanup_outcome=""
+  if [[ -n "${cleanup_candidate_json:-}" ]]; then
+    CLEANUP_EPISODE_CURRENT_FINGERPRINT="$(printf '%s' "$cleanup_candidate_json" | jq -r '.fingerprint // empty' 2>/dev/null || true)"
+  else
+    CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
   fi
-  if [[ "$cleanup_rc" -eq 20 ]]; then
+  safe_remove_task_worktree_and_branch "$wt_dir" "$task_branch" "${BASE_BRANCH:-main}" "cleanup_aborted_challenge_arm" "$issue" "" || cleanup_rc=$?
+  cleanup_outcome="${WAVEMILL_CLEANUP_OUTCOME:-}"
+  CLEANUP_EPISODE_CURRENT_FINGERPRINT=""
+  if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain "$cleanup_outcome"; then
+    local preservation_reason="${SAFE_CLEANUP_PRESERVATION_REASON:-}"
+    local verification_reason="${SAFE_CLEANUP_VERIFICATION_REASON:-}"
+    local episode_outcome="${cleanup_outcome:-local-work-preserved}"
+    local episode_disposition="retained"
+    local episode_failure_class="expected-preservation"
+    if [[ -n "$verification_reason" ]]; then
+      episode_outcome="$verification_reason"
+    elif [[ -n "$preservation_reason" ]]; then
+      episode_outcome="$preservation_reason"
+    fi
+    if [[ "$verification_reason" == base_fetch_failed:* \
+      || "$verification_reason" == remote_head_lookup_failed:* \
+      || "$verification_reason" == remote_task_fetch_failed:* \
+      || "$verification_reason" == "origin_base_unresolvable" ]]; then
+      episode_disposition="transient"
+      episode_failure_class="transient"
+    fi
+    if declare -F cleanup_episode_enabled >/dev/null 2>&1 && cleanup_episode_enabled; then
+      cleanup_candidate_json="$(cleanup_episode_candidate_json "$issue" "$slug" "" "$pr" 2>/dev/null || printf '%s' "$cleanup_candidate_json")"
+    fi
     set_window_attention_state "$win" "needs-user"
-    log_warn "  $issue aborted challenge cleanup failed; keeping task state"
+    if [[ -n "${cleanup_candidate_json:-}" ]]; then
+      cleanup_episode_record_outcome "$issue" "$episode_disposition" "$episode_failure_class" "$episode_outcome" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
+    log_warn "  $issue aborted challenge cleanup preserved local work (${cleanup_outcome:-unclassified}); keeping task state"
+    return 1
+  elif [[ "$cleanup_rc" -ne 0 ]] || cleanup_outcome_is_failed "$cleanup_outcome"; then
+    set_window_attention_state "$win" "needs-user"
+    if [[ -n "${cleanup_candidate_json:-}" ]]; then
+      cleanup_episode_record_outcome "$issue" "transient" "operational" "worktree-or-local-branch-cleanup-failed" "$cleanup_candidate_json" "" 2>/dev/null || true
+    fi
+    log_warn "  $issue aborted challenge cleanup failed (${cleanup_outcome:-operation_failed}); keeping task state"
     return 1
   fi
 
@@ -10004,6 +10044,9 @@ cleanup_aborted_challenge_arm() {
   git -C "$REPO_DIR" worktree prune >>"${MILL_LOG_FILE:-/dev/null}" 2>/dev/null || true
   rm -f "/tmp/wavemill-${SESSION}-${issue}.hook" 2>/dev/null || true
   reset_retry_count "$SESSION" "$issue" 2>/dev/null || true
+  if [[ -n "${cleanup_candidate_json:-}" ]]; then
+    cleanup_episode_record_outcome "$issue" "reaped" "none" "cleanup-complete" "$cleanup_candidate_json" "" 2>/dev/null || true
+  fi
   remove_task_state "$issue"
   CLEANED["$issue"]=1
   log "$issue: Complete (aborted challenge cleanup)"
@@ -10021,6 +10064,66 @@ cleanup_pair_aborted_no_pr_arms() {
     [[ -n "$slug" ]] || continue
     cleanup_aborted_challenge_arm "$key" "$slug" "$reason" || true
   done
+}
+
+monitor_cleanup_episode_skip() {
+  local issue="$1" slug="$2" pr="${3:-}"
+  local decision
+  if ! declare -F cleanup_episode_should_attempt >/dev/null 2>&1; then
+    return 1
+  fi
+  decision="$(cleanup_episode_should_attempt "$issue" "$slug" "" "$pr" 2>/dev/null || printf 'attempt')"
+  if [[ "$decision" == "skip" ]]; then
+    cleanup_skipped_count=$(( ${cleanup_skipped_count:-0} + 1 ))
+    remote_call_avoided_count=$(( ${remote_call_avoided_count:-0} + 1 ))
+    log "debug" "$issue cleanup episode unchanged; skipping terminal cleanup attempt"
+    return 0
+  fi
+  return 1
+}
+
+wavemill_monitor_now_ms() {
+  printf '%s000\n' "$(date +%s)"
+}
+
+wavemill_record_monitor_iteration_timing() {
+  local start_ms="$1" end_ms="$2" poll_seconds="${3:-${POLL_SECONDS:-10}}"
+  local timing_file tmp duration_ms skipped avoided
+  [[ -n "${STATE_DIR:-}" ]] || return 0
+  [[ "$start_ms" =~ ^[0-9]+$ && "$end_ms" =~ ^[0-9]+$ ]] || return 0
+  duration_ms=$((end_ms - start_ms))
+  (( duration_ms < 0 )) && duration_ms=0
+  skipped="${cleanup_skipped_count:-0}"
+  avoided="${remote_call_avoided_count:-0}"
+  timing_file="$STATE_DIR/monitor-timing.json"
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  [[ -f "$timing_file" ]] || printf '{}\n' > "$timing_file"
+  tmp="$(mktemp "${timing_file}.XXXXXX" 2>/dev/null || true)"
+  [[ -n "$tmp" ]] || return 0
+  if jq \
+    --argjson duration "$duration_ms" \
+    --argjson pollSeconds "$poll_seconds" \
+    --argjson cleanupSkipped "$skipped" \
+    --argjson remoteAvoided "$avoided" \
+    --arg updatedAt "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+    '
+      (.samples // []) as $samples
+      | (($samples + [$duration]) | .[-100:]) as $nextSamples
+      | ($nextSamples | sort | if length == 0 then 0 else .[((length * 95 / 100) | tostring | split(".")[0] | tonumber)] end) as $p95
+      | {
+          lastIterationMs: $duration,
+          samples: $nextSamples,
+          p95Ms: $p95,
+          pollSeconds: $pollSeconds,
+          cleanupSkippedCount: ((.cleanupSkippedCount // 0) + $cleanupSkipped),
+          remoteCallAvoidedCount: ((.remoteCallAvoidedCount // 0) + $remoteAvoided),
+          updatedAt: $updatedAt
+        }
+    ' "$timing_file" > "$tmp" 2>/dev/null; then
+    mv "$tmp" "$timing_file" 2>/dev/null || rm -f "$tmp"
+  else
+    rm -f "$tmp" 2>/dev/null || true
+  fi
 }
 
 # ============================================================================
@@ -13269,11 +13372,17 @@ monitor_issue_state() {
 	  challenge_aborted=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengeAborted // empty')
 	  pair_id_for_cleanup=$(read_state_value "" --arg issue "$ISSUE" '.tasks[$issue].challengePairId // empty')
 	  if [[ "$task_status" == "aborted" ]]; then
+	    if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+	      return 0
+	    fi
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "aborted challenge retry" || true
 	    return 0
 	  fi
 	  if [[ -n "$challenge_aborted" && -z "$PR" && -n "$pair_id_for_cleanup" ]] \
 	    && challenge_pair_record_exists "$pair_id_for_cleanup"; then
+	    if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+	      return 0
+	    fi
 	    cleanup_aborted_challenge_arm "$ISSUE" "$SLUG" "challenge pair resolved" || true
 	    return 0
 	  fi
@@ -13294,6 +13403,10 @@ monitor_issue_state() {
     set_window_attention_state "$WIN" "clear"
     if [[ "$task_status" == "merged" && "$merged_before_ready" == "true" ]]; then
       resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+        return 0
+      fi
       cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
       execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
       return 0
@@ -13309,8 +13422,16 @@ monitor_issue_state() {
 
     if [[ "$task_status" == "merged" ]]; then
       resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+      if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+        return 0
+      fi
       cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "post-review cleanup" "$PR"
     else
+      if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+        execute git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+        return 0
+      fi
       cleanup_completed_task "$ISSUE" "$SLUG" "post-review cleanup"
     fi
 
@@ -13477,6 +13598,9 @@ monitor_issue_state() {
         # Clean up worktree and state
         if should_update_linear_state "$ISSUE"; then
           linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
+        fi
+        if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+          return 0
         fi
         cleanup_completed_task "$ISSUE" "$SLUG" "external completion"
         return 0
@@ -14554,6 +14678,9 @@ monitor_issue_state() {
       linear_set_state "$(get_linear_issue_id "$ISSUE")" "Done"
     fi
     resolve_pair_on_primary_merge "$ISSUE" "$PR" || true
+    if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+      return 0
+    fi
     cleanup_merged_primary_challenge_task "$ISSUE" "$SLUG" "" "$PR"
     if [[ "$_eval_needed" == "true" ]]; then
       log_task "info" "$ISSUE" "📊 Eval queued in background"
@@ -14563,6 +14690,14 @@ monitor_issue_state() {
     fi
     return 0
   elif [[ "$pr_status" == "CLOSED" ]]; then
+    # Already durably reconciled on an earlier pass (task state reaped):
+    # repeated passes and restarts are no-ops with no duplicate errors.
+    # Fails open ("true") when state is unreadable so an unknown task still
+    # takes the normal closed-PR path.
+    if [[ "$(read_state_value "true" --arg i "$ISSUE" '.tasks[$i] != null')" == "false" ]]; then
+      CLEANED["$ISSUE"]=1
+      return 0
+    fi
     log_warn "$ISSUE → PR #$PR CLOSED without merge"
     local linear_status="Backlog"
     if is_challenge_task "$ISSUE"; then
@@ -14602,12 +14737,27 @@ monitor_issue_state() {
         linear_set_state "$(get_linear_issue_id "$ISSUE")" "$linear_status"
       fi
     fi
-    if should_cleanup_closed_pr "$ISSUE"; then
-      log "debug" "  ↳ Auto-cleaning closed challenger pane/worktree"
-      set_window_attention_state "$WIN" "clear"
-      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
+    # HOK-2952: one ownership policy for every closed-PR role. The old
+    # in-memory-only `CLEANED=1` branch (which left pane/worktree/state
+    # allocated forever) is gone; a blocked release/cleanup simply retries
+    # on the next pass off the durable markers.
+    local closed_pr_policy
+    closed_pr_policy="$(closed_pr_resource_policy "$ISSUE")"
+    if [[ "$closed_pr_policy" == "pane-release-only" ]]; then
+      # Challenger awaiting challenge comparison under auto-merge: git work
+      # must survive for the comparison, but the pane is done.
+      if wavemill_release_terminal_pane "$SESSION" "$ISSUE" "$SLUG" "pr_closed_unmerged" "$PR"; then
+        CLEANED["$ISSUE"]=1
+      else
+        log "debug" "  ↳ $ISSUE pane release deferred (${WAVEMILL_PANE_RELEASE_BLOCK_REASON:-blocked})"
+      fi
     else
-      CLEANED["$ISSUE"]=1
+      log "debug" "  ↳ Auto-cleaning closed task pane/worktree"
+      set_window_attention_state "$WIN" "clear"
+      if declare -F monitor_cleanup_episode_skip >/dev/null 2>&1 && monitor_cleanup_episode_skip "$ISSUE" "$SLUG" "$PR"; then
+        return 0
+      fi
+      cleanup_completed_task "$ISSUE" "$SLUG" "closed without merge" || true
     fi
     return 0
   fi
@@ -15802,6 +15952,9 @@ check_backstage_health() {
 }
 
 while :; do
+  monitor_iteration_start_ms="$(wavemill_monitor_now_ms 2>/dev/null || printf '0')"
+  cleanup_skipped_count=0
+  remote_call_avoided_count=0
   # ── Phase A: Monitor existing tasks ──────────────────────────────────
   _update_effective_max_parallel
   run_linear_retry_drain_tick
@@ -15849,6 +16002,8 @@ while :; do
     active_challenger_count="$(slot_consuming_challenger_task_count)"
   fi
   _active_count_prev=$active_count
+  monitor_iteration_end_ms="$(wavemill_monitor_now_ms 2>/dev/null || printf '0')"
+  wavemill_record_monitor_iteration_timing "$monitor_iteration_start_ms" "$monitor_iteration_end_ms" "$POLL_SECONDS" 2>/dev/null || true
 
   # ── Phase B: Check for stop signal ──────────────────────────────────
   if [[ -f "$STATE_DIR/.stop-loop" ]]; then

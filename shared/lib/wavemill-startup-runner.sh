@@ -16,6 +16,7 @@ if [[ ! -t 2 ]]; then
 fi
 
 SESSION="$(jq -r '.session' "$PLAN_FILE")"
+WAVEMILL_RUN_EPOCH="$(jq -r '.runEpoch // empty' "$PLAN_FILE")"
 REPO_DIR="$(jq -r '.repoDir' "$PLAN_FILE")"
 BASE_BRANCH="$(jq -r '.baseBranch' "$PLAN_FILE")"
 RESOLVED_BASE_REF="$(jq -r '.resolvedBaseRef // empty' "$PLAN_FILE")"
@@ -64,6 +65,7 @@ DASHBOARD_PID=""
 LAUNCH_QUEUE_PLAN="$(jq -c '.queuePlan // empty' "$PLAN_FILE" 2>/dev/null || true)"
 
 export SESSION REPO_DIR BASE_BRANCH RESOLVED_BASE_REF WORKTREE_ROOT PLANNING_MODE AGENT_CMD AGENT_CMD_EXPLICIT
+export WAVEMILL_RUN_EPOCH
 export FORCE_MODEL ROUTER_ENABLED MAX_PARALLEL STATE_DIR STATE_FILE TOOLS_DIR LIB_DIR
 export POLL_SECONDS REQUIRE_CONFIRM DRY_RUN PROJECT_NAME AUTO_EVAL ENTER_LAUNCHES_WAVE DASHBOARD_VERBOSITY
 export DASHBOARD_LOG_TO_FILE MILL_LOG_FILE
@@ -428,6 +430,7 @@ write_monitor_env() {
   local tasks_file="$1"
   {
     write_shell_assignment "SESSION" "$SESSION"
+    write_shell_assignment "WAVEMILL_RUN_EPOCH" "$WAVEMILL_RUN_EPOCH"
     write_shell_assignment "REPO_DIR" "$REPO_DIR"
     write_shell_assignment "WORKTREE_ROOT" "$WORKTREE_ROOT"
     write_shell_assignment "TOOLS_DIR" "$TOOLS_DIR"
@@ -842,6 +845,20 @@ startup_run_task_phases() {
     return 1
   fi
 
+  if [[ -f "${STATE_FILE:-}" ]] && jq -e --arg issue "$issue" '.tasks[$issue]? != null' "$STATE_FILE" >/dev/null 2>&1; then
+    local persisted_outcome rehydration_eligibility rehydration_reason
+    persisted_outcome="$(jq -r --arg issue "$issue" "$(task_lifecycle_jq_filter '(.tasks[$issue] // {}) | wm_workflow_outcome')" "$STATE_FILE" 2>/dev/null || echo active)"
+    rehydration_eligibility="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.eligibility // empty' "$STATE_FILE" 2>/dev/null || true)"
+    rehydration_reason="$(jq -r --arg issue "$issue" '.tasks[$issue].rehydration.reason // empty' "$STATE_FILE" 2>/dev/null || true)"
+    if [[ "$persisted_outcome" != "active" ]] \
+      || [[ "$rehydration_eligibility" == terminal* || "$rehydration_eligibility" == "verification-required" ]]; then
+      startup_task_log "$issue" "$issue launch skipped: persisted task is not rehydratable (${rehydration_eligibility:-outcome:$persisted_outcome}${rehydration_reason:+:$rehydration_reason})"
+      [[ "${WAVEMILL_NO_PROGRESS:-0}" != "1" ]] && progress_update "$startup_id" route done
+      STARTUP_TASK_LOG_FILE=""
+      return 0
+    fi
+  fi
+
   [[ -z "$task_agent" ]] && task_agent="$AGENT_CMD"
   [[ -z "$coder_model" && -n "$challenge_model" ]] && coder_model="$challenge_model"
   [[ -z "$coder_model" && -n "$FORCE_MODEL" ]] && coder_model="$FORCE_MODEL"
@@ -954,11 +971,11 @@ startup_run_task_phases() {
       # Only remove a freshly created worktree if we can't reuse it later.
       if [[ -n "${created_new:-}" && "$created_new" == "true" ]]; then
         local cleanup_rc=0
-        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" || cleanup_rc=$?
-        if [[ "$cleanup_rc" -eq 10 ]]; then
-          startup_log "WARN: $issue dependency-failure cleanup preserved local work"
+        safe_remove_task_worktree_and_branch "$wt_dir" "$branch" "${BASE_BRANCH:-main}" "startup_dependency_failure" "$issue" "" || cleanup_rc=$?
+        if [[ "$cleanup_rc" -eq 10 ]] || cleanup_outcome_is_retain; then
+          startup_log "WARN: $issue dependency-failure cleanup preserved local work (${WAVEMILL_CLEANUP_OUTCOME:-unclassified})"
         elif [[ "$cleanup_rc" -ne 0 ]]; then
-          startup_log "WARN: $issue dependency-failure cleanup failed"
+          startup_log "WARN: $issue dependency-failure cleanup failed (${WAVEMILL_CLEANUP_OUTCOME:-operation_failed})"
         fi
       fi
       startup_phase_failed "$startup_id" deps "$issue" "dependency install"
