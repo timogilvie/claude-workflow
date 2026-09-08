@@ -729,7 +729,7 @@ else
     fail "monitor find_pr_for_branch is missing --state all"
   fi
 
-  if grep -qF 'check_pr_exists "$BRANCH"' <<< "$HEREDOC_CONTENT" \
+  if grep -qF 'resolve_pr_for_launch "$BRANCH" "$BASE_BRANCH" "$ISSUE"' <<< "$HEREDOC_CONTENT" \
     && grep -qF 'Agent exited without creating PR on branch $BRANCH' <<< "$HEREDOC_CONTENT" \
     && grep -qF 'worktree preserved' <<< "$HEREDOC_CONTENT" \
     && ! grep -qF 'cleanup_completed_task "$ISSUE" "$SLUG" "no PR created"' <<< "$HEREDOC_CONTENT"; then
