@@ -1454,6 +1454,7 @@ cleanup_completed_task() {
     local episode_outcome="${cleanup_outcome:-local-work-preserved}"
     local episode_disposition="retained"
     local episode_failure_class="expected-preservation"
+    local lifecycle_resource_disposition="retained"
     if [[ -n "$verification_reason" ]]; then
       episode_outcome="$verification_reason"
     elif [[ -n "$preservation_reason" ]]; then
@@ -1463,6 +1464,7 @@ cleanup_completed_task() {
       base_fetch_failed:*|remote_head_lookup_failed:*|remote_task_fetch_failed:*|origin_base_unresolvable)
         episode_disposition="transient"
         episode_failure_class="transient"
+        lifecycle_resource_disposition="verification-required"
         ;;
     esac
     if cleanup_episode_enabled; then
@@ -1471,7 +1473,7 @@ cleanup_completed_task() {
     if [[ -n "$cleanup_candidate_json" ]]; then
       cleanup_episode_record_outcome "$issue" "$episode_disposition" "$episode_failure_class" "$episode_outcome" "$cleanup_candidate_json" "" 2>/dev/null || true
     fi
-    set_task_lifecycle_disposition "$issue" "" "verification-required" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
+    set_task_lifecycle_disposition "$issue" "" "$lifecycle_resource_disposition" "${cleanup_outcome:-local-work-preserved}" "cleanup_completed_task" 2>/dev/null || true
     set_window_attention_state "$win" "needs-user"
     log_warn "  $issue cleanup preserved local work (${cleanup_outcome:-unclassified}); keeping task state"
     return 1
